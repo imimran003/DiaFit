@@ -2,13 +2,9 @@ import SwiftUI
 
 struct RootExperience: View {
     @EnvironmentObject private var store: DiaryStore
-    @State private var selectedDayID: Day.ID
+    @State private var selectedDayID: Day.ID?
     @State private var atlasIsOpen = false
     @Namespace private var mealNamespace
-
-    init() {
-        _selectedDayID = State(initialValue: DiaryStore.preview.days.last?.id ?? UUID())
-    }
 
     var body: some View {
         ZStack {
@@ -21,13 +17,13 @@ struct RootExperience: View {
                         isAtlasOpen: $atlasIsOpen,
                         mealNamespace: mealNamespace
                     )
-                    .tag(day.id)
+                    .tag(Optional(day.id))
                 }
             }
             .tabViewStyle(.page(indexDisplayMode: .never))
             .accessibilityLabel("Daily diary")
 
-            if atlasIsOpen, let day = store.day(id: selectedDayID) {
+            if atlasIsOpen, let day = activeDay {
                 MealAtlasView(
                     day: day,
                     isPresented: $atlasIsOpen,
@@ -40,7 +36,17 @@ struct RootExperience: View {
                 .zIndex(2)
             }
         }
+        .onAppear {
+            selectedDayID = selectedDayID ?? store.days.last?.id
+        }
         .animation(.spring(response: 0.52, dampingFraction: 0.86), value: atlasIsOpen)
+    }
+
+    private var activeDay: Day? {
+        if let selectedDayID, let selected = store.day(id: selectedDayID) {
+            return selected
+        }
+        return store.days.last
     }
 }
 
