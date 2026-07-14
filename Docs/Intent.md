@@ -20,6 +20,12 @@ The interface uses an ink-and-paper editorial palette instead of neon health-tec
 - A tiny Metal lens pass gently moves the food art while an image is “being made.” It is a material cue, not a visual effect for its own sake.
 - Motion avoids flashing and runs only while the relevant surface is visible. Reduced Motion users get the same hierarchy with simple opacity transitions.
 
+## Visual-material update
+
+The food system is intentionally not a set of colored rectangles with stock images dropped inside. Each meal is a consistent studio cutout, keyed to alpha and placed on a restrained pigment field with a printed-fiber texture and a measured grounding shadow. This gives the same food object a believable physical identity in both the thread and the atlas.
+
+The day thread no longer turns every thought into a floating white card. Meals are editorial moments, agent messages are carried by a fine lime rule, and the member’s own messages sit quietly on the paper. The atlas is a uniform two-column visual index: image first, metadata second, no alternating masonry gimmick.
+
 ## Integration shape
 
 The in-app `ConversationCoordinator` is a local demo agent and `NutritionService` is intentionally protocol-based. Production should route the model, food database, and generated imagery through a server that can:
@@ -31,6 +37,12 @@ The in-app `ConversationCoordinator` is a local demo agent and `NutritionService
 - return nutrition confidence so uncertainty is communicated in language, not implied precision.
 
 For an editable conversational image workflow, OpenAI’s current docs recommend the Responses API; one-off generation can use the Image API. GPT Image 2 supports low quality for fast thumbnails and the documentation notes JPEG is faster than PNG when latency matters. See [the official image-generation guide](https://developers.openai.com/api/docs/guides/image-generation).
+
+## Photo analysis extension
+
+The photo flow is a conversation moment, not a scan-and-submit form. A camera button creates a temporary, metadata-stripped photo note. The next object in the thread is an explicit review: individual foods, a suggested serving, carbohydrates first, then only the two clarification questions that can meaningfully change an estimate. Confirmation is the moment that turns it into diary history; the original photo disappears by default, while the decorative editorial tile travels naturally into the atlas.
+
+The visual system must never make recognition look more certain than it is. A generated image is marked decorative and cannot replace an original review photo. Food, oil/ghee, recipe, and serving assumptions remain available after logging; glycaemic data is not extrapolated. See [the detailed analysis architecture](PhotoAnalysisArchitecture.md).
 
 ## Safety boundary
 
