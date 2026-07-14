@@ -1,0 +1,11 @@
+.DS_Store
+DerivedData/
+build/
+xcuserdata/
+*.xcuserstate
+*.moved-aside
+*.swp
+
+# Never commit production secrets.
+*.xcconfig
+!Configuration.example.xcconfig
