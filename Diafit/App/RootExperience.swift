@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct RootExperience: View {
-    @Environment(DiaryStore.self) private var store
+    @EnvironmentObject private var store: DiaryStore
     @State private var selectedDayID: Day.ID
     @State private var atlasIsOpen = false
     @Namespace private var mealNamespace
@@ -44,7 +44,9 @@ struct RootExperience: View {
     }
 }
 
-#Preview {
-    RootExperience()
-        .environment(DiaryStore.preview)
+struct RootExperience_Previews: PreviewProvider {
+    static var previews: some View {
+        RootExperience()
+            .environmentObject(DiaryStore.preview)
+    }
 }

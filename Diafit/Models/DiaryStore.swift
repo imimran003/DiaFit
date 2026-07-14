@@ -1,9 +1,8 @@
 import Foundation
-import Observation
+import Combine
 
-@Observable
-final class DiaryStore {
-    var days: [Day]
+final class DiaryStore: ObservableObject {
+    @Published var days: [Day]
 
     init(days: [Day]) {
         self.days = days

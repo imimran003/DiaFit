@@ -7,3 +7,4 @@
 - Chose native SwiftUI and no dependencies to keep the interaction model inspectable and portable.
 - Added a local sample diary with intentionally illustrative nutrition and glucose values.
 - Attempted to produce custom studio food imagery using the available image generator; the service returned HTTP 403. The prototype therefore uses a structured, replaceable local artwork system. Production imagery remains an explicit service boundary.
+- Xcode’s automatic Metal toolchain handoff was unavailable despite the component being installed. The target compiles the same source in a small explicit build phase, using the installed toolchain and a derived module cache; this keeps `Daylight.metal` live rather than treating it as decorative source.

@@ -2,12 +2,12 @@ import SwiftUI
 
 @main
 struct DiafitApp: App {
-    @State private var store = DiaryStore.preview
+    @StateObject private var store = DiaryStore(days: SampleDiary.days)
 
     var body: some Scene {
         WindowGroup {
             RootExperience()
-                .environment(store)
+                .environmentObject(store)
                 .preferredColorScheme(.light)
         }
     }
