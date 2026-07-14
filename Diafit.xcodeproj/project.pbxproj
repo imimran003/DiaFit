@@ -19,6 +19,7 @@
 		A00100000000000000000011 /* DiaryStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000011 /* DiaryStore.swift */; };
 		A00100000000000000000012 /* NutritionService.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000012 /* NutritionService.swift */; };
 		A00100000000000000000013 /* Daylight.metal in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000013 /* Daylight.metal */; };
+		A00100000000000000000014 /* DiafitUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00200000000000000000015 /* DiafitUITests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -36,6 +37,8 @@
 		A00200000000000000000012 /* NutritionService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NutritionService.swift; sourceTree = "<group>"; };
 		A00200000000000000000013 /* Daylight.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Daylight.metal; sourceTree = "<group>"; };
 		A00200000000000000000014 /* Diafit.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Diafit.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00200000000000000000015 /* DiafitUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DiafitUITests.swift; sourceTree = "<group>"; };
+		A00200000000000000000016 /* DiafitUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = DiafitUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -43,7 +46,7 @@
 /* End PBXFrameworksBuildPhase section */
 
 /* Begin PBXGroup section */
-		A00400000000000000000001 = {isa = PBXGroup; children = (A00400000000000000000002 /* Diafit */, A00400000000000000000009 /* Products */); sourceTree = "<group>"; };
+		A00400000000000000000001 = {isa = PBXGroup; children = (A00400000000000000000002 /* Diafit */, A00400000000000000000013 /* DiafitUITests */, A00400000000000000000009 /* Products */); sourceTree = "<group>"; };
 		A00400000000000000000002 /* Diafit */ = {isa = PBXGroup; children = (A00400000000000000000003 /* App */, A00400000000000000000004 /* Design */, A00400000000000000000005 /* Features */, A00400000000000000000006 /* Models */, A00400000000000000000007 /* Services */, A00400000000000000000008 /* Resources */); path = Diafit; sourceTree = "<group>"; };
 		A00400000000000000000003 /* App */ = {isa = PBXGroup; children = (A00200000000000000000001, A00200000000000000000002); path = App; sourceTree = "<group>"; };
 		A00400000000000000000004 /* Design */ = {isa = PBXGroup; children = (A00200000000000000000003, A00200000000000000000004); path = Design; sourceTree = "<group>"; };
@@ -51,23 +54,33 @@
 		A00400000000000000000006 /* Models */ = {isa = PBXGroup; children = (A00200000000000000000010, A00200000000000000000011); path = Models; sourceTree = "<group>"; };
 		A00400000000000000000007 /* Services */ = {isa = PBXGroup; children = (A00200000000000000000012); path = Services; sourceTree = "<group>"; };
 		A00400000000000000000008 /* Resources */ = {isa = PBXGroup; children = (A00200000000000000000013); path = Resources; sourceTree = "<group>"; };
-		A00400000000000000000009 /* Products */ = {isa = PBXGroup; children = (A00200000000000000000014); name = Products; sourceTree = "<group>"; };
+		A00400000000000000000009 /* Products */ = {isa = PBXGroup; children = (A00200000000000000000014, A00200000000000000000016); name = Products; sourceTree = "<group>"; };
 		A00400000000000000000010 /* Atlas */ = {isa = PBXGroup; children = (A00200000000000000000005); path = Atlas; sourceTree = "<group>"; };
 		A00400000000000000000011 /* Day */ = {isa = PBXGroup; children = (A00200000000000000000006, A00200000000000000000007); path = Day; sourceTree = "<group>"; };
 		A00400000000000000000012 /* Meal */ = {isa = PBXGroup; children = (A00200000000000000000008, A00200000000000000000009); path = Meal; sourceTree = "<group>"; };
+		A00400000000000000000013 /* DiafitUITests */ = {isa = PBXGroup; children = (A00200000000000000000015); path = DiafitUITests; sourceTree = "<group>"; };
 /* End PBXGroup section */
 
 /* Begin PBXNativeTarget section */
 		A00500000000000000000001 /* Diafit */ = {isa = PBXNativeTarget; buildConfigurationList = A00600000000000000000002 /* Build configuration list for PBXNativeTarget "Diafit" */; buildPhases = (A00300000000000000000004 /* Compile Daylight shader */, A00300000000000000000002 /* Sources */, A00300000000000000000001 /* Frameworks */, A00300000000000000000003 /* Resources */); buildRules = (); dependencies = (); name = Diafit; productName = Diafit; productReference = A00200000000000000000014 /* Diafit.app */; productType = "com.apple.product-type.application"; };
+		A00500000000000000000002 /* DiafitUITests */ = {isa = PBXNativeTarget; buildConfigurationList = A00600000000000000000003 /* Build configuration list for PBXNativeTarget "DiafitUITests" */; buildPhases = (A00300000000000000000005 /* Sources */, A00300000000000000000006 /* Frameworks */); buildRules = (); dependencies = (A01000000000000000000001 /* PBXTargetDependency */); name = DiafitUITests; productName = DiafitUITests; productReference = A00200000000000000000016 /* DiafitUITests.xctest */; productType = "com.apple.product-type.bundle.ui-testing"; };
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
-		A00700000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = {A00500000000000000000001 = {CreatedOnToolsVersion = 16.0; };};}; buildConfigurationList = A00600000000000000000001 /* Build configuration list for PBXProject "Diafit" */; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A00400000000000000000001; productRefGroup = A00400000000000000000009 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A00500000000000000000001 /* Diafit */); };
+		A00700000000000000000001 /* Project object */ = {isa = PBXProject; attributes = {LastSwiftUpdateCheck = 1600; LastUpgradeCheck = 1600; TargetAttributes = {A00500000000000000000001 = {CreatedOnToolsVersion = 16.0; }; A00500000000000000000002 = {CreatedOnToolsVersion = 16.0; TestTargetID = A00500000000000000000001; };};}; buildConfigurationList = A00600000000000000000001 /* Build configuration list for PBXProject "Diafit" */; compatibilityVersion = "Xcode 14.0"; developmentRegion = en; hasScannedForEncodings = 0; knownRegions = (en, Base); mainGroup = A00400000000000000000001; productRefGroup = A00400000000000000000009 /* Products */; projectDirPath = ""; projectRoot = ""; targets = (A00500000000000000000001 /* Diafit */, A00500000000000000000002 /* DiafitUITests */); };
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		A00300000000000000000003 /* Resources */ = {isa = PBXResourcesBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXResourcesBuildPhase section */
+
+/* Begin PBXContainerItemProxy section */
+		A00900000000000000000001 /* PBXContainerItemProxy */ = {isa = PBXContainerItemProxy; containerPortal = A00700000000000000000001 /* Project object */; proxyType = 1; remoteGlobalIDString = A00500000000000000000001; remoteInfo = Diafit; };
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXTargetDependency section */
+		A01000000000000000000001 /* PBXTargetDependency */ = {isa = PBXTargetDependency; target = A00500000000000000000001 /* Diafit */; targetProxy = A00900000000000000000001 /* PBXContainerItemProxy */; };
+/* End PBXTargetDependency section */
 
 /* Begin PBXShellScriptBuildPhase section */
 		A00300000000000000000004 /* Compile Daylight shader */ = {isa = PBXShellScriptBuildPhase; buildActionMask = 2147483647; files = (); inputPaths = ("$(SRCROOT)/Diafit/Resources/Daylight.metal",); name = "Compile Daylight shader"; outputPaths = ("$(TARGET_BUILD_DIR)/$(UNLOCALIZED_RESOURCES_FOLDER_PATH)/default.metallib",); runOnlyForDeploymentPostprocessing = 0; shellPath = /bin/sh; shellScript = "set -e\nMETAL_TOOL=$(/usr/bin/find /private/var/run/com.apple.security.cryptexd/mnt -path '*Metal.xctoolchain/usr/bin/metal' -type f -print -quit 2>/dev/null || true)\nif [ -z \"$METAL_TOOL\" ]; then METAL_TOOL=$(/usr/bin/xcrun --find metal); fi\nMETALLIB_TOOL=\"$(dirname \"$METAL_TOOL\")/metallib\"\nif [ \"$PLATFORM_NAME\" = \"iphonesimulator\" ]; then TARGET=\"air64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}-simulator\"; else TARGET=\"air64-apple-ios${IPHONEOS_DEPLOYMENT_TARGET}\"; fi\nmkdir -p \"$DERIVED_FILE_DIR/MetalModules\" \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH\"\n\"$METAL_TOOL\" -c -target \"$TARGET\" -fmodules-cache-path=\"$DERIVED_FILE_DIR/MetalModules\" -isysroot \"$SDKROOT\" \"$SRCROOT/Diafit/Resources/Daylight.metal\" -o \"$DERIVED_FILE_DIR/Daylight.air\"\n\"$METALLIB_TOOL\" \"$DERIVED_FILE_DIR/Daylight.air\" -o \"$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/default.metallib\"\n"; };
@@ -75,18 +88,26 @@
 
 /* Begin PBXSourcesBuildPhase section */
 		A00300000000000000000002 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00100000000000000000001, A00100000000000000000002, A00100000000000000000003, A00100000000000000000004, A00100000000000000000005, A00100000000000000000006, A00100000000000000000007, A00100000000000000000008, A00100000000000000000009, A00100000000000000000010, A00100000000000000000011, A00100000000000000000012); runOnlyForDeploymentPostprocessing = 0; };
+		A00300000000000000000005 /* Sources */ = {isa = PBXSourcesBuildPhase; buildActionMask = 2147483647; files = (A00100000000000000000014); runOnlyForDeploymentPostprocessing = 0; };
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		A00300000000000000000006 /* Frameworks */ = {isa = PBXFrameworksBuildPhase; buildActionMask = 2147483647; files = (); runOnlyForDeploymentPostprocessing = 0; };
+/* End PBXFrameworksBuildPhase section */
 
 /* Begin XCBuildConfiguration section */
 		A00800000000000000000001 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_CXX_LANGUAGE_STANDARD = "gnu++20"; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES; CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE; DEBUG_INFORMATION_FORMAT = dwarf; ENABLE_TESTABILITY = YES; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_NO_COMMON_BLOCKS = YES; GCC_OPTIMIZATION_LEVEL = 0; SDKROOT = iphoneos; SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)"; SWIFT_OPTIMIZATION_LEVEL = "-Onone"; }; name = Debug; };
 		A00800000000000000000002 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {ALWAYS_SEARCH_USER_PATHS = NO; CLANG_CXX_LANGUAGE_STANDARD = "gnu++20"; CLANG_ENABLE_MODULES = YES; CLANG_ENABLE_OBJC_ARC = YES; CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES; CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE; DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym"; GCC_C_LANGUAGE_STANDARD = gnu17; GCC_NO_COMMON_BLOCKS = YES; SDKROOT = iphoneos; SWIFT_COMPILATION_MODE = wholemodule; SWIFT_OPTIMIZATION_LEVEL = "-O"; }; name = Release; };
 		A00800000000000000000003 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_CFBundleDisplayName = Diafit; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.imranahmad.diafit; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Debug; };
 		A00800000000000000000004 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; CURRENT_PROJECT_VERSION = 1; GENERATE_INFOPLIST_FILE = YES; INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES; INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES; INFOPLIST_KEY_UILaunchScreen_Generation = YES; INFOPLIST_KEY_CFBundleDisplayName = Diafit; IPHONEOS_DEPLOYMENT_TARGET = 17.0; LD_RUNPATH_SEARCH_PATHS = "$(inherited) @executable_path/Frameworks"; MARKETING_VERSION = 1.0; PRODUCT_BUNDLE_IDENTIFIER = com.imranahmad.diafit; PRODUCT_NAME = "$(TARGET_NAME)"; SUPPORTED_PLATFORMS = "iphoneos iphonesimulator"; SUPPORTS_MACCATALYST = NO; SWIFT_EMIT_LOC_STRINGS = YES; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; }; name = Release; };
+		A00800000000000000000005 /* Debug */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.imranahmad.diafitUITests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; TEST_TARGET_NAME = Diafit; }; name = Debug; };
+		A00800000000000000000006 /* Release */ = {isa = XCBuildConfiguration; buildSettings = {CODE_SIGNING_ALLOWED = NO; GENERATE_INFOPLIST_FILE = YES; IPHONEOS_DEPLOYMENT_TARGET = 17.0; PRODUCT_BUNDLE_IDENTIFIER = com.imranahmad.diafitUITests; PRODUCT_NAME = "$(TARGET_NAME)"; SWIFT_VERSION = 5.0; TARGETED_DEVICE_FAMILY = 1; TEST_TARGET_NAME = Diafit; }; name = Release; };
 /* End XCBuildConfiguration section */
 
 /* Begin XCConfigurationList section */
 		A00600000000000000000001 /* Build configuration list for PBXProject "Diafit" */ = {isa = XCConfigurationList; buildConfigurations = (A00800000000000000000001 /* Debug */, A00800000000000000000002 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 		A00600000000000000000002 /* Build configuration list for PBXNativeTarget "Diafit" */ = {isa = XCConfigurationList; buildConfigurations = (A00800000000000000000003 /* Debug */, A00800000000000000000004 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
+		A00600000000000000000003 /* Build configuration list for PBXNativeTarget "DiafitUITests" */ = {isa = XCConfigurationList; buildConfigurations = (A00800000000000000000005 /* Debug */, A00800000000000000000006 /* Release */); defaultConfigurationIsVisible = 0; defaultConfigurationName = Release; };
 /* End XCConfigurationList section */
 	};
 	rootObject = A00700000000000000000001 /* Project object */;
