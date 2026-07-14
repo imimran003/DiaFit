@@ -5,7 +5,13 @@ xcuserdata/
 *.xcuserstate
 *.moved-aside
 *.swp
+.env
+.env.*
+!.env.example
 
 # Never commit production secrets.
 *.xcconfig
 !Configuration.example.xcconfig
+
+# Chroma-key source files are intermediate inputs for the checked-in alpha art.
+Diafit/Resources/Food/*-key.png

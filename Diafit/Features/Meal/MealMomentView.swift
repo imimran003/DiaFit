@@ -4,6 +4,8 @@ struct MealMomentView: View {
     let meal: Meal
     @Binding var isAtlasOpen: Bool
     let mealNamespace: Namespace.ID
+    let edit: (Meal) -> Void
+    let delete: (Meal) -> Void
     @State private var revealsDetails = false
 
     var body: some View {
@@ -12,19 +14,19 @@ struct MealMomentView: View {
                 revealsDetails.toggle()
             }
         } label: {
-            VStack(alignment: .leading, spacing: 0) {
+            VStack(alignment: .leading, spacing: 14) {
                 FoodArtwork(meal: meal, treatment: .thread)
                     .matchedGeometryEffect(id: "art-\(meal.id)", in: mealNamespace)
-                    .frame(height: 212)
-                    .clipShape(RoundedRectangle(cornerRadius: 25, style: .continuous))
+                    .frame(height: 238)
+                    .clipShape(RoundedRectangle(cornerRadius: 31, style: .continuous))
                     .overlay(alignment: .topLeading) {
                         Text(meal.mealType.uppercased())
                             .font(.system(size: 10, weight: .bold, design: .rounded))
                             .tracking(1.1)
-                            .foregroundStyle(Color.ink)
+                            .foregroundStyle(.white.opacity(0.95))
                             .padding(.horizontal, 10)
                             .padding(.vertical, 7)
-                            .background(.white.opacity(0.78), in: Capsule())
+                            .background(.black.opacity(0.18), in: Capsule())
                             .padding(13)
                     }
 
@@ -51,8 +53,8 @@ struct MealMomentView: View {
                         MacroPill(value: "\(meal.carbs)g", label: "carbs", color: .coral)
                         MacroPill(value: "\(meal.protein)g", label: "protein", color: .ink)
                         Spacer()
-                        Image(systemName: revealsDetails ? "chevron.up" : "chevron.down")
-                            .font(.system(size: 11, weight: .bold))
+                        Text(revealsDetails ? "less" : "details")
+                            .font(.system(size: 11, weight: .semibold, design: .rounded))
                             .foregroundStyle(Color.quietInk)
                     }
 
@@ -68,14 +70,17 @@ struct MealMomentView: View {
                         .transition(.opacity.combined(with: .move(edge: .top)))
                     }
                 }
-                .padding(16)
             }
         }
         .buttonStyle(PressableStyle(pressedScale: 0.985))
-        .paperCard(radius: 27, fill: .white.opacity(0.68))
+        .contentShape(RoundedRectangle(cornerRadius: 31, style: .continuous))
         .accessibilityHint("Double tap to reveal meal details")
         .contextMenu {
+            if meal.analysis != nil {
+                Button("Refine estimate", systemImage: "slider.horizontal.3") { edit(meal) }
+            }
             Button("Open meal atlas", systemImage: "square.grid.2x2") { isAtlasOpen = true }
+            Button("Delete meal", systemImage: "trash", role: .destructive) { delete(meal) }
         }
     }
 }

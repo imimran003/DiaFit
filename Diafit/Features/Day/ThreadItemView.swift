@@ -4,6 +4,11 @@ struct ThreadItemView: View {
     let item: ThreadItem
     @Binding var isAtlasOpen: Bool
     let mealNamespace: Namespace.ID
+    let updateDraft: (MealAnalysisDraft) -> Void
+    let confirmDraft: (MealAnalysisDraft) -> Void
+    let discardDraft: () -> Void
+    let editMeal: (Meal) -> Void
+    let deleteMeal: (Meal) -> Void
 
     var body: some View {
         switch item.kind {
@@ -12,7 +17,20 @@ struct ThreadItemView: View {
         case .person(let text):
             PersonMessage(text: text)
         case .meal(let meal):
-            MealMomentView(meal: meal, isAtlasOpen: $isAtlasOpen, mealNamespace: mealNamespace)
+            MealMomentView(
+                meal: meal,
+                isAtlasOpen: $isAtlasOpen,
+                mealNamespace: mealNamespace,
+                edit: editMeal,
+                delete: deleteMeal
+            )
+        case .mealAnalysis(let draft):
+            MealAnalysisReviewCard(
+                draft: draft,
+                onUpdate: updateDraft,
+                onConfirm: confirmDraft,
+                onDiscard: discardDraft
+            )
         case .checkpoint(let checkpoint):
             GlucoseMoment(checkpoint: checkpoint)
         }
@@ -54,8 +72,14 @@ private struct AgentMessage: View {
                 }
             }
         }
-        .padding(17)
-        .paperCard(radius: 25, fill: .white.opacity(0.72))
+        .padding(.leading, 15)
+        .padding(.vertical, 3)
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(Color.lime.opacity(0.9))
+                .frame(width: 3)
+                .padding(.vertical, 3)
+        }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -69,10 +93,10 @@ private struct PersonMessage: View {
             .foregroundStyle(Color.ink)
             .padding(.horizontal, 17)
             .padding(.vertical, 13)
-            .background(Color.lavender.opacity(0.27), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
+            .background(Color.ink.opacity(0.055), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(.white.opacity(0.9), lineWidth: 1)
+                    .stroke(Color.rule.opacity(0.68), lineWidth: 0.8)
             }
             .frame(maxWidth: .infinity, alignment: .trailing)
             .padding(.leading, 58)

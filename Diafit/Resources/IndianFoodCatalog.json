@@ -1,0 +1,192 @@
+{
+  "version": "2026.07-offline",
+  "source": "Bundled recipe estimate — recipe may vary; replace with an authenticated nutrition provider for production.",
+  "groups": [
+    {
+      "category": "bread", "dietaryClassification": "vegan", "allergens": ["wheat"], "methods": ["griddle or tandoor"],
+      "foods": [
+        {"id":"roti","name":"Roti","aliases":["roti","chapati","phulka"],"ingredients":["whole-wheat flour","water"],"nutrition":{"caloriesKcal":297,"proteinGrams":11.5,"carbohydrateGrams":61.5,"fatGrams":2.2,"fibreGrams":10.0},"serving":{"quantity":1,"unit":"roti","grams":35}},
+        {"id":"naan","name":"Naan","aliases":["naan"],"ingredients":["wheat flour","yeast"],"nutrition":{"caloriesKcal":290,"proteinGrams":9,"carbohydrateGrams":55,"fatGrams":5,"fibreGrams":2},"serving":{"quantity":1,"unit":"naan","grams":90}},
+        {"id":"butter-naan","name":"Butter naan","aliases":["butter naan"],"ingredients":["wheat flour","butter"],"nutrition":{"caloriesKcal":320,"proteinGrams":8,"carbohydrateGrams":53,"fatGrams":9,"fibreGrams":2},"serving":{"quantity":1,"unit":"naan","grams":95}},
+        {"id":"kulcha","name":"Kulcha","aliases":["kulcha"],"ingredients":["wheat flour"],"serving":{"quantity":1,"unit":"piece","grams":90}},
+        {"id":"paratha","name":"Paratha","aliases":["paratha","parathas"],"ingredients":["whole-wheat flour"],"methods":["preparation unspecified"],"confidence":"unknown","serving":{"quantity":1,"unit":"paratha","grams":80}},
+        {"id":"plain-paratha","name":"Plain paratha","aliases":["plain paratha","plain parathas"],"ingredients":["whole-wheat flour","oil"],"methods":["plain griddle-cooked"],"nutrition":{"caloriesKcal":270,"proteinGrams":7,"carbohydrateGrams":38,"fatGrams":10,"fibreGrams":5},"serving":{"quantity":1,"unit":"paratha","grams":80}},
+        {"id":"aloo-paratha","name":"Aloo paratha","aliases":["aloo paratha","aloo parathas","potato paratha"],"ingredients":["whole-wheat flour","potato","oil"],"methods":["potato-stuffed griddle-cooked"],"nutrition":{"caloriesKcal":260,"proteinGrams":6,"carbohydrateGrams":39,"fatGrams":9,"fibreGrams":4},"serving":{"quantity":1,"unit":"paratha","grams":100}},
+        {"id":"buttered-paratha","name":"Buttered paratha","aliases":["buttered paratha","paratha with butter"],"ingredients":["whole-wheat flour","oil","butter"],"methods":["butter-finished griddle-cooked"],"nutrition":{"caloriesKcal":315,"proteinGrams":7,"carbohydrateGrams":38,"fatGrams":15,"fibreGrams":5},"serving":{"quantity":1,"unit":"paratha","grams":85}},
+        {"id":"paneer-paratha","name":"Paneer paratha","aliases":["paneer paratha"],"ingredients":["whole-wheat flour","paneer"],"serving":{"quantity":1,"unit":"paratha","grams":105}},
+        {"id":"poori","name":"Poori","aliases":["poori","puri"],"ingredients":["wheat flour","frying oil"],"serving":{"quantity":1,"unit":"poori","grams":35}},
+        {"id":"bhatura","name":"Bhatura","aliases":["bhatura","bhature"],"ingredients":["refined flour","frying oil"],"serving":{"quantity":1,"unit":"bhatura","grams":100}},
+        {"id":"thepla","name":"Thepla","aliases":["thepla"],"ingredients":["wheat flour","fenugreek"],"serving":{"quantity":1,"unit":"piece","grams":55}},
+        {"id":"bhakri","name":"Bhakri","aliases":["bhakri","bhakari"],"ingredients":["millet flour"],"serving":{"quantity":1,"unit":"piece","grams":65}},
+        {"id":"roomali-roti","name":"Roomali roti","aliases":["roomali roti","rumali roti"],"ingredients":["wheat flour"],"serving":{"quantity":1,"unit":"roti","grams":45}},
+        {"id":"appam","name":"Appam","aliases":["appam","appa"],"ingredients":["rice","coconut"],"serving":{"quantity":1,"unit":"piece","grams":70}},
+        {"id":"dosa","name":"Dosa","aliases":["dosa","dosai"],"ingredients":["rice","urad dal"],"nutrition":{"caloriesKcal":168,"proteinGrams":3.5,"carbohydrateGrams":31,"fatGrams":3,"fibreGrams":1.5},"serving":{"quantity":1,"unit":"dosa","grams":120}},
+        {"id":"neer-dosa","name":"Neer dosa","aliases":["neer dosa"],"ingredients":["rice"],"serving":{"quantity":1,"unit":"dosa","grams":90}},
+        {"id":"uttapam","name":"Uttapam","aliases":["uttapam","uthappam"],"ingredients":["rice","urad dal","vegetables"],"serving":{"quantity":1,"unit":"piece","grams":150}}
+      ]
+    },
+    {
+      "category": "rice", "dietaryClassification": "vegan", "allergens": [], "methods": ["boiled, steamed, or seasoned"],
+      "foods": [
+        {"id":"steamed-rice","name":"Steamed rice","aliases":["steamed rice","white rice","rice"],"ingredients":["rice"],"nutrition":{"caloriesKcal":130,"proteinGrams":2.4,"carbohydrateGrams":28,"fatGrams":0.3,"fibreGrams":0.4},"serving":{"quantity":1,"unit":"cup","grams":160}},
+        {"id":"basmati-rice","name":"Basmati rice","aliases":["basmati rice"],"ingredients":["basmati rice"],"serving":{"quantity":1,"unit":"cup","grams":160}},
+        {"id":"jeera-rice","name":"Jeera rice","aliases":["jeera rice","cumin rice"],"ingredients":["rice","cumin","oil"],"serving":{"quantity":1,"unit":"cup","grams":180}},
+        {"id":"pulao","name":"Pulao","aliases":["pulao","pilaf"],"ingredients":["rice","oil","spices"],"serving":{"quantity":1,"unit":"cup","grams":180}},
+        {"id":"vegetable-pulao","name":"Vegetable pulao","aliases":["vegetable pulao","veg pulao"],"ingredients":["rice","vegetables","oil"],"serving":{"quantity":1,"unit":"cup","grams":180}},
+        {"id":"biryani","name":"Biryani","aliases":["biryani"],"ingredients":["rice","spices","oil"],"serving":{"quantity":1,"unit":"plate","grams":300}},
+        {"id":"chicken-biryani","name":"Chicken biryani","aliases":["chicken biryani"],"ingredients":["rice","chicken","oil"],"nutrition":{"caloriesKcal":200,"proteinGrams":10,"carbohydrateGrams":25,"fatGrams":7,"fibreGrams":1},"serving":{"quantity":1,"unit":"plate","grams":350}},
+        {"id":"mutton-biryani","name":"Mutton biryani","aliases":["mutton biryani"],"ingredients":["rice","mutton","oil"],"serving":{"quantity":1,"unit":"plate","grams":350}},
+        {"id":"egg-biryani","name":"Egg biryani","aliases":["egg biryani"],"ingredients":["rice","egg","oil"],"serving":{"quantity":1,"unit":"plate","grams":330}},
+        {"id":"lemon-rice","name":"Lemon rice","aliases":["lemon rice"],"ingredients":["rice","lemon","oil"],"serving":{"quantity":1,"unit":"cup","grams":180}},
+        {"id":"curd-rice","name":"Curd rice","aliases":["curd rice","yogurt rice"],"ingredients":["rice","curd"],"serving":{"quantity":1,"unit":"cup","grams":200}},
+        {"id":"tamarind-rice","name":"Tamarind rice","aliases":["tamarind rice","puliyogare"],"ingredients":["rice","tamarind","oil"],"serving":{"quantity":1,"unit":"cup","grams":180}},
+        {"id":"coconut-rice","name":"Coconut rice","aliases":["coconut rice"],"ingredients":["rice","coconut"],"serving":{"quantity":1,"unit":"cup","grams":180}},
+        {"id":"khichdi","name":"Khichdi","aliases":["khichdi","khichuri"],"ingredients":["rice","lentils"],"serving":{"quantity":1,"unit":"mediumBowl","grams":250}},
+        {"id":"pongal","name":"Pongal","aliases":["pongal","ven pongal"],"ingredients":["rice","moong dal","ghee"],"serving":{"quantity":1,"unit":"mediumBowl","grams":220}}
+      ]
+    },
+    {
+      "category": "lentilOrLegume", "dietaryClassification": "vegan", "allergens": [], "methods": ["simmered or tempered"],
+      "foods": [
+        {"id":"dal","name":"Dal","aliases":["dal","lentil curry"],"ingredients":["lentils","spices"],"nutrition":{"caloriesKcal":120,"proteinGrams":8,"carbohydrateGrams":20,"fatGrams":1.5,"fibreGrams":6},"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"dal-tadka","name":"Dal tadka","aliases":["dal tadka"],"ingredients":["lentils","tempering oil"],"serving":{"quantity":1,"unit":"katori","grams":160}},
+        {"id":"dal-fry","name":"Dal fry","aliases":["dal fry"],"ingredients":["lentils","oil"],"serving":{"quantity":1,"unit":"katori","grams":160}},
+        {"id":"dal-makhani","name":"Dal makhani","aliases":["dal makhani"],"ingredients":["black lentils","cream","butter"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"moong-dal","name":"Moong dal","aliases":["moong dal","mung dal"],"ingredients":["mung beans"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"masoor-dal","name":"Masoor dal","aliases":["masoor dal","red lentil dal"],"ingredients":["red lentils"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"toor-dal","name":"Toor dal","aliases":["toor dal","arhar dal"],"ingredients":["pigeon peas"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"chana-dal","name":"Chana dal","aliases":["chana dal"],"ingredients":["split chickpeas"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"rajma","name":"Rajma","aliases":["rajma","kidney bean curry"],"ingredients":["kidney beans","tomato"],"nutrition":{"caloriesKcal":127,"proteinGrams":8.7,"carbohydrateGrams":22.8,"fatGrams":0.5,"fibreGrams":6.4},"serving":{"quantity":1,"unit":"katori","grams":170}},
+        {"id":"chole","name":"Chole","aliases":["chole","chana masala","chickpea curry"],"ingredients":["chickpeas","tomato","spices"],"serving":{"quantity":1,"unit":"katori","grams":170}},
+        {"id":"sambar","name":"Sambar","aliases":["sambar","sambhar"],"ingredients":["toor dal","vegetables","tamarind"],"nutrition":{"caloriesKcal":55,"proteinGrams":2.5,"carbohydrateGrams":8,"fatGrams":1.5,"fibreGrams":2.2},"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"rasam","name":"Rasam","aliases":["rasam"],"ingredients":["tamarind","spices"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"kadhi","name":"Kadhi","aliases":["kadhi"],"ingredients":["yogurt","gram flour"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"sprouts-curry","name":"Sprouts curry","aliases":["sprouts curry"],"ingredients":["sprouts","spices"],"serving":{"quantity":1,"unit":"katori","grams":160}}
+      ]
+    },
+    {
+      "category": "vegetarianCurry", "dietaryClassification": "vegetarian", "allergens": ["milk"], "methods": ["curry or dry sauté"],
+      "foods": [
+        {"id":"paneer-butter-masala","name":"Paneer butter masala","aliases":["paneer butter masala","butter paneer"],"ingredients":["paneer","tomato","butter","cream"],"nutrition":{"caloriesKcal":280,"proteinGrams":12,"carbohydrateGrams":10,"fatGrams":21,"fibreGrams":2},"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"palak-paneer","name":"Palak paneer","aliases":["palak paneer","saag paneer"],"ingredients":["spinach","paneer"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"matar-paneer","name":"Matar paneer","aliases":["matar paneer","peas paneer"],"ingredients":["peas","paneer"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"shahi-paneer","name":"Shahi paneer","aliases":["shahi paneer"],"ingredients":["paneer","cashew","cream"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"kadai-paneer","name":"Kadai paneer","aliases":["kadai paneer","karahi paneer"],"ingredients":["paneer","bell pepper"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"mixed-vegetable-curry","name":"Mixed vegetable curry","aliases":["mixed vegetable curry","mixed veg"],"ingredients":["mixed vegetables","oil"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"aloo-gobi","name":"Aloo gobi","aliases":["aloo gobi","aloo gobhi"],"ingredients":["potato","cauliflower"],"serving":{"quantity":1,"unit":"katori","grams":160}},
+        {"id":"aloo-matar","name":"Aloo matar","aliases":["aloo matar","potato peas"],"ingredients":["potato","peas"],"serving":{"quantity":1,"unit":"katori","grams":160}},
+        {"id":"baingan-bharta","name":"Baingan bharta","aliases":["baingan bharta","eggplant bharta"],"ingredients":["eggplant","tomato"],"serving":{"quantity":1,"unit":"katori","grams":160}},
+        {"id":"bhindi-masala","name":"Bhindi masala","aliases":["bhindi masala","okra masala"],"ingredients":["okra","spices"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"malai-kofta","name":"Malai kofta","aliases":["malai kofta"],"ingredients":["paneer","cream"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"vegetable-korma","name":"Vegetable korma","aliases":["vegetable korma","veg korma"],"ingredients":["vegetables","coconut","cashew"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"pav-bhaji","name":"Pav bhaji","aliases":["pav bhaji"],"ingredients":["vegetables","butter","bread"],"serving":{"quantity":1,"unit":"plate","grams":300}},
+        {"id":"saag","name":"Saag","aliases":["saag"],"ingredients":["leafy greens"],"serving":{"quantity":1,"unit":"katori","grams":160}},
+        {"id":"avial","name":"Avial","aliases":["avial"],"ingredients":["vegetables","coconut","yogurt"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"poriyal","name":"Poriyal","aliases":["poriyal"],"ingredients":["vegetables","coconut"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"thoran","name":"Thoran","aliases":["thoran"],"ingredients":["vegetables","coconut"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"undhiyu","name":"Undhiyu","aliases":["undhiyu","undhiya"],"ingredients":["mixed vegetables","beans"],"serving":{"quantity":1,"unit":"katori","grams":180}}
+      ]
+    },
+    {
+      "category": "nonVegetarian", "dietaryClassification": "nonVegetarian", "allergens": [], "methods": ["curry, grill, or fry"],
+      "foods": [
+        {"id":"butter-chicken","name":"Butter chicken","aliases":["butter chicken","murgh makhani"],"ingredients":["chicken","tomato","butter","cream"],"nutrition":{"caloriesKcal":250,"proteinGrams":15,"carbohydrateGrams":8,"fatGrams":17,"fibreGrams":1},"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"chicken-curry","name":"Chicken curry","aliases":["chicken curry","chicken masala"],"ingredients":["chicken","spices","oil"],"nutrition":{"caloriesKcal":190,"proteinGrams":18,"carbohydrateGrams":5,"fatGrams":11,"fibreGrams":1},"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"chicken-tikka-masala","name":"Chicken tikka masala","aliases":["chicken tikka masala"],"ingredients":["chicken","tomato","cream"],"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"tandoori-chicken","name":"Tandoori chicken","aliases":["tandoori chicken"],"ingredients":["chicken","yogurt"],"serving":{"quantity":1,"unit":"piece","grams":180}},
+        {"id":"chicken-tikka","name":"Chicken tikka","aliases":["chicken tikka"],"ingredients":["chicken","yogurt"],"serving":{"quantity":1,"unit":"piece","grams":150}},
+        {"id":"kadai-chicken","name":"Kadai chicken","aliases":["kadai chicken","karahi chicken"],"ingredients":["chicken","bell pepper"],"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"chicken-korma","name":"Chicken korma","aliases":["chicken korma"],"ingredients":["chicken","cashew","cream"],"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"fish-curry","name":"Fish curry","aliases":["fish curry"],"ingredients":["fish","spices"],"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"fish-fry","name":"Fish fry","aliases":["fish fry"],"ingredients":["fish","frying oil"],"serving":{"quantity":1,"unit":"piece","grams":150}},
+        {"id":"prawn-curry","name":"Prawn curry","aliases":["prawn curry","shrimp curry"],"ingredients":["prawns","coconut"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"egg-curry","name":"Egg curry","aliases":["egg curry"],"ingredients":["egg","tomato"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"mutton-curry","name":"Mutton curry","aliases":["mutton curry","goat curry"],"ingredients":["mutton","spices"],"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"rogan-josh","name":"Rogan josh","aliases":["rogan josh"],"ingredients":["mutton","spices"],"serving":{"quantity":1,"unit":"katori","grams":200}},
+        {"id":"keema","name":"Keema","aliases":["keema","minced meat curry"],"ingredients":["minced meat","spices"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"kebab","name":"Kebab","aliases":["kebab","kebabs"],"ingredients":["meat","spices"],"serving":{"quantity":1,"unit":"piece","grams":90}}
+      ]
+    },
+    {
+      "category": "breakfastOrSnack", "dietaryClassification": "vegetarian", "allergens": [], "methods": ["steamed, fried, or sautéed"],
+      "foods": [
+        {"id":"idli","name":"Idli","aliases":["idli","idlis"],"ingredients":["rice","urad dal"],"nutrition":{"caloriesKcal":146,"proteinGrams":4,"carbohydrateGrams":28,"fatGrams":1,"fibreGrams":1},"serving":{"quantity":1,"unit":"idli","grams":40}},
+        {"id":"vada","name":"Vada","aliases":["vada","medu vada"],"ingredients":["urad dal","frying oil"],"serving":{"quantity":1,"unit":"vada","grams":55}},
+        {"id":"poha","name":"Poha","aliases":["poha","flattened rice"],"ingredients":["flattened rice","vegetables","oil"],"nutrition":{"caloriesKcal":180,"proteinGrams":4,"carbohydrateGrams":29,"fatGrams":5,"fibreGrams":2},"serving":{"quantity":1,"unit":"mediumBowl","grams":180}},
+        {"id":"upma","name":"Upma","aliases":["upma","semolina preparation"],"ingredients":["semolina","vegetables","oil"],"serving":{"quantity":1,"unit":"mediumBowl","grams":180}},
+        {"id":"sabudana-khichdi","name":"Sabudana khichdi","aliases":["sabudana khichdi","sago khichdi"],"ingredients":["tapioca","peanut"],"serving":{"quantity":1,"unit":"mediumBowl","grams":180}},
+        {"id":"dhokla","name":"Dhokla","aliases":["dhokla"],"ingredients":["gram flour"],"serving":{"quantity":1,"unit":"piece","grams":50}},
+        {"id":"khandvi","name":"Khandvi","aliases":["khandvi"],"ingredients":["gram flour","yogurt"],"serving":{"quantity":1,"unit":"piece","grams":35}},
+        {"id":"samosa","name":"Samosa","aliases":["samosa","samosas"],"ingredients":["potato","wheat flour","frying oil"],"serving":{"quantity":1,"unit":"piece","grams":90}},
+        {"id":"kachori","name":"Kachori","aliases":["kachori","kachori"],"ingredients":["flour","lentils","frying oil"],"serving":{"quantity":1,"unit":"piece","grams":70}},
+        {"id":"pakora","name":"Pakora","aliases":["pakora","pakoda","bhaji"],"ingredients":["gram flour","vegetables","frying oil"],"serving":{"quantity":1,"unit":"piece","grams":35}},
+        {"id":"bhel-puri","name":"Bhel puri","aliases":["bhel puri","bhel"],"ingredients":["puffed rice","chutney"],"serving":{"quantity":1,"unit":"plate","grams":150}},
+        {"id":"pani-puri","name":"Pani puri","aliases":["pani puri","golgappa","puchka"],"ingredients":["fried puri","potato","tamarind water"],"serving":{"quantity":1,"unit":"serving","grams":150}},
+        {"id":"sev-puri","name":"Sev puri","aliases":["sev puri"],"ingredients":["puri","potato","sev"],"serving":{"quantity":1,"unit":"serving","grams":150}},
+        {"id":"dahi-puri","name":"Dahi puri","aliases":["dahi puri"],"ingredients":["puri","yogurt"],"serving":{"quantity":1,"unit":"serving","grams":160}},
+        {"id":"chaat","name":"Chaat","aliases":["chaat"],"ingredients":["potato","chutney","yogurt"],"serving":{"quantity":1,"unit":"plate","grams":180}},
+        {"id":"aloo-tikki","name":"Aloo tikki","aliases":["aloo tikki","potato patty"],"ingredients":["potato","oil"],"serving":{"quantity":1,"unit":"piece","grams":80}},
+        {"id":"vada-pav","name":"Vada pav","aliases":["vada pav"],"ingredients":["bread roll","potato fritter"],"serving":{"quantity":1,"unit":"piece","grams":150}},
+        {"id":"misal-pav","name":"Misal pav","aliases":["misal pav"],"ingredients":["sprouts","bread roll"],"serving":{"quantity":1,"unit":"plate","grams":280}},
+        {"id":"omelette","name":"Omelette","aliases":["omelette","omelet"],"ingredients":["egg","oil"],"serving":{"quantity":1,"unit":"piece","grams":110}},
+        {"id":"boiled-egg","name":"Boiled egg","aliases":["boiled egg","boiled eggs"],"ingredients":["egg"],"serving":{"quantity":1,"unit":"piece","grams":50}}
+      ]
+    },
+    {
+      "category": "dairyOrSide", "dietaryClassification": "vegetarian", "allergens": ["milk"], "methods": ["fresh or chilled"],
+      "foods": [
+        {"id":"dahi","name":"Dahi","aliases":["dahi","curd","yogurt"],"ingredients":["milk culture"],"nutrition":{"caloriesKcal":61,"proteinGrams":3.5,"carbohydrateGrams":4.7,"fatGrams":3.3,"fibreGrams":0},"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"raita","name":"Raita","aliases":["raita"],"ingredients":["yogurt","vegetables"],"nutrition":{"caloriesKcal":70,"proteinGrams":3.5,"carbohydrateGrams":5,"fatGrams":3.5,"fibreGrams":0.5},"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"paneer","name":"Paneer","aliases":["paneer","cottage cheese"],"ingredients":["milk"],"serving":{"quantity":1,"unit":"serving","grams":75}},
+        {"id":"ghee","name":"Ghee","aliases":["ghee","clarified butter"],"ingredients":["clarified butter"],"serving":{"quantity":1,"unit":"teaspoon","grams":5}},
+        {"id":"butter","name":"Butter","aliases":["butter"],"ingredients":["milk"],"serving":{"quantity":1,"unit":"teaspoon","grams":5}},
+        {"id":"pickle","name":"Pickle","aliases":["pickle","achar","achaar"],"ingredients":["fruit or vegetable","oil","salt"],"serving":{"quantity":1,"unit":"teaspoon","grams":10}},
+        {"id":"papad","name":"Papad","aliases":["papad","poppadom"],"ingredients":["lentil flour"],"serving":{"quantity":1,"unit":"piece","grams":15}},
+        {"id":"coconut-chutney","name":"Coconut chutney","aliases":["coconut chutney"],"ingredients":["coconut","lentils"],"serving":{"quantity":1,"unit":"tablespoon","grams":20}},
+        {"id":"mint-chutney","name":"Mint chutney","aliases":["mint chutney","green chutney"],"ingredients":["mint","coriander"],"serving":{"quantity":1,"unit":"tablespoon","grams":20}},
+        {"id":"tamarind-chutney","name":"Tamarind chutney","aliases":["tamarind chutney","imli chutney"],"ingredients":["tamarind","jaggery"],"serving":{"quantity":1,"unit":"tablespoon","grams":20}},
+        {"id":"salad","name":"Salad","aliases":["salad","kachumber"],"ingredients":["raw vegetables"],"serving":{"quantity":1,"unit":"smallBowl","grams":100}}
+      ]
+    },
+    {
+      "category": "dessertOrDrink", "dietaryClassification": "vegetarian", "allergens": ["milk"], "methods": ["sweetened or chilled"],
+      "foods": [
+        {"id":"gulab-jamun","name":"Gulab jamun","aliases":["gulab jamun"],"ingredients":["milk solids","sugar syrup"],"serving":{"quantity":1,"unit":"piece","grams":50}},
+        {"id":"jalebi","name":"Jalebi","aliases":["jalebi","jilebi"],"ingredients":["flour","sugar syrup"],"serving":{"quantity":1,"unit":"piece","grams":35}},
+        {"id":"kheer","name":"Kheer","aliases":["kheer","rice pudding"],"ingredients":["rice","milk","sugar"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"payasam","name":"Payasam","aliases":["payasam"],"ingredients":["milk","sugar"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"rasgulla","name":"Rasgulla","aliases":["rasgulla","rasgullas"],"ingredients":["milk solids","sugar syrup"],"serving":{"quantity":1,"unit":"piece","grams":45}},
+        {"id":"laddu","name":"Laddu","aliases":["laddu","ladoo"],"ingredients":["flour","sugar","ghee"],"serving":{"quantity":1,"unit":"piece","grams":40}},
+        {"id":"halwa","name":"Halwa","aliases":["halwa"],"ingredients":["semolina","ghee","sugar"],"serving":{"quantity":1,"unit":"katori","grams":120}},
+        {"id":"barfi","name":"Barfi","aliases":["barfi","burfi"],"ingredients":["milk solids","sugar"],"serving":{"quantity":1,"unit":"piece","grams":35}},
+        {"id":"kulfi","name":"Kulfi","aliases":["kulfi"],"ingredients":["milk","sugar"],"serving":{"quantity":1,"unit":"piece","grams":90}},
+        {"id":"lassi","name":"Lassi","aliases":["lassi"],"ingredients":["yogurt"],"confidence":"unknown","serving":{"quantity":1,"unit":"glass","grams":250}},
+        {"id":"unsweetened-lassi","name":"Unsweetened lassi","aliases":["unsweetened lassi","plain lassi"],"ingredients":["yogurt","water"],"nutrition":{"caloriesKcal":61,"proteinGrams":3.5,"carbohydrateGrams":4.7,"fatGrams":3.3,"fibreGrams":0},"serving":{"quantity":1,"unit":"glass","grams":250}},
+        {"id":"sweet-lassi","name":"Sweet lassi","aliases":["sweet lassi","meethi lassi"],"ingredients":["yogurt","sugar"],"nutrition":{"caloriesKcal":90,"proteinGrams":3,"carbohydrateGrams":15,"fatGrams":2},"serving":{"quantity":1,"unit":"glass","grams":250}},
+        {"id":"salted-lassi","name":"Salted lassi","aliases":["salted lassi","namkeen lassi"],"ingredients":["yogurt","salt"],"serving":{"quantity":1,"unit":"glass","grams":250}},
+        {"id":"chai","name":"Chai","aliases":["chai"],"ingredients":["tea"],"methods":["milk and sweetening unspecified"],"confidence":"unknown","serving":{"quantity":1,"unit":"glass","grams":150}},
+        {"id":"tea","name":"Tea","aliases":["tea"],"ingredients":["tea"],"methods":["milk and sweetening unspecified"],"confidence":"unknown","serving":{"quantity":1,"unit":"cup","grams":240}},
+        {"id":"plain-tea","name":"Plain tea","aliases":["plain tea","tea without milk","unsweetened tea"],"ingredients":["tea","water"],"methods":["brewed, no milk or sugar"],"nutrition":{"caloriesKcal":0.8,"proteinGrams":0.1,"carbohydrateGrams":0,"fatGrams":0},"serving":{"quantity":1,"unit":"cup","grams":240},"dataSource":"USDA FoodData Central representative brewed tea reference; bundled low-confidence convenience record","dataVersion":"SR Legacy 2018","confidence":"low"},
+        {"id":"green-tea","name":"Green tea","aliases":["green tea","unsweetened green tea"],"ingredients":["green tea","water"],"methods":["brewed, no milk or sugar"],"nutrition":{"caloriesKcal":0.8,"proteinGrams":0.1,"carbohydrateGrams":0,"fatGrams":0},"serving":{"quantity":1,"unit":"cup","grams":240},"dataSource":"USDA FoodData Central representative brewed tea reference; bundled low-confidence convenience record","dataVersion":"SR Legacy 2018","confidence":"low"},
+        {"id":"chai-with-milk","name":"Chai with milk","aliases":["chai with milk","milk chai"],"ingredients":["tea","milk"],"methods":["brewed with milk, no added sugar assumed"],"nutrition":{"caloriesKcal":17,"proteinGrams":1.1,"carbohydrateGrams":1.6,"fatGrams":0.7,"totalSugarGrams":1.5},"serving":{"quantity":1,"unit":"glass","grams":150},"confidence":"low"},
+        {"id":"chai-with-milk-and-sugar","name":"Chai with milk & sugar","aliases":["chai with milk and sugar","sweet chai","sweetened chai"],"ingredients":["milk","tea","sugar"],"methods":["brewed with milk and sugar"],"nutrition":{"caloriesKcal":55,"proteinGrams":1.5,"carbohydrateGrams":8,"fatGrams":2,"totalSugarGrams":7,"addedSugarGrams":6},"serving":{"quantity":1,"unit":"glass","grams":150},"confidence":"low"},
+        {"id":"masala-chai","name":"Masala chai","aliases":["masala chai"],"ingredients":["milk","tea","sugar","spices"],"methods":["spiced chai with milk and sugar assumed"],"nutrition":{"caloriesKcal":55,"proteinGrams":1.5,"carbohydrateGrams":8,"fatGrams":2,"totalSugarGrams":7,"addedSugarGrams":6},"serving":{"quantity":1,"unit":"glass","grams":150},"confidence":"low"},
+        {"id":"coffee","name":"Coffee","aliases":["coffee"],"ingredients":["coffee"],"methods":["milk and sweetening unspecified"],"confidence":"unknown","serving":{"quantity":1,"unit":"cup","grams":240}},
+        {"id":"black-coffee","name":"Black coffee","aliases":["black coffee","unsweetened black coffee","plain black coffee"],"ingredients":["coffee","water"],"methods":["brewed, no milk, cream, or sugar"],"nutrition":{"caloriesKcal":0.83,"proteinGrams":0.12,"carbohydrateGrams":0,"fatGrams":0},"serving":{"quantity":1,"unit":"cup","grams":240},"dataSource":"USDA FoodData Central SR Legacy 171890, brewed coffee prepared with tap water; bundled reference only","dataVersion":"SR Legacy 2018","confidence":"low"},
+        {"id":"coffee-with-sugar","name":"Coffee with one teaspoon sugar","aliases":["coffee with sugar","coffee with one teaspoon sugar","coffee with 1 teaspoon sugar"],"ingredients":["coffee","water","one teaspoon sugar"],"methods":["brewed, no milk"],"nutrition":{"caloriesKcal":7.5,"proteinGrams":0.1,"carbohydrateGrams":1.7,"fatGrams":0,"totalSugarGrams":1.7,"addedSugarGrams":1.7},"serving":{"quantity":1,"unit":"cup","grams":240},"dataSource":"Bundled ingredient calculation: brewed coffee reference plus one teaspoon sugar per 240 mL","confidence":"low"},
+        {"id":"coffee-with-milk","name":"Coffee with milk","aliases":["coffee with milk","milky coffee"],"ingredients":["coffee","water","milk"],"methods":["brewed with a small milk addition, no sugar assumed"],"nutrition":{"caloriesKcal":6.3,"proteinGrams":0.5,"carbohydrateGrams":0.9,"fatGrams":0.3,"totalSugarGrams":0.9},"serving":{"quantity":1,"unit":"cup","grams":240},"confidence":"low"},
+        {"id":"coffee-with-milk-and-sugar","name":"Coffee with milk & sugar","aliases":["coffee with milk and sugar","coffee with sugar and milk"],"ingredients":["coffee","water","milk","one teaspoon sugar"],"methods":["brewed with a small milk addition and one teaspoon sugar"],"nutrition":{"caloriesKcal":13.7,"proteinGrams":0.5,"carbohydrateGrams":2.6,"fatGrams":0.3,"totalSugarGrams":2.6,"addedSugarGrams":1.7},"serving":{"quantity":1,"unit":"cup","grams":240},"confidence":"low"},
+        {"id":"latte","name":"Latte","aliases":["latte"],"ingredients":["espresso","milk"],"methods":["unsweetened cafe latte assumed"],"nutrition":{"caloriesKcal":23,"proteinGrams":1.5,"carbohydrateGrams":2.3,"fatGrams":1},"serving":{"quantity":1,"unit":"cup","grams":240},"confidence":"low"},
+        {"id":"cappuccino","name":"Cappuccino","aliases":["cappuccino"],"ingredients":["espresso","milk foam"],"methods":["unsweetened cappuccino assumed"],"nutrition":{"caloriesKcal":18,"proteinGrams":1.2,"carbohydrateGrams":1.8,"fatGrams":0.8},"serving":{"quantity":1,"unit":"cup","grams":180},"confidence":"low"},
+        {"id":"buttermilk","name":"Buttermilk","aliases":["buttermilk","chaas"],"ingredients":["yogurt","water"],"nutrition":{"caloriesKcal":16,"proteinGrams":1.6,"carbohydrateGrams":2.3,"fatGrams":0.6},"serving":{"quantity":1,"unit":"glass","grams":250},"confidence":"low"},
+        {"id":"sugarcane-juice","name":"Sugarcane juice","aliases":["sugarcane juice","ganne ka juice"],"ingredients":["sugarcane"],"serving":{"quantity":1,"unit":"glass","grams":250}}
+      ]
+    },
+    {
+      "category": "unknown", "dietaryClassification": "unknown", "allergens": [], "methods": ["preparation unspecified"],
+      "foods": [
+        {"id":"mixed-thali","name":"Mixed thali","aliases":["mixed thali","thali"],"ingredients":[],"confidence":"unknown","serving":{"quantity":1,"unit":"plate","grams":300}}
+      ]
+    }
+  ]
+}

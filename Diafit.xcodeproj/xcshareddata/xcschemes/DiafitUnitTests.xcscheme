@@ -10,13 +10,10 @@
       </BuildActionEntry>
     </BuildActionEntries>
   </BuildAction>
-  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB" shouldUseLaunchSchemeArgsEnv="YES">
+  <TestAction buildConfiguration="Debug" selectedDebuggerIdentifier="Xcode.DebuggerFoundation.Debugger.LLDB" selectedLauncherIdentifier="Xcode.DebuggerFoundation.Launcher.LLDB">
     <Testables>
       <TestableReference skipped="NO">
         <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="A00500000000000000000003" BuildableName="DiafitTests.xctest" BlueprintName="DiafitTests" ReferencedContainer="container:Diafit.xcodeproj"/>
-      </TestableReference>
-      <TestableReference skipped="NO">
-        <BuildableReference BuildableIdentifier="primary" BlueprintIdentifier="A00500000000000000000002" BuildableName="DiafitUITests.xctest" BlueprintName="DiafitUITests" ReferencedContainer="container:Diafit.xcodeproj"/>
       </TestableReference>
     </Testables>
   </TestAction>

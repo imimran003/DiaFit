@@ -2,12 +2,17 @@ import SwiftUI
 
 struct DayThreadView: View {
     @EnvironmentObject private var store: DiaryStore
+    @Environment(\.appDependencies) private var dependencies
     let dayID: Day.ID
     @Binding var isAtlasOpen: Bool
     let mealNamespace: Namespace.ID
 
     @State private var draft = ""
     @State private var isThinking = false
+    @State private var thinkingLabel = "Looking that up"
+    @State private var showsPhotoInput = false
+    @State private var mealBeingEdited: Meal?
+    @State private var mealPendingDeletion: Meal?
     @State private var scrollTarget: UUID?
     @FocusState private var composerFocused: Bool
 
@@ -26,13 +31,28 @@ struct DayThreadView: View {
                                 ThreadItemView(
                                     item: item,
                                     isAtlasOpen: $isAtlasOpen,
-                                    mealNamespace: mealNamespace
+                                    mealNamespace: mealNamespace,
+                                    updateDraft: { draft in
+                                        store.update(draft, for: item.id, in: dayID)
+                                    },
+                                    confirmDraft: { draft in
+                                        confirm(draft, replacing: item.id)
+                                    },
+                                    discardDraft: {
+                                        store.remove(itemID: item.id, from: dayID)
+                                    },
+                                    editMeal: { meal in
+                                        mealBeingEdited = meal
+                                    },
+                                    deleteMeal: { meal in
+                                        mealPendingDeletion = meal
+                                    }
                                 )
                                 .id(item.id)
                             }
 
                             if isThinking {
-                                ThinkingBubble()
+                                ThinkingBubble(label: thinkingLabel)
                                     .id("thinking")
                             }
 
@@ -47,6 +67,7 @@ struct DayThreadView: View {
                             text: $draft,
                             isThinking: isThinking,
                             isFocused: $composerFocused,
+                            openPhoto: { showsPhotoInput = true },
                             submit: submit
                         )
                     }
@@ -59,6 +80,42 @@ struct DayThreadView: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showsPhotoInput) {
+            PhotoMealInput(onContinue: beginPhotoReview)
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(item: $mealBeingEdited) { meal in
+            if let analysis = meal.analysis {
+                NavigationStack {
+                    ScrollView(showsIndicators: false) {
+                        MealAnalysisReviewCard(
+                            draft: MealAnalysisDraft(result: analysis),
+                            onUpdate: { _ in },
+                            onConfirm: { draft in update(meal, from: draft) },
+                            onDiscard: { mealBeingEdited = nil },
+                            confirmationTitle: "Save changes"
+                        )
+                        .padding(20)
+                    }
+                    .background(Color.paper)
+                    .navigationTitle("Refine estimate")
+                    .navigationBarTitleDisplayMode(.inline)
+                }
+            }
+        }
+        .alert("Delete this meal?", isPresented: Binding(
+            get: { mealPendingDeletion != nil },
+            set: { if !$0 { mealPendingDeletion = nil } }
+        ), presenting: mealPendingDeletion) { meal in
+            Button("Delete", role: .destructive) {
+                store.removeMeal(id: meal.id, from: dayID)
+                mealPendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { mealPendingDeletion = nil }
+        } message: { meal in
+            Text("\(meal.title) will be removed from this day. This can’t be undone in the current session.")
         }
     }
 
@@ -86,24 +143,88 @@ struct DayThreadView: View {
         composerFocused = false
         store.append(ThreadItem(id: UUID(), kind: .person(text: note)), to: dayID)
         isThinking = true
+        thinkingLabel = "Checking nutrition"
 
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(720))
-            let meal = ConversationCoordinator.nutrition.estimate(for: note, at: .now)
-            store.append(ThreadItem(id: UUID(), kind: .meal(meal)), to: dayID)
-            try? await Task.sleep(for: .milliseconds(420))
+            switch ConversationCoordinator.nutrition.resolve(note: note, at: .now) {
+            case .saved(let meal):
+                store.append(ThreadItem(id: UUID(), kind: .meal(meal)), to: dayID)
+                try? await Task.sleep(for: .milliseconds(420))
+                store.append(
+                    ThreadItem(
+                        id: UUID(),
+                        kind: .agent(
+                            text: ConversationCoordinator.acknowledgement(for: meal),
+                            tools: ["Nutrition checked", "Day totals updated"]
+                        )
+                    ),
+                    to: dayID
+                )
+            case .review(let review):
+                store.append(ThreadItem(id: UUID(), kind: .mealAnalysis(review)), to: dayID)
+                try? await Task.sleep(for: .milliseconds(260))
+                store.append(
+                    ThreadItem(
+                        id: UUID(),
+                        kind: .agent(
+                            text: ConversationCoordinator.acknowledgement(for: review),
+                            tools: ["Nutrition review", "No totals saved yet"]
+                        )
+                    ),
+                    to: dayID
+                )
+            }
+            isThinking = false
+        }
+    }
+
+    private func beginPhotoReview(_ image: PreparedFoodImage, description: String) {
+        guard !isThinking else { return }
+        composerFocused = false
+        store.append(ThreadItem(id: UUID(), kind: .person(text: "Photo note · \(description)")), to: dayID)
+        isThinking = true
+        thinkingLabel = "Identifying meal components"
+
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(520))
+            thinkingLabel = "Checking nutrition data"
+            let result = await dependencies.photoAnalysis.analyse(image: image, description: description)
             store.append(
                 ThreadItem(
                     id: UUID(),
-                    kind: .agent(
-                        text: ConversationCoordinator.acknowledgement(for: meal),
-                        tools: ["Nutrition checked", "Day totals updated"]
-                    )
+                    kind: .mealAnalysis(MealAnalysisDraft(result: result, transientImageData: image.data))
                 ),
                 to: dayID
             )
             isThinking = false
         }
+    }
+
+    private func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID) {
+        let meal = DiaryMealLoggingService().confirm(draft, replacing: itemID, in: store, dayID: dayID)
+        store.append(
+            ThreadItem(
+                id: UUID(),
+                kind: .agent(
+                    text: "Saved \(meal.title) as an estimate. I kept the serving and recipe assumptions with it, so you can revisit them any time.",
+                    tools: ["Saved", "Day totals updated"]
+                )
+            ),
+            to: dayID
+        )
+    }
+
+    private func update(_ meal: Meal, from draft: MealAnalysisDraft) {
+        var updated = meal
+        updated.energy = Int(draft.result.mealTotals.caloriesKcal?.rounded() ?? 0)
+        updated.carbs = Int(draft.result.mealTotals.carbohydrateGrams?.rounded() ?? 0)
+        updated.protein = Int(draft.result.mealTotals.proteinGrams?.rounded() ?? 0)
+        updated.fat = Int(draft.result.mealTotals.fatGrams?.rounded() ?? 0)
+        updated.subtitle = "Confirmed estimate · \(draft.result.nutritionProvenance.dataSource)"
+        updated.analysis = draft.result
+        store.update(updated, in: dayID)
+        mealBeingEdited = nil
     }
 }
 
@@ -203,20 +324,37 @@ private struct MetricTicket: View {
 }
 
 private struct ThinkingBubble: View {
+    let label: String
+
+    private var usesStaticRendering: Bool {
+        ProcessInfo.processInfo.arguments.contains("UITestMode")
+    }
+
     var body: some View {
         HStack(spacing: 9) {
-            TimelineView(.animation(minimumInterval: 0.6)) { context in
-                let phase = Int(context.date.timeIntervalSinceReferenceDate * 2) % 3
+            if usesStaticRendering {
                 HStack(spacing: 4) {
                     ForEach(0..<3, id: \.self) { index in
                         Circle()
-                            .fill(Color.quietInk.opacity(index == phase ? 0.9 : 0.25))
+                            .fill(Color.quietInk.opacity(index == 1 ? 0.9 : 0.25))
                             .frame(width: 5, height: 5)
-                            .offset(y: index == phase ? -2 : 0)
+                            .offset(y: index == 1 ? -2 : 0)
+                    }
+                }
+            } else {
+                TimelineView(.animation(minimumInterval: 0.6)) { context in
+                    let phase = Int(context.date.timeIntervalSinceReferenceDate * 2) % 3
+                    HStack(spacing: 4) {
+                        ForEach(0..<3, id: \.self) { index in
+                            Circle()
+                                .fill(Color.quietInk.opacity(index == phase ? 0.9 : 0.25))
+                                .frame(width: 5, height: 5)
+                                .offset(y: index == phase ? -2 : 0)
+                        }
                     }
                 }
             }
-            Text("Looking that up")
+            Text(label)
                 .font(DiafitType.caption)
                 .foregroundStyle(Color.quietInk)
         }
@@ -231,6 +369,7 @@ private struct Composer: View {
     @Binding var text: String
     let isThinking: Bool
     var isFocused: FocusState<Bool>.Binding
+    let openPhoto: () -> Void
     let submit: () -> Void
 
     private let suggestions = ["My usual breakfast", "I had salmon & rice", "Pasta for dinner"]
@@ -256,11 +395,21 @@ private struct Composer: View {
             }
 
             HStack(spacing: 11) {
-                TextField("Tell me what you ate", text: $text, axis: .vertical)
+                Button(action: openPhoto) {
+                    Image(systemName: "camera")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 36, height: 36)
+                        .background(Color.mist.opacity(0.72), in: Circle())
+                }
+                .buttonStyle(PressableStyle(pressedScale: 0.88))
+                .accessibilityLabel("Add meal photo")
+
+                TextField("Tell me what you ate", text: $text)
                     .font(DiafitType.body)
                     .foregroundStyle(Color.ink)
                     .focused(isFocused)
-                    .lineLimit(1...4)
+                    .lineLimit(1)
                     .submitLabel(.send)
                     .onSubmit(submit)
 

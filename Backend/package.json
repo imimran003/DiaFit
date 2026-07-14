@@ -1,0 +1,14 @@
+{
+  "name": "diafit-analysis-service",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "start": "node server.mjs",
+    "check": "node --check server.mjs",
+    "evaluate": "node evaluate.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

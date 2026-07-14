@@ -24,7 +24,7 @@ struct MealAtlasView: View {
                 VStack(alignment: .leading, spacing: 20) {
                     AtlasHeader(day: day, close: close)
 
-                    Text("A small visual record of your day. Tap a plate for its quiet details.")
+                    Text("A visual index of what carried you through the day.")
                         .font(DiafitType.body)
                         .foregroundStyle(Color.quietInk)
                         .lineSpacing(3)
@@ -94,7 +94,11 @@ private struct AtlasHeader: View {
     var body: some View {
         HStack(alignment: .top) {
             VStack(alignment: .leading, spacing: 4) {
-                Text("Meal atlas")
+                Text("MEAL ATLAS")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1.4)
+                    .foregroundStyle(Color.quietInk)
+                Text("The day in plates")
                     .font(DiafitType.display)
                     .foregroundStyle(Color.ink)
                 Text(day.date.formatted(.dateTime.weekday(.wide).month(.wide).day()))
@@ -130,15 +134,17 @@ private struct AtlasTile: View {
         VStack(alignment: .leading, spacing: 10) {
             FoodArtwork(meal: meal, treatment: .atlas)
                 .matchedGeometryEffect(id: "art-\(meal.id)", in: mealNamespace)
-                .frame(height: 190)
-                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .frame(height: 205)
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
                 .overlay(alignment: .bottomLeading) {
                     Text(meal.mealType.uppercased())
                         .font(.system(size: 9, weight: .bold, design: .rounded))
                         .tracking(1)
                         .foregroundStyle(.white.opacity(0.95))
-                        .padding(10)
-                        .shadow(color: .black.opacity(0.38), radius: 5)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 7)
+                        .background(.black.opacity(0.15), in: Capsule())
+                        .padding(11)
                 }
 
             VStack(alignment: .leading, spacing: 3) {

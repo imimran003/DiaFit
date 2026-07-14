@@ -8,6 +8,7 @@ struct DiafitApp: App {
         WindowGroup {
             RootExperience()
                 .environmentObject(store)
+                .environment(\.appDependencies, .local)
                 .preferredColorScheme(.light)
         }
     }

@@ -1,0 +1,18 @@
+{
+  "version": "2026.07-fixtures",
+  "fixtures": [
+    {"id":"roti-dal","aliases":["roti with dal","dal and roti"],"primary":"roti","components":["roti","dal"],"portionRangeGrams":[150,260],"ambiguity":"Oil in the tempering and roti size need confirmation."},
+    {"id":"rajma-rice","aliases":["rajma with rice","rajma rice"],"primary":"rajma","components":["rajma","steamed-rice"],"portionRangeGrams":[250,420],"ambiguity":"Rice quantity is the main carbohydrate uncertainty."},
+    {"id":"dosa-sambar-chutney","aliases":["dosa with sambar and chutney","dosa sambar coconut chutney"],"primary":"dosa","components":["dosa","sambar","coconut-chutney"],"portionRangeGrams":[220,400],"ambiguity":"Dosa size and chutney coconut content vary."},
+    {"id":"idli-sambar","aliases":["idli with sambar","idli sambar"],"primary":"idli","components":["idli","sambar"],"portionRangeGrams":[180,320],"ambiguity":"Confirm the number of idlis."},
+    {"id":"paneer-naan","aliases":["paneer curry with naan","paneer butter masala with naan"],"primary":"paneer-butter-masala","components":["paneer-butter-masala","naan"],"portionRangeGrams":[250,420],"ambiguity":"Cream, butter, and naan size are not visible reliably."},
+    {"id":"biryani-raita","aliases":["chicken biryani with raita","biryani and raita"],"primary":"chicken-biryani","components":["chicken-biryani","raita"],"portionRangeGrams":[300,500],"ambiguity":"Restaurant oil and rice proportion can vary substantially."},
+    {"id":"vegetarian-thali","aliases":["vegetarian thali","veg thali"],"primary":"roti","components":["roti","dal","steamed-rice","mixed-vegetable-curry","salad"],"portionRangeGrams":[450,700],"ambiguity":"A thali needs bowl-size and added-fat confirmation."},
+    {"id":"chicken-rice","aliases":["chicken curry with rice","chicken rice"],"primary":"chicken-curry","components":["chicken-curry","steamed-rice"],"portionRangeGrams":[280,480],"ambiguity":"Curry oil and rice serving need confirmation."},
+    {"id":"poha","aliases":["poha"],"primary":"poha","components":["poha"],"portionRangeGrams":[120,260],"ambiguity":"Peanuts, oil, and serving bowl vary."},
+    {"id":"aloo-paratha-curd","aliases":["aloo paratha with curd","aloo paratha and dahi"],"primary":"aloo-paratha","components":["aloo-paratha","dahi"],"portionRangeGrams":[180,320],"ambiguity":"Butter or ghee changes the estimate."},
+    {"id":"sweet-masala-chai","aliases":["sweetened masala chai","masala chai"],"primary":"masala-chai","components":["masala-chai"],"portionRangeGrams":[120,220],"ambiguity":"Sugar and milk choice require confirmation."},
+    {"id":"restaurant-butter-chicken","aliases":["restaurant butter chicken with naan","butter chicken with naan"],"primary":"butter-chicken","components":["butter-chicken","butter-naan"],"portionRangeGrams":[280,500],"ambiguity":"Restaurant butter, cream, and naan size may be substantially higher."},
+    {"id":"uncertain-mixed-meal","aliases":["mixed meal with uncertain components","mixed thali"],"primary":"steamed-rice","components":["steamed-rice","dal","salad"],"portionRangeGrams":[300,520],"ambiguity":"This fixture intentionally reports low confidence and asks for confirmation."}
+  ]
+}

@@ -1,0 +1,694 @@
+import Foundation
+
+// MARK: - Provider seams
+
+protocol FoodRecognitionService: Sendable {
+    func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult
+}
+
+protocol FoodNormalisationService: Sendable {
+    func normalise(_ query: String) -> IndianFoodDefinition?
+    func matches(in description: String) -> [IndianFoodDefinition]
+}
+
+protocol NutritionLookupService: Sendable {
+    func nutrition(for food: IndianFoodDefinition, estimatedWeightGrams: Double?) -> NutritionLookup
+}
+
+protocol GlycaemicDataService: Sendable {
+    func information(for food: IndianFoodDefinition, availableCarbohydrateGrams: Double?) -> GlycaemicInformation
+}
+
+protocol PortionEstimationService: Sendable {
+    func estimatedWeight(quantity: Double, unit: ServingUnit, food: IndianFoodDefinition) -> Double?
+}
+
+protocol MealAnalysisRepository: Sendable {
+    func saveDraft(_ draft: MealAnalysisDraft) async
+    func draft(id: UUID) async -> MealAnalysisDraft?
+    func removeDraft(id: UUID) async
+}
+
+protocol MealLoggingService: Sendable {
+    @MainActor func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID, in store: DiaryStore, dayID: Day.ID) -> Meal
+    @MainActor func update(_ meal: Meal, in store: DiaryStore, dayID: Day.ID)
+    @MainActor func delete(mealID: Meal.ID, in store: DiaryStore, dayID: Day.ID)
+}
+
+protocol ImageCompressionService: Sendable {
+    func prepare(imageData: Data) throws -> PreparedFoodImage
+}
+
+protocol GeneratedMealImageService: Sendable {
+    func cachedEditorialImage(for key: GeneratedMealImageKey) async -> URL?
+}
+
+protocol AgentToolService: Sendable {
+    func draftFromDescription(_ description: String, imageReference: MealImageReference, imageType: MealImageType) async -> MealAnalysisResult
+}
+
+struct PreparedFoodImage: Sendable {
+    let data: Data
+    let mimeType: String
+    let pixelWidth: Int
+    let pixelHeight: Int
+    let imageReference: MealImageReference
+}
+
+struct NutritionLookup: Sendable {
+    let values: NutritionValues
+    let provenance: NutritionProvenance
+}
+
+struct GeneratedMealImageKey: Hashable, Sendable {
+    let canonicalFoodId: String
+    let variation: String
+    let visualStyleVersion: String
+}
+
+enum FoodAnalysisError: LocalizedError {
+    case endpointUnavailable
+    case malformedProviderResponse
+    case unsupportedImage
+    case imageTooLarge
+    case unauthenticatedBackend
+
+    var errorDescription: String? {
+        switch self {
+        case .endpointUnavailable: return "Photo analysis is unavailable right now. You can still describe or search for the meal."
+        case .malformedProviderResponse: return "The analysis response could not be safely read. Nothing was logged."
+        case .unsupportedImage: return "Choose a JPEG, HEIC, or PNG photo to continue."
+        case .imageTooLarge: return "That photo is too large to process. Try a smaller image."
+        case .unauthenticatedBackend: return "Secure photo analysis needs an authenticated account. You can still describe the meal."
+        }
+    }
+}
+
+protocol BackendAccessTokenProvider: Sendable {
+    func accessToken() async throws -> String
+}
+
+/// The app supplies an account-scoped token from its authentication layer. This
+/// is deliberately not a provider key and is never persisted in app resources.
+struct HTTPFoodRecognitionService: FoodRecognitionService {
+    let endpoint: URL
+    let tokenProvider: BackendAccessTokenProvider
+    let session: URLSession
+
+    init(endpoint: URL, tokenProvider: BackendAccessTokenProvider, session: URLSession = .shared) {
+        self.endpoint = endpoint
+        self.tokenProvider = tokenProvider
+        self.session = session
+    }
+
+    func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
+        let token = try await tokenProvider.accessToken()
+        var request = URLRequest(url: endpoint.appending(path: "v1/meal-analysis"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 15
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("no-store", forHTTPHeaderField: "Cache-Control")
+        request.httpBody = try JSONEncoder().encode(RemoteAnalysisRequest(
+            apiVersion: "v1",
+            imageReference: image.imageReference.identifier,
+            imageBase64: image.data.base64EncodedString(),
+            mimeType: image.mimeType,
+            dishHint: dishHint ?? "meal photo"
+        ))
+
+        let (data, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            throw FoodAnalysisError.endpointUnavailable
+        }
+        do {
+            let decoder = JSONDecoder()
+            decoder.dateDecodingStrategy = .iso8601
+            return try decoder.decode(MealAnalysisResult.self, from: data)
+        } catch {
+            throw FoodAnalysisError.malformedProviderResponse
+        }
+    }
+}
+
+private struct RemoteAnalysisRequest: Encodable {
+    let apiVersion: String
+    let imageReference: String
+    let imageBase64: String
+    let mimeType: String
+    let dishHint: String
+}
+
+struct PhotoAnalysisOrchestrator: Sendable {
+    let remote: (any FoodRecognitionService)?
+    let local: LocalMealAnalysisEngine
+
+    init(remote: (any FoodRecognitionService)? = nil, local: LocalMealAnalysisEngine = LocalMealAnalysisEngine()) {
+        self.remote = remote
+        self.local = local
+    }
+
+    func analyse(image: PreparedFoodImage, description: String) async -> MealAnalysisResult {
+        if let remote {
+            do {
+                return try await remote.analyse(image, dishHint: description)
+            } catch {
+                var fallback = local.makeAnalysis(
+                    description: description,
+                    imageReference: image.imageReference,
+                    imageType: .originalPhoto
+                )
+                fallback.warnings.insert("Secure photo analysis was unavailable, so this draft was matched from your description only.", at: 0)
+                return fallback
+            }
+        }
+        return local.makeAnalysis(
+            description: description,
+            imageReference: image.imageReference,
+            imageType: .originalPhoto
+        )
+    }
+}
+
+// MARK: - Catalog and offline calculation
+
+/// The catalog is a data resource, rather than a UI switch statement. It can be
+/// replaced by an account-scoped, server-delivered catalog without changing views.
+struct IndianFoodCatalogService: FoodNormalisationService, Sendable {
+    let version: String
+    let source: String
+    let foods: [IndianFoodDefinition]
+
+    init(bundle: Bundle = .main) {
+        let data = bundle.url(forResource: "IndianFoodCatalog", withExtension: "json")
+            .flatMap { try? Data(contentsOf: $0) } ?? Data()
+        self.init(data: data)
+    }
+
+    init(data: Data) {
+        guard let document = try? JSONDecoder().decode(CatalogDocument.self, from: data) else {
+            self.version = "unavailable"
+            self.source = "No local food catalog"
+            self.foods = []
+            return
+        }
+
+        self.version = document.version
+        self.source = document.source
+        self.foods = document.groups.flatMap { group in
+            group.foods.map { record in
+                IndianFoodDefinition(
+                    canonicalId: record.id,
+                    canonicalName: record.name,
+                    regionalNames: record.regionalNames ?? [],
+                    englishName: record.englishName ?? record.name,
+                    transliterations: record.transliterations ?? [],
+                    aliases: Array(Set(([record.name, record.id] + record.aliases))).sorted(),
+                    category: group.category,
+                    dietaryClassification: record.dietaryClassification ?? group.dietaryClassification,
+                    commonIngredients: record.ingredients ?? [],
+                    possibleAllergens: record.allergens ?? group.allergens,
+                    commonPreparationMethods: record.methods ?? group.methods,
+                    nutritionPer100Grams: record.nutrition,
+                    standardServing: record.serving,
+                    glycaemicIndex: record.glycaemicIndex,
+                    glycaemicIndexSource: record.glycaemicIndexSource,
+                    dataSource: record.dataSource ?? document.source,
+                    dataVersion: record.dataVersion ?? document.version,
+                    confidence: record.confidence ?? (record.nutrition == nil ? .unknown : .low),
+                    revision: record.revision
+                )
+            }
+        }
+    }
+
+    func normalise(_ query: String) -> IndianFoodDefinition? {
+        let key = normalized(query)
+        return foods.first { food in
+            food.aliases.contains { normalized($0) == key }
+                || normalized(food.canonicalName) == key
+                || normalized(food.englishName) == key
+        }
+    }
+
+    func food(canonicalID: String) -> IndianFoodDefinition? {
+        foods.first { $0.canonicalId == canonicalID }
+    }
+
+    func matches(in description: String) -> [IndianFoodDefinition] {
+        var remaining = " " + normalized(description) + " "
+        var matches: [IndianFoodDefinition] = []
+
+        let candidates = foods
+            .flatMap { food in food.aliases.map { (food, normalized($0)) } }
+            .filter { !$0.1.isEmpty }
+            .sorted { $0.1.count > $1.1.count }
+
+        for (food, alias) in candidates {
+            let needle = " " + alias + " "
+            guard remaining.contains(needle), !matches.contains(where: { $0.id == food.id }) else { continue }
+            matches.append(food)
+            remaining = remaining.replacingOccurrences(of: needle, with: " ")
+        }
+
+        return matches
+    }
+
+    private func normalized(_ value: String) -> String {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+}
+
+struct StandardPortionEstimationService: PortionEstimationService, Sendable {
+    func estimatedWeight(quantity: Double, unit: ServingUnit, food: IndianFoodDefinition) -> Double? {
+        if unit == .grams { return quantity }
+        if let serving = food.standardServing, serving.unit == unit, let grams = serving.grams {
+            return grams * quantity / serving.quantity
+        }
+
+        let gramsPerUnit: Double? = switch unit {
+        case .millilitres: 1
+        case .teaspoon: 5
+        case .tablespoon: 15
+        case .katori: 150
+        case .smallBowl: 120
+        case .mediumBowl: 200
+        case .largeBowl: 300
+        case .cup: 240
+        case .ladle: 60
+        case .piece: 60
+        case .roti: 35
+        case .naan: 90
+        case .paratha: 90
+        case .poori: 35
+        case .bhatura: 100
+        case .dosa: 120
+        case .idli: 40
+        case .vada: 55
+        case .slice: 30
+        case .glass: 250
+        case .plate: 300
+        case .serving: food.standardServing?.grams
+        case .grams: nil
+        }
+        return gramsPerUnit.map { $0 * quantity }
+    }
+}
+
+struct CatalogNutritionLookupService: NutritionLookupService, Sendable {
+    func nutrition(for food: IndianFoodDefinition, estimatedWeightGrams: Double?) -> NutritionLookup {
+        guard let per100 = food.nutritionPer100Grams, let estimatedWeightGrams else {
+            return NutritionLookup(values: .unavailable, provenance: .unavailable)
+        }
+
+        return NutritionLookup(
+            values: per100.scaled(by: estimatedWeightGrams / 100),
+            provenance: NutritionProvenance(
+                kind: .curatedRecipeEstimate,
+                dataSource: food.dataSource ?? "Bundled recipe estimate — recipe may vary",
+                dataVersion: food.dataVersion,
+                confidence: food.confidence
+            )
+        )
+    }
+}
+
+struct CatalogGlycaemicDataService: GlycaemicDataService, Sendable {
+    func information(for food: IndianFoodDefinition, availableCarbohydrateGrams: Double?) -> GlycaemicInformation {
+        GlycaemicInformation.calculate(
+            index: food.glycaemicIndex,
+            source: food.glycaemicIndexSource,
+            availableCarbohydrate: availableCarbohydrateGrams
+        )
+    }
+}
+
+// MARK: - Draft construction and tool orchestration
+
+/// Offline analysis works only from a member's description. It is never passed
+/// off as computer vision, and it does not send a photo anywhere.
+struct LocalMealAnalysisEngine: AgentToolService, Sendable {
+    let catalog: IndianFoodCatalogService
+    let portionService: StandardPortionEstimationService
+    let nutritionService: CatalogNutritionLookupService
+    let glycaemicService: CatalogGlycaemicDataService
+    let validationService: DefaultNutritionValidationService
+
+    init(
+        catalog: IndianFoodCatalogService = IndianFoodCatalogService(),
+        portionService: StandardPortionEstimationService = StandardPortionEstimationService(),
+        nutritionService: CatalogNutritionLookupService = CatalogNutritionLookupService(),
+        glycaemicService: CatalogGlycaemicDataService = CatalogGlycaemicDataService(),
+        validationService: DefaultNutritionValidationService = DefaultNutritionValidationService()
+    ) {
+        self.catalog = catalog
+        self.portionService = portionService
+        self.nutritionService = nutritionService
+        self.glycaemicService = glycaemicService
+        self.validationService = validationService
+    }
+
+    func draftFromDescription(_ description: String, imageReference: MealImageReference, imageType: MealImageType) async -> MealAnalysisResult {
+        makeAnalysis(description: description, imageReference: imageReference, imageType: imageType)
+    }
+
+    func makeAnalysis(description: String, imageReference: MealImageReference = .transient(), imageType: MealImageType = .noImage) -> MealAnalysisResult {
+        let matches = catalog.matches(in: description)
+        let items = matches.map { makeItem($0, description: description) }
+        let questions = clarificationQuestions(for: items, imageType: imageType)
+        let totals = NutritionValues.total(of: items.map(\.nutrition))
+        let rawValidation = validationService.validate(
+            rawValues: totals,
+            canonicalFoodID: nil,
+            quantity: nil,
+            servingUnit: nil,
+            estimatedWeightGrams: nil
+        )
+        let allValuesSupported = !items.isEmpty && items.allSatisfy { !$0.nutrition.isEmpty }
+        let validation = allValuesSupported ? rawValidation : NutritionValidationReport(
+            status: .requiresClarification,
+            rawValues: totals,
+            safeValues: nil,
+            issues: rawValidation.issues + [.init(
+                code: .unavailableNutrition,
+                severity: .blocking,
+                message: "Choose the requested food variation before nutrition can be shown or logged."
+            )]
+        )
+        let provenance = allValuesSupported
+            ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: catalog.source, dataVersion: catalog.version, confidence: .low)
+            : .unavailable
+
+        FoodLoggingDiagnostics.record("analysis.parsed", fields: [
+            "components": items.map(\.canonicalFoodId).joined(separator: ","),
+            "inputFingerprint": FoodLoggingDiagnostics.fingerprint(description),
+            "nutritionStatus": validation.status.rawValue
+        ])
+
+        return MealAnalysisResult(
+            analysisId: UUID(),
+            imageReference: imageReference,
+            imageType: imageType,
+            detectedItems: items,
+            mealTotals: validation.safeValues ?? .unavailable,
+            overallConfidence: overallConfidence(for: items),
+            assumptions: assumptions(for: items, imageType: imageType),
+            clarificationQuestions: questions,
+            warnings: warnings(for: items, imageType: imageType, validation: validation),
+            createdAt: .now,
+            recognitionModelVersion: nil,
+            nutritionDatabaseVersion: catalog.version,
+            glycaemicDatabaseVersion: nil,
+            nutritionProvenance: provenance,
+            nutritionValidation: validation
+        )
+    }
+
+    private func makeItem(_ food: IndianFoodDefinition, description: String) -> DetectedFoodItem {
+        let serving = food.standardServing ?? StandardServing(quantity: 1, unit: .serving, grams: nil)
+        let quantity = quantityHint(for: food, in: description) ?? serving.quantity
+        let weight = portionService.estimatedWeight(quantity: quantity, unit: serving.unit, food: food)
+        let lookup = nutritionService.nutrition(for: food, estimatedWeightGrams: weight)
+        let validation = validationService.validate(
+            rawValues: lookup.values,
+            canonicalFoodID: food.canonicalId,
+            quantity: quantity,
+            servingUnit: serving.unit,
+            estimatedWeightGrams: weight
+        )
+        let safeNutrition = validation.safeValues ?? .unavailable
+        let glycaemic = glycaemicService.information(for: food, availableCarbohydrateGrams: safeNutrition.availableCarbohydrateGrams)
+
+        return DetectedFoodItem(
+            id: UUID(),
+            canonicalFoodId: food.canonicalId,
+            displayName: food.canonicalName,
+            regionalName: food.regionalNames.first,
+            category: food.category,
+            confidence: food.confidence == .unknown ? .low : food.confidence,
+            alternatives: alternatives(for: food),
+            quantity: quantity,
+            servingUnit: serving.unit,
+            estimatedWeightGrams: weight,
+            visibleIngredients: [],
+            inferredIngredients: food.commonIngredients,
+            possibleIngredients: [],
+            preparationMethod: food.commonPreparationMethods.first,
+            nutrition: safeNutrition,
+            glycaemicInformation: glycaemic,
+            assumptions: ["Serving is an initial suggestion. Recipe and portion may vary."],
+            warnings: itemWarnings(for: lookup.values, validation: validation),
+            boundingRegion: nil,
+            nutritionProvenance: lookup.provenance,
+            rawNutrition: lookup.values,
+            nutritionValidation: validation
+        )
+    }
+
+    private func itemWarnings(for values: NutritionValues, validation: NutritionValidationReport) -> [String] {
+        if !validation.isApproved { return validation.issues.map(\.message) }
+        return values.isEmpty
+            ? ["Nutrition is not available from the offline catalog for this dish."]
+            : ["Estimated from a recipe profile. Oil, ghee, cream, and sugar may change this substantially."]
+    }
+
+    private func alternatives(for food: IndianFoodDefinition) -> [AlternativeFoodMatch] {
+        catalog.foods
+            .filter { $0.category == food.category && $0.id != food.id }
+            .prefix(2)
+            .map { AlternativeFoodMatch(canonicalFoodId: $0.canonicalId, displayName: $0.canonicalName, confidence: .low) }
+    }
+
+    private func assumptions(for items: [DetectedFoodItem], imageType: MealImageType) -> [String] {
+        var values = imageType == .originalPhoto
+            ? ["The local fallback used your description; the image was not sent for recognition."]
+            : ["Items were matched from your words, not a photo."]
+        if items.contains(where: { $0.category == .rice || $0.category == .bread }) {
+            values.append("Carbohydrate totals depend heavily on the final serving size.")
+        }
+        return values
+    }
+
+    private func warnings(for items: [DetectedFoodItem], imageType: MealImageType, validation: NutritionValidationReport) -> [String] {
+        guard !items.isEmpty else {
+            return ["No supported dish was found. Tell me the main dish and I’ll create an editable estimate."]
+        }
+        var values = ["Estimated — recipe may vary. This is not medical advice."]
+        if items.contains(where: { $0.category == .dessertOrDrink }) {
+            values.append("Sweeteners may substantially change this estimate.")
+        }
+        if items.contains(where: { $0.nutrition.isEmpty }) {
+            values.append("Nutrition is incomplete: totals are withheld until every component has a supported variation.")
+        }
+        if !validation.isApproved {
+            values.append("Nutrition needs confirmation before it can affect your daily totals.")
+        }
+        if imageType == .originalPhoto {
+            values.append("A photo cannot reliably reveal oil, ghee, cream, sugar, recipe, or exact weight.")
+        }
+        return values
+    }
+
+    private func clarificationQuestions(for items: [DetectedFoodItem], imageType: MealImageType) -> [ClarificationQuestion] {
+        var questions: [ClarificationQuestion] = []
+        if let coffee = items.first(where: { $0.canonicalFoodId == "coffee" }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: coffee.id,
+                question: "Was it plain black coffee, or did it contain milk, cream or sugar?",
+                answerType: .singleChoice, options: ["Black", "Milk", "Milk + sugar"], impactLevel: .high, answer: nil
+            ))
+        }
+        if let chai = items.first(where: { $0.canonicalFoodId == "chai" }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: chai.id,
+                question: "Was the chai sweetened, and approximately how much milk was used?",
+                answerType: .singleChoice, options: ["No milk or sugar", "Milk, no sugar", "Milk + sugar"], impactLevel: .high, answer: nil
+            ))
+        }
+        if let tea = items.first(where: { $0.canonicalFoodId == "tea" }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: tea.id,
+                question: "Was the tea plain, or did it include milk or sugar?",
+                answerType: .singleChoice, options: ["Plain", "Milk, no sugar", "Milk + sugar"], impactLevel: .high, answer: nil
+            ))
+        }
+        if let paratha = items.first(where: { $0.canonicalFoodId == "paratha" }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: paratha.id,
+                question: "Was the paratha plain, stuffed or buttered?",
+                answerType: .singleChoice, options: ["Plain", "Aloo / stuffed", "Buttered"], impactLevel: .high, answer: nil
+            ))
+        }
+        if let bread = items.first(where: { $0.category == .bread && $0.canonicalFoodId != "paratha" }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: bread.id,
+                question: "How many (bread.displayName.lowercased()) pieces did you have?",
+                answerType: .quantity, options: ["1", "2", "3+"], impactLevel: .high, answer: nil
+            ))
+        }
+        if let rice = items.first(where: { $0.category == .rice }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: rice.id,
+                question: "Was the rice a small, medium, or large serving?",
+                answerType: .singleChoice, options: ["Small", "Medium", "Large"], impactLevel: .high, answer: nil
+            ))
+        }
+        if let richDish = items.first(where: { [.vegetarianCurry, .nonVegetarian, .lentilOrLegume].contains($0.category) }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: richDish.id,
+                question: "Was it made with oil, ghee, butter, or cream?",
+                answerType: .singleChoice, options: ["No / very little", "Some", "A generous amount"], impactLevel: .high, answer: nil
+            ))
+        }
+        if let drink = items.first(where: { $0.category == .dessertOrDrink && !["coffee", "chai", "tea", "black-coffee", "plain-tea", "green-tea"].contains($0.canonicalFoodId) }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: drink.id,
+                question: "Was the drink or dessert sweetened?",
+                answerType: .yesNo, options: ["No", "Yes", "Not sure"], impactLevel: .high, answer: nil
+            ))
+        }
+        if items.isEmpty && imageType == .originalPhoto {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: nil,
+                question: "What is the main dish in this photo?",
+                answerType: .freeText, options: [], impactLevel: .high, answer: nil
+            ))
+        }
+        return Array(questions.prefix(2))
+    }
+
+    private func overallConfidence(for items: [DetectedFoodItem]) -> ConfidenceLevel {
+        let rank: [ConfidenceLevel: Int] = [.high: 4, .medium: 3, .low: 2, .unknown: 1]
+        return items.min { rank[$0.confidence, default: 0] < rank[$1.confidence, default: 0] }?.confidence ?? .low
+    }
+
+    private func quantityHint(for food: IndianFoodDefinition, in description: String) -> Double? {
+        let tokens = tokenize(description)
+        let numberWords: [String: Double] = [
+            "a": 1, "an": 1, "one": 1, "two": 2, "three": 3, "four": 4,
+            "five": 5, "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10
+        ]
+
+        for alias in food.aliases.sorted(by: { $0.count > $1.count }) {
+            let aliasTokens = tokenize(alias)
+            guard !aliasTokens.isEmpty else { continue }
+            for start in tokens.indices where Array(tokens.dropFirst(start).prefix(aliasTokens.count)) == aliasTokens {
+                guard start > 0 else { return nil }
+                let preceding = tokens[start - 1]
+                if let decimal = Double(preceding), (0.1...20).contains(decimal) { return decimal }
+                if let word = numberWords[preceding] { return word }
+            }
+        }
+        return nil
+    }
+
+    private func tokenize(_ value: String) -> [String] {
+        value
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+    }
+}
+
+actor InMemoryMealAnalysisRepository: MealAnalysisRepository {
+    private var drafts: [UUID: MealAnalysisDraft] = [:]
+
+    func saveDraft(_ draft: MealAnalysisDraft) async { drafts[draft.id] = draft }
+    func draft(id: UUID) async -> MealAnalysisDraft? { drafts[id] }
+    func removeDraft(id: UUID) async { drafts[id] = nil }
+}
+
+struct DiaryMealLoggingService: MealLoggingService {
+    @MainActor
+    func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID, in store: DiaryStore, dayID: Day.ID) -> Meal {
+        let result = draft.result
+        let title = result.detectedItems.map(\.displayName).joined(separator: " + ").ifEmpty("Meal draft")
+        let mealID = UUID()
+        let artwork = artwork(for: result)
+        let visualIdentity = MealVisualIdentityFactory().make(mealID: mealID, result: result, artwork: artwork)
+        let meal = Meal(
+            id: mealID,
+            title: title,
+            subtitle: "Confirmed estimate · \(result.nutritionProvenance.dataSource)",
+            mealType: mealType(for: result),
+            time: .now,
+            energy: Int(result.mealTotals.caloriesKcal?.rounded() ?? 0),
+            carbs: Int(result.mealTotals.carbohydrateGrams?.rounded() ?? 0),
+            protein: Int(result.mealTotals.proteinGrams?.rounded() ?? 0),
+            fat: Int(result.mealTotals.fatGrams?.rounded() ?? 0),
+            artwork: artwork,
+            confidence: .estimated,
+            analysis: result,
+            visualIdentity: visualIdentity
+        )
+        store.replace(itemID: itemID, with: .meal(meal), in: dayID)
+        return meal
+    }
+
+    @MainActor
+    func update(_ meal: Meal, in store: DiaryStore, dayID: Day.ID) {
+        store.update(meal, in: dayID)
+    }
+
+    @MainActor
+    func delete(mealID: Meal.ID, in store: DiaryStore, dayID: Day.ID) {
+        store.removeMeal(id: mealID, from: dayID)
+    }
+
+    private func mealType(for result: MealAnalysisResult) -> String {
+        result.detectedItems.contains(where: { $0.category == .breakfastOrSnack }) ? "Meal" : "Meal"
+    }
+
+    private func artwork(for result: MealAnalysisResult) -> Meal.Artwork {
+        // The bundled cutouts depict specific sample dishes, not generic rice,
+        // bread, drinks, or curries. Until a generated or verified editorial
+        // image is attached, a component-labelled placeholder is more honest
+        // than reusing a convincing but unrelated photograph.
+        .neutral
+    }
+}
+
+private extension String {
+    func ifEmpty(_ replacement: String) -> String { isEmpty ? replacement : self }
+}
+
+private struct CatalogDocument: Decodable {
+    let version: String
+    let source: String
+    let groups: [CatalogGroup]
+}
+
+private struct CatalogGroup: Decodable {
+    let category: FoodCategory
+    let dietaryClassification: DietaryClassification
+    let allergens: [String]
+    let methods: [String]
+    let foods: [CatalogFoodRecord]
+}
+
+private struct CatalogFoodRecord: Decodable {
+    let id: String
+    let name: String
+    let aliases: [String]
+    let regionalNames: [String]?
+    let englishName: String?
+    let transliterations: [String]?
+    let dietaryClassification: DietaryClassification?
+    let ingredients: [String]?
+    let allergens: [String]?
+    let methods: [String]?
+    let nutrition: NutritionValues?
+    let serving: StandardServing?
+    let glycaemicIndex: Double?
+    let glycaemicIndexSource: String?
+    let dataSource: String?
+    let dataVersion: String?
+    let confidence: ConfidenceLevel?
+    let revision: String?
+}

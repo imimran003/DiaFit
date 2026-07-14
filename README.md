@@ -4,12 +4,13 @@ Diafit is a deliberately quiet calorie and carbohydrate companion for people man
 
 ## Run
 
-Open `Diafit.xcodeproj`, select an iOS Simulator, and run the **Diafit** scheme. The project has no third-party dependencies and targets iOS 17 or later.
+Open `Diafit.xcodeproj`, select an iOS Simulator, and run the **Diafit** scheme. The project has no third-party dependencies and targets iOS 17 or later. The **DiafitUnitTests** scheme compiles the food-analysis tests independently of the UI tests.
 
 ## Product notes
 
-- The sample experience is fully local and intentionally does not make medical decisions. Nutrition and glucose values are illustrative.
-- `NutritionService` and `FoodImageRendering` are clear integration seams for a backend. Keep API keys and health data off-device only behind an authenticated service.
-- The art direction is code-drawn in this prototype because the current image-generation service was unavailable during creation. It is structured so generated images can replace the art without changing the UI.
+- The sample experience is fully local by default and intentionally does not make medical decisions. Photo selection creates an editable estimate and does not upload or retain the original photo in the default configuration.
+- The bundled Indian-food catalog normalizes regional aliases and labels partial recipe values as estimates. Missing nutrition and glycaemic values stay unavailable.
+- The `Backend` directory contains a strict, runnable development contract and fixture provider. It has no real provider credentials; production must connect an authenticated server-side vision and nutrition provider.
+- Food art uses consistent local studio cutouts only for known sample meals. Analysed free-text meals use a component-labelled neutral visual until a verified image service is configured; an unrelated food is never used as a fallback.
 
-Further decision records live in [Docs/Intent.md](Docs/Intent.md).
+Further decision records live in [Docs/Intent.md](Docs/Intent.md), [Docs/IndianFoodAnalysisPlan.md](Docs/IndianFoodAnalysisPlan.md), [Docs/PhotoAnalysisArchitecture.md](Docs/PhotoAnalysisArchitecture.md), and [Docs/CorrectnessAudit.md](Docs/CorrectnessAudit.md).

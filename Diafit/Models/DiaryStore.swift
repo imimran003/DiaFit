@@ -17,6 +17,40 @@ final class DiaryStore: ObservableObject {
         days[index].messages.append(item)
     }
 
+    func update(_ meal: Meal, in dayID: Day.ID) {
+        guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
+              let messageIndex = days[dayIndex].messages.firstIndex(where: { item in
+                  if case .meal(let existing) = item.kind { return existing.id == meal.id }
+                  return false
+              }) else { return }
+        days[dayIndex].messages[messageIndex].kind = .meal(meal)
+    }
+
+    func removeMeal(id: Meal.ID, from dayID: Day.ID) {
+        guard let dayIndex = days.firstIndex(where: { $0.id == dayID }) else { return }
+        days[dayIndex].messages.removeAll { item in
+            if case .meal(let meal) = item.kind { return meal.id == id }
+            return false
+        }
+    }
+
+    func update(_ draft: MealAnalysisDraft, for itemID: ThreadItem.ID, in dayID: Day.ID) {
+        guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
+              let messageIndex = days[dayIndex].messages.firstIndex(where: { $0.id == itemID }) else { return }
+        days[dayIndex].messages[messageIndex].kind = .mealAnalysis(draft)
+    }
+
+    func replace(itemID: ThreadItem.ID, with kind: ThreadItem.Kind, in dayID: Day.ID) {
+        guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
+              let messageIndex = days[dayIndex].messages.firstIndex(where: { $0.id == itemID }) else { return }
+        days[dayIndex].messages[messageIndex].kind = kind
+    }
+
+    func remove(itemID: ThreadItem.ID, from dayID: Day.ID) {
+        guard let dayIndex = days.firstIndex(where: { $0.id == dayID }) else { return }
+        days[dayIndex].messages.removeAll { $0.id == itemID }
+    }
+
     static let preview = DiaryStore(days: SampleDiary.days)
 }
 

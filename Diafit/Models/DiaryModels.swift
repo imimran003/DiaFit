@@ -19,7 +19,7 @@ struct Day: Identifiable, Hashable {
 
 struct Meal: Identifiable, Hashable {
     enum Artwork: String, CaseIterable, Hashable {
-        case bowl, toast, berry, pasta, green
+        case bowl, toast, berry, pasta, green, neutral
     }
 
     let id: UUID
@@ -33,6 +33,12 @@ struct Meal: Identifiable, Hashable {
     var fat: Int
     var artwork: Artwork
     var confidence: Confidence
+    /// Present for meals that came through the explicit analysis-and-confirm flow.
+    /// Legacy diary entries intentionally remain valid without it.
+    var analysis: MealAnalysisResult? = nil
+    /// This is independent from `artwork`: it records where the visual came
+    /// from and which structured meal it belongs to.
+    var visualIdentity: MealVisualIdentity? = nil
 
     enum Confidence: String, Hashable {
         case known = "Saved recipe"
@@ -46,11 +52,12 @@ struct ThreadItem: Identifiable, Hashable {
         case agent(text: String, tools: [String])
         case person(text: String)
         case meal(Meal)
+        case mealAnalysis(MealAnalysisDraft)
         case checkpoint(GlucoseCheckpoint)
     }
 
     let id: UUID
-    let kind: Kind
+    var kind: Kind
 }
 
 struct GlucoseCheckpoint: Identifiable, Hashable {

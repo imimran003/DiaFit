@@ -29,10 +29,7 @@ struct RootExperience: View {
                     isPresented: $atlasIsOpen,
                     mealNamespace: mealNamespace
                 )
-                .transition(.asymmetric(
-                    insertion: .opacity.combined(with: .scale(scale: 0.985)),
-                    removal: .opacity
-                ))
+                .transition(.atlasReveal)
                 .zIndex(2)
             }
         }

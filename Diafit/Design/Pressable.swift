@@ -26,3 +26,38 @@ struct TinyLabel: View {
             .overlay(Capsule().stroke(Color.rule.opacity(0.46), lineWidth: 0.8))
     }
 }
+
+struct AtlasRevealModifier: ViewModifier, Animatable {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .opacity(progress)
+            .scaleEffect(0.94 + (0.06 * progress))
+            .blur(radius: (1 - progress) * 10)
+            .mask(alignment: .top) {
+                RoundedRectangle(cornerRadius: 36, style: .continuous)
+                    .scaleEffect(x: 1, y: max(progress, 0.01), anchor: .top)
+            }
+    }
+}
+
+extension AnyTransition {
+    static var atlasReveal: AnyTransition {
+        .asymmetric(
+            insertion: .modifier(
+                active: AtlasRevealModifier(progress: 0),
+                identity: AtlasRevealModifier(progress: 1)
+            ),
+            removal: .modifier(
+                active: AtlasRevealModifier(progress: 0),
+                identity: AtlasRevealModifier(progress: 1)
+            )
+        )
+    }
+}
