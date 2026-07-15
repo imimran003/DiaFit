@@ -13,7 +13,6 @@ struct DayThreadView: View {
     @State private var showsPhotoInput = false
     @State private var mealBeingEdited: Meal?
     @State private var mealPendingDeletion: Meal?
-    @State private var scrollTarget: UUID?
     @FocusState private var composerFocused: Bool
 
     private var day: Day? { store.day(id: dayID) }
@@ -81,7 +80,6 @@ struct DayThreadView: View {
                             submit: submit
                         )
                     }
-                    .onAppear { scrollToTail(proxy, animated: false) }
                     .onChange(of: day.messages.count) { _, _ in
                         scrollToTail(proxy)
                     }
@@ -105,6 +103,20 @@ struct DayThreadView: View {
                             onUpdate: { _ in },
                             onConfirm: { draft in update(meal, from: draft) },
                             onDiscard: { mealBeingEdited = nil },
+                            onRetryVisual: { draft in
+                                guard let itemID = store.day(id: dayID)?.messages.first(where: { item in
+                                    if case .meal(let saved) = item.kind { return saved.id == meal.id }
+                                    return false
+                                })?.id else { return }
+                                Task {
+                                    await dependencies.mealVisuals.prepare(
+                                        draft: draft,
+                                        itemID: itemID,
+                                        in: store,
+                                        dayID: dayID
+                                    )
+                                }
+                            },
                             confirmationTitle: "Save changes"
                         )
                         .padding(20)

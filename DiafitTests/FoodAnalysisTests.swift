@@ -166,6 +166,37 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(banana.servingUnit, .piece)
     }
 
+    func testExtendedMealConnectorsKeepQuantitiesWithTheFollowingFood() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let fixtures = [
+            "sprouts served with 3 boiled eggs",
+            "sprouts along with three boiled eggs",
+            "sprouts together with 2 eggs",
+            "sprouts accompanied by 4 eggs"
+        ]
+
+        for input in fixtures {
+            let result = engine.makeAnalysis(description: input)
+            let eggs = try XCTUnwrap(result.detectedItems.first { $0.category == .egg }, input)
+            let sprouts = try XCTUnwrap(result.detectedItems.first { $0.category == .sprouts }, input)
+            XCTAssertEqual(eggs.quantity, input.contains("4") ? 4 : input.contains("2") ? 2 : 3, input)
+            XCTAssertEqual(eggs.servingUnit, .wholeEgg, input)
+            XCTAssertEqual(sprouts.quantity, 1, input)
+            XCTAssertEqual(sprouts.servingUnit, .mediumBowl, input)
+        }
+    }
+
+    func testPunctuationDoesNotBreakFoodAliasesAndDecimalQuantitiesRemainExact() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let meal = engine.makeAnalysis(description: "I had 1.5 scoops whey protein with water.")
+        let whey = try XCTUnwrap(meal.detectedItems.first { $0.category == .supplement })
+
+        XCTAssertEqual(whey.quantity, 1.5, accuracy: 0.001)
+        XCTAssertEqual(whey.servingUnit, .scoop)
+        XCTAssertEqual(whey.supplementProfile?.base, .water)
+        XCTAssertFalse(whey.nutrition.isEmpty)
+    }
+
     func testCompoundPreparationsStayWithTheirFood() throws {
         let engine = LocalMealAnalysisEngine(catalog: catalog)
         let result = engine.makeAnalysis(description: "fried eggs with raw sprouts")
@@ -428,6 +459,21 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(first.canonicalFoodIDs, ["chai", "paratha"])
     }
 
+    func testVisualIdentityFollowsTheStructuredRequestAcrossRenders() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "sprouts with 3 boiled eggs")
+        let request = try XCTUnwrap(result.visualRequest)
+        let factory = MealVisualIdentityFactory()
+
+        let first = factory.make(mealID: request.mealID, result: result, artwork: .neutral)
+        let second = factory.make(mealID: request.mealID, result: result, artwork: .neutral)
+
+        XCTAssertEqual(first.requestID, request.requestID)
+        XCTAssertEqual(second.requestID, request.requestID)
+        XCTAssertEqual(first.cacheKey, request.cacheKey)
+        XCTAssertEqual(second.cacheKey, request.cacheKey)
+    }
+
     func testVisualRequestLedgerRejectsStaleCrossMealAndDeletedResponses() async {
         let ledger = MealVisualRequestLedger()
         let firstMeal = UUID()
@@ -516,6 +562,48 @@ final class FoodAnalysisTests: XCTestCase {
         let restored = try JSONDecoder().decode(Meal.self, from: JSONEncoder().encode(meal))
         XCTAssertEqual(restored.visualIdentity?.assetFileName, fileName)
         XCTAssertEqual(restored.analysis?.generatedVisualAsset?.cacheKey, result.visualRequest?.cacheKey)
+    }
+
+    @MainActor
+    func testVisualRetryForAnEditedMealUpdatesOnlyTheVisualRequestUntilConfirmation() async throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let original = engine.makeAnalysis(description: "sprouts with 2 boiled eggs")
+        let draft = MealAnalysisDraft(result: original)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+        let meal = DiaryMealLoggingService().confirm(draft, replacing: itemID, in: store, dayID: day.id)
+        let originalEnergy = meal.energy
+
+        var editedResult = try XCTUnwrap(meal.analysis)
+        let eggIndex = try XCTUnwrap(editedResult.detectedItems.firstIndex { $0.category == .egg })
+        editedResult.detectedItems[eggIndex].quantity = 3
+        editedResult.visualRequest = MealVisualRequestBuilder().make(
+            mealID: editedResult.analysisId,
+            items: editedResult.detectedItems,
+            clarificationQuestions: editedResult.clarificationQuestions
+        )
+        let editedDraft = MealAnalysisDraft(result: editedResult)
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-visual-edit-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = MealVisualGenerationService(
+            generator: UnavailableMealVisualGenerator(),
+            assets: MealVisualAssetStore(directory: directory, appliesFileProtection: false),
+            ledger: MealVisualRequestLedger()
+        )
+
+        await service.prepare(draft: editedDraft, itemID: itemID, in: store, dayID: day.id)
+
+        let updated = try XCTUnwrap(store.day(id: day.id)?.meals.first)
+        XCTAssertEqual(updated.id, meal.id)
+        XCTAssertEqual(updated.energy, originalEnergy)
+        XCTAssertEqual(updated.analysis?.visualRequest?.state, .deterministicFallback)
+        XCTAssertEqual(updated.analysis?.detectedItems.first { $0.category == .egg }?.quantity, 3)
     }
 
     @MainActor

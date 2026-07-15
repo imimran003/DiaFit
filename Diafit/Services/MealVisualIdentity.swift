@@ -161,7 +161,10 @@ struct MealVisualIdentityFactory: Sendable {
         let source: MealVisualSource = generatedAsset != nil
             ? .generatedEditorial
             : (artwork == .neutral ? .deterministicPlaceholder : .bundledEditorial)
-        let requestID = UUID()
+        // A meal's visual identity follows the structured request that created
+        // it. Generating a fresh UUID every render made a persisted meal look
+        // like a new visual on every redraw and broke continuity after reload.
+        let requestID = result.visualRequest?.requestID ?? result.analysisId
         let keyParts = [
             "foods=" + foodIDs.joined(separator: ","),
             "variations=" + variations.joined(separator: ","),
@@ -169,7 +172,10 @@ struct MealVisualIdentityFactory: Sendable {
             "composition=" + composition.rawValue,
             "source=" + source.rawValue
         ]
-        let cacheKey = Self.sha256(keyParts.joined(separator: "|"))
+        // Keep the identity key aligned with the quantity-sensitive request
+        // key whenever one exists. This is what lets an asset restored from
+        // Application Support remain associated with the same meal.
+        let cacheKey = result.visualRequest?.cacheKey ?? Self.sha256(keyParts.joined(separator: "|"))
 
         FoodLoggingDiagnostics.record("visual.identity", fields: [
             "cacheKey": String(cacheKey.prefix(12)),

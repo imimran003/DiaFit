@@ -121,3 +121,34 @@ No privacy manifest was found. Code signing is disabled in Debug and Release pro
 - Provider-unavailable image UI proof.
 - Small/large phone, dark mode, Dynamic Type and Reduce Motion screenshots.
 - Launch time, image decode/memory and scroll measurements.
+
+## 2026-07-15 continuation audit
+
+The repository was resumed from commit `9f5ada7` without replacing the
+architecture. The production target and unit-test bundle both compile for a
+generic iOS Simulator destination. Runtime execution is currently blocked in
+this environment because CoreSimulatorService refuses connections and exposes
+no concrete runtimes.
+
+Additional root-cause fixes made after the checkpoint:
+
+- Food spans now recognise `served with`, `along with`, `together with`,
+  `accompanied by`, `alongside` and related connector wording. Quantities and
+  preparation remain owned by the adjacent food component.
+- Input tokenisation treats a period as decimal punctuation only when it is
+  between digits. A sentence-ending period no longer turns `eggs` or `water`
+  into an unmatched alias, while `1.5` remains a single quantity token.
+- Catalog preparation metadata containing “unspecified” is kept unresolved
+  instead of being presented as a falsely precise cooking method.
+- Visual identity request IDs and cache keys now follow the structured meal
+  request across redraws and reloads. The edit-meal sheet can retry a changed
+  visual request without mutating top-level nutrition before confirmation.
+- The daily thread no longer jumps to the conversation tail on first render;
+  the day header and carbohydrate context are the settled starting point. A
+  small branded launch mark covers the synchronous persistence-load interval.
+
+Remaining production limitations are explicit: local builds use a deterministic
+component composition because no authenticated image generator is configured;
+there is no branded/scanned supplement database yet; and concrete simulator,
+physical-device, accessibility, and frame-by-frame visual evidence still need
+to be collected on a machine with CoreSimulatorService and real device access.

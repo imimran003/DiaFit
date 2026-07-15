@@ -45,6 +45,15 @@ struct RootExperience: View {
                 .padding(.top, 8)
                 .zIndex(3)
             }
+
+            // Persistence is loaded synchronously during the first app
+            // transaction. Keep that short interval intentional and branded
+            // instead of exposing a white, content-less launch frame.
+            if selectedDayID == nil {
+                LaunchMark()
+                    .transition(.opacity)
+                    .zIndex(4)
+            }
         }
         .onAppear {
             selectedDayID = selectedDayID ?? store.days.last?.id
@@ -57,6 +66,23 @@ struct RootExperience: View {
             return selected
         }
         return store.days.last
+    }
+}
+
+private struct LaunchMark: View {
+    var body: some View {
+        VStack(spacing: 12) {
+            Image(systemName: "leaf.fill")
+                .font(.system(size: 22, weight: .semibold))
+                .foregroundStyle(Color.ink)
+                .frame(width: 56, height: 56)
+                .background(Color.lime.opacity(0.72), in: Circle())
+            Text("DIAFIT")
+                .font(.system(size: 11, weight: .bold, design: .rounded))
+                .tracking(2.2)
+                .foregroundStyle(Color.ink)
+        }
+        .accessibilityHidden(true)
     }
 }
 

@@ -232,8 +232,12 @@ struct MealVisualGenerationService: Sendable {
             if asset != nil { draft.result.imageType = .generatedEditorial }
             diary.update(draft, for: itemID, in: dayID)
         case .meal(var meal):
-            guard var analysis = meal.analysis,
-                  analysis.visualRequest?.requestID == request.requestID else { return }
+            // Editing a confirmed meal creates a replacement request before
+            // the saved analysis is replaced. The meal ID is the durable
+            // boundary; accepting the new request here lets the visual retry
+            // complete without prematurely overwriting nutrition values.
+            guard meal.id == request.mealID,
+                  var analysis = meal.analysis else { return }
             analysis.visualRequest = request
             analysis.generatedVisualAsset = asset
             if asset != nil { analysis.imageType = .generatedEditorial }

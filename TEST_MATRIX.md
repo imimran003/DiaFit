@@ -6,9 +6,9 @@ Status legend: **Pass**, **Fail**, **Gap**, **Blocked**, **Not run**.
 
 | Suite | Device | Result |
 | --- | --- | --- |
-| Debug build | iPhone 17 Pro / iOS 26.5 | **Pass** |
-| Unit + provider-independent integration | iPhone 17 Pro / iOS 26.5 | **Pass — 29/29** |
-| UI | iPhone 17 Pro / iOS 26.5 | **Pass — 8/8** |
+| Debug build | Generic iOS Simulator SDK | **Pass** |
+| Unit + provider-independent integration | 41 XCTest cases compiled | **Blocked at runtime — CoreSimulatorService unavailable** |
+| UI | 9 UI tests compiled | **Blocked at runtime — no concrete simulator device** |
 
 ## Known food regressions
 
@@ -19,7 +19,7 @@ Status legend: **Pass**, **Fail**, **Gap**, **Blocked**, **Not run**.
 | `sprouts with 3 boiled eggs` | Sprouts + boiled egg | Sprouts default; eggs 3 whole | Nonblank | Quantity-aware request | **Pass** |
 | `whey protein shake` | Generic whey | Default scoop; base ambiguous | Editable generic fallback | Waits for clarification | **Pass** |
 | `one scoop whey with water` | Generic whey | 1 scoop, water | Nonblank; water adds zero | No milk/fruit prompt | **Pass** |
-| `three eggs with sprouts` | Egg + sprouts | Sprouts becomes `3 wholeEgg` | Incorrect scaling risk | Incorrect structured identity risk | **Fail** |
+| `three eggs with sprouts` | Egg + sprouts | Eggs 3 whole; sprouts 1 medium bowl | Correct linear scaling | Quantity-aware request | **Pass** |
 
 Audit-branch result after the component-span repair:
 
@@ -29,12 +29,14 @@ Audit-branch result after the component-span repair:
 | `two scoops whey and banana` | Whey 2 scoops; banana 1 piece | **Pass** |
 | `fried eggs with raw sprouts` | Fried applies only to eggs; raw only to sprouts | **Pass** |
 | `one and a half scoop whey with water` | Compound number stays 1.5 | **Pass** |
+| `sprouts served/along with/together with eggs` | Connector does not leak quantity | **Pass** |
+| `1.5 scoops whey protein with water.` | Decimal and sentence punctuation preserved | **Pass** |
 
 ## Flow inventory
 
 | Flow | Baseline state | Coverage | Next evidence |
 | --- | --- | --- | --- |
-| Launch | Sample diary opens; blank intermediate frame | Manual screenshot | Measure first useful screen and remove flash |
+| Launch | Branded launch mark covers synchronous load; day header is initial scroll position | Manual screenshot | Measure first useful screen on a live simulator |
 | Onboarding | No onboarding found | **Gap** | Define minimal goals/consent flow |
 | Empty day | No empty-day fixture/test | **Gap** | Unit + UI state |
 | Text meal entry | Working | UI | Broaden food matrix |
@@ -50,7 +52,7 @@ Audit-branch result after the component-span repair:
 | Previous-day edit | Day pages exist | **Gap** | State and totals |
 | Day paging | `TabView.page` | **Gap** | Gesture conflicts and retained state |
 | Atlas/history | Single-day modal grid | Basic UI | Multi-day semantic zoom |
-| Image loading/failure | No runtime generator | **Gap** | Provider mock states and recovery |
+| Image loading/failure | Deterministic fallback + retryable failure state; mock provider unit coverage | Unit only | Live provider/cache/background evidence |
 | Manual food search | Not found | **Gap** | Product/design decision |
 | Recent/saved foods | Suggestion strings only | **Gap** | Domain + persistence |
 | Packaged whey | Generic records | Unit partial | Saved product/label/barcode |

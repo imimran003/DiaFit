@@ -222,10 +222,17 @@ private enum FoodInputNormalizer {
         let folded = value
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
+        let scalars = Array(folded.unicodeScalars)
         var result: [String] = []
         var buffer = ""
-        for scalar in folded.unicodeScalars {
-            if CharacterSet.alphanumerics.contains(scalar) || scalar == "." {
+        for index in scalars.indices {
+            let scalar = scalars[index]
+            let decimalPoint = scalar == "."
+                && index > scalars.startIndex
+                && index + 1 < scalars.endIndex
+                && CharacterSet.decimalDigits.contains(scalars[index - 1])
+                && CharacterSet.decimalDigits.contains(scalars[index + 1])
+            if CharacterSet.alphanumerics.contains(scalar) || decimalPoint {
                 buffer.unicodeScalars.append(scalar)
             } else if !buffer.isEmpty {
                 result.append(buffer)
@@ -339,7 +346,13 @@ private enum QuantityExtractor {
 }
 
 private enum FoodConnector {
-    private static let boundaryTokens = Set(["and", "with", "plus"])
+    // Connector words are span boundaries, not ingredients. This keeps a
+    // quantity/preparation attached to the component it actually modifies:
+    // `sprouts served with 3 eggs` must not let `3` leak into sprouts.
+    private static let boundaryTokens = Set([
+        "and", "with", "plus", "along", "alongside", "served", "together",
+        "accompanied", "accompaniedby", "beside"
+    ])
 
     static func isBoundary(_ token: String) -> Bool {
         boundaryTokens.contains(token)
@@ -354,7 +367,11 @@ private enum PreparationExtractor {
         if tokens.contains("fried") { return "fried" }
         if tokens.contains("raw") { return "raw" }
         if tokens.contains("cooked") { return "cooked" }
-        return food.commonPreparationMethods.first
+        guard let defaultMethod = food.commonPreparationMethods.first,
+              !defaultMethod.localizedCaseInsensitiveContains("unspecified") else {
+            return nil
+        }
+        return defaultMethod
     }
 }
 
