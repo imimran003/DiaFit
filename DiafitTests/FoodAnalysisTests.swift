@@ -14,6 +14,30 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(catalog.normalise("clarified butter")?.canonicalId, "ghee")
     }
 
+    func testHybridNormaliserAcceptsSpellingAndRegionalVariants() {
+        let normaliser = HybridFoodNormalisationService(catalog: catalog)
+        XCTAssertEqual(normaliser.normalise("mung sprouts")?.canonicalId, "moong-sprouts")
+        XCTAssertEqual(normaliser.normalise("ande")?.canonicalId, "whole-egg")
+        XCTAssertEqual(normaliser.normalise("chapati")?.canonicalId, "roti")
+    }
+
+    func testMealParseContractContainsNoTrustedNutrition() {
+        let item = ParsedFoodItem(originalText: "3 boiled eggs", canonicalSearchName: "chicken egg", quantity: 3, unit: "whole")
+        let parse = MealParseResult(detectedItems: [item], unresolvedItems: [], mealDescription: "eggs", clarificationQuestions: [], confidence: 0.95)
+        XCTAssertNil(parse.detectedItems.first?.estimatedGrams)
+        XCTAssertFalse(BackendFoodUnderstandingService.strictJSONSchema.isEmpty)
+    }
+
+    func testCatalogRecipeCalculationSumsVerifiedIngredients() async {
+        let service = CatalogRecipeCalculationService(resolver: HybridNutritionResolutionService(catalog: catalog))
+        let result = await service.calculate(ingredients: [
+            RecipeIngredient(canonicalSearchName: "boiled egg", quantity: 3, unit: "wholeEgg"),
+            RecipeIngredient(canonicalSearchName: "mixed sprouts", quantity: 1, unit: "mediumBowl")
+        ])
+        XCTAssertFalse(result.lookup.values.isEmpty)
+        XCTAssertEqual(result.lookup.provenance.kind, .curatedRecipeEstimate)
+    }
+
     func testCatalogCoversRequestedRegionalGroups() {
         XCTAssertEqual(catalog.normalise("neer dosa")?.category, .bread)
         XCTAssertEqual(catalog.normalise("mutton biryani")?.category, .rice)

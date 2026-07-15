@@ -5,10 +5,26 @@ import SwiftUI
 struct AppDependencies: Sendable {
     let photoAnalysis: PhotoAnalysisOrchestrator
     let mealVisuals: MealVisualGenerationService
+    /// Food understanding is optional offline; production injects the
+    /// authenticated backend implementation without changing SwiftUI views.
+    let foodUnderstanding: (any FoodUnderstandingService)?
+    let normalisation: any FoodNormalisationService
+    let nutritionResolution: any NutritionResolutionService
+    let recipeCalculation: any RecipeCalculationService
+    let clarification: any MealClarificationService
+    let userFoodMemory: any UserFoodMemoryRepository
+    let packagedFoods: any PackagedFoodRepository
 
     static let local = AppDependencies(
         photoAnalysis: PhotoAnalysisOrchestrator(),
-        mealVisuals: .local
+        mealVisuals: .local,
+        foodUnderstanding: nil,
+        normalisation: HybridFoodNormalisationService(),
+        nutritionResolution: HybridNutritionResolutionService(),
+        recipeCalculation: CatalogRecipeCalculationService(),
+        clarification: DefaultMealClarificationService(),
+        userFoodMemory: InMemoryUserFoodMemoryRepository(),
+        packagedFoods: InMemoryPackagedFoodRepository()
     )
 }
 

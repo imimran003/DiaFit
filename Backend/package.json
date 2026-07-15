@@ -6,6 +6,8 @@
   "scripts": {
     "start": "node server.mjs",
     "check": "node --check server.mjs",
+    "check:meal-understanding": "node --check meal-understanding.mjs",
+    "test": "node meal-understanding.test.mjs",
     "evaluate": "node evaluate.mjs"
   },
   "engines": {

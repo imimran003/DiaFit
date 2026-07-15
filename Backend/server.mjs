@@ -3,12 +3,14 @@ import { readFile } from 'node:fs/promises';
 import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { OpenAIMealParser, MockMealParser, validateMealParseResult } from './meal-understanding.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const config = {
   host: process.env.HOST ?? '127.0.0.1',
   port: Number(process.env.PORT ?? 8787),
   mode: process.env.DIAFIT_ANALYSIS_MODE ?? 'disabled',
+  mealParserMode: process.env.DIAFIT_MEAL_PARSER_MODE ?? 'disabled',
   developmentToken: process.env.DIAFIT_DEVELOPMENT_TOKEN ?? '',
   rateLimit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 20),
   timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 12_000)
@@ -45,7 +47,34 @@ createServer(async (request, response) => {
   setHeaders(response, requestId);
   try {
     if (request.method === 'GET' && request.url === '/health') {
-      return send(response, 200, { status: 'ok', apiVersion: 'v1', mode: config.mode, fixtureVersion: fixtures.version });
+      return send(response, 200, { status: 'ok', apiVersion: 'v1', mode: config.mode, mealParserMode: config.mealParserMode, fixtureVersion: fixtures.version });
+    }
+    if (request.method === 'POST' && request.url === '/v1/meal-parse') {
+      const principal = authenticate(request);
+      if (!principal) return send(response, 401, { error: 'unauthorized', requestId });
+      if (!limiter.take(`${principal}:meal-parse`)) return send(response, 429, { error: 'rate_limited', requestId });
+      const input = validateMealParseRequest(await readJSON(request));
+      const cacheKey = input.idempotencyKey ? `${principal}:${input.idempotencyKey}` : null;
+      const cached = cacheKey ? mealParseCache.get(cacheKey) : null;
+      if (cached && cached.expiresAt > Date.now()) return send(response, 200, cached.body);
+      if (cached) mealParseCache.delete(cacheKey);
+      const controller = new AbortController();
+      let result;
+      try {
+        result = await withTimeout(mealParser.parse(input, { signal: controller.signal }), config.timeoutMs);
+      } catch (error) {
+        controller.abort();
+        throw error;
+      }
+      validateMealParseResult(result);
+      const responseBody = { ...result, requestId, parserModel: config.mealParserMode === 'openai' ? process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini' : 'development-mock' };
+      if (cacheKey) {
+        // Keep retries safe without allowing an in-memory cache to grow without bound.
+        if (mealParseCache.size >= 512) mealParseCache.delete(mealParseCache.keys().next().value);
+        mealParseCache.set(cacheKey, { body: responseBody, expiresAt: Date.now() + 10 * 60_000 });
+      }
+      audit('meal_parse_completed', { requestId, principal, componentCount: result.detectedItems.length, unresolvedCount: result.unresolvedItems.length });
+      return send(response, 200, responseBody);
     }
     if (request.method !== 'POST' || request.url !== '/v1/meal-analysis') {
       return send(response, 404, { error: 'not_found', requestId });
@@ -186,6 +215,24 @@ function validateRequest(input) {
   return { imageReference: input.imageReference, imageBase64: input.imageBase64, mimeType: input.mimeType, dishHint: input.dishHint.trim() };
 }
 
+function validateMealParseRequest(input) {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) throw appError(400, 'invalid_request', 'Invalid request.', true);
+  const allowed = new Set(['apiVersion', 'text', 'imageReference', 'imageBase64', 'mimeType', 'idempotencyKey']);
+  if (Object.keys(input).some(key => !allowed.has(key))) throw appError(400, 'invalid_request', 'Unexpected request field.', true);
+  if (input.apiVersion !== 'v1') throw appError(400, 'invalid_request', 'Unsupported API version.', true);
+  const text = typeof input.text === 'string' ? input.text.trim() : '';
+  const hasImage = typeof input.imageBase64 === 'string' && input.imageBase64.length > 16;
+  if (text.length < 2 && !hasImage) throw appError(422, 'meal_input_required', 'Provide meal text or an image.', true);
+  if (text.length > 2_000) throw appError(422, 'meal_text_too_long', 'Meal text is too long.', true);
+  if (hasImage) {
+    if (!['image/jpeg', 'image/png', 'image/heic', 'image/heif'].includes(input.mimeType)) throw appError(415, 'unsupported_image', 'Unsupported image MIME type.', true);
+    if (input.imageBase64.length > 2_700_000 || !/^[A-Za-z0-9+/=]+$/.test(input.imageBase64)) throw appError(400, 'invalid_image', 'Invalid image payload.', true);
+  }
+  if (input.imageReference !== undefined && (typeof input.imageReference !== 'string' || input.imageReference.length > 128)) throw appError(400, 'invalid_image_reference', 'Invalid image reference.', true);
+  if (input.idempotencyKey !== undefined && (typeof input.idempotencyKey !== 'string' || !/^[A-Za-z0-9._:-]{8,128}$/.test(input.idempotencyKey))) throw appError(400, 'invalid_idempotency_key', 'Invalid idempotency key.', true);
+  return { apiVersion: 'v1', text: text || 'Describe the meal in this image.', imageReference: input.imageReference ?? null, imageBase64: hasImage ? input.imageBase64 : null, mimeType: hasImage ? input.mimeType : null, idempotencyKey: input.idempotencyKey ?? null };
+}
+
 function validateAnalysis(result) {
   if (!result?.analysisId || !Array.isArray(result.detectedItems) || !result.detectedItems.length || !result.mealTotals || !Array.isArray(result.clarificationQuestions)) {
     throw appError(502, 'malformed_provider_response', 'The provider response failed validation.', false);
@@ -228,3 +275,13 @@ class RollingRateLimiter {
 
 const limiter = new RollingRateLimiter(config.rateLimit, 60_000);
 const provider = config.mode === 'fixture' ? new FixtureRecognitionProvider(fixtures) : new DisabledRecognitionProvider();
+const mealParser = config.mealParserMode === 'openai'
+  ? new OpenAIMealParser()
+  : config.mealParserMode === 'mock' || config.mealParserMode === 'fixture'
+    ? new MockMealParser()
+    : new DisabledMealParser();
+const mealParseCache = new Map();
+
+class DisabledMealParser {
+  async parse() { throw appError(503, 'provider_unavailable', 'Meal understanding is not configured.', true); }
+}

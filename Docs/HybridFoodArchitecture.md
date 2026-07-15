@@ -1,0 +1,52 @@
+# Hybrid food understanding architecture
+
+The app previously ran free text through `LocalMealAnalysisEngine`, which
+scanned `IndianFoodCatalog.json` for exact aliases and immediately scaled the
+first local nutrition record. This made the catalog an accidental recognition
+boundary: unknown dishes, spelling variants, branded products and recipes could
+become an empty draft or an unrelated fallback.
+
+The catalog remains valuable, but it is now one layer in a provider-independent
+pipeline:
+
+```text
+text/photo -> backend structured meal parse -> canonical match -> nutrition
+provider hierarchy -> recipe calculation (when needed) -> validation -> review
+-> confirmation -> memory/persistence
+```
+
+## Boundaries
+
+* `FoodUnderstandingService` returns `MealParseResult` and `ParsedFoodItem`.
+  `BackendFoodUnderstandingService` sends an account token to the backend;
+  OpenAI credentials never ship in the iOS target. The parse contract carries
+  quantities, preparation, additions, products and confidence, but no trusted
+  nutrition numbers.
+* `FoodNormalisationService` remains the local catalog seam. The hybrid
+  implementation first uses exact canonical aliases, then tolerant token
+  matching over aliases, regional names and transliterations. The bundled
+  Indian catalog is therefore a canonical alias/verified fallback layer, not a
+  complete list of all foods.
+* `NutritionResolutionService` separates product labels and verified provider
+  records from local curated fallback. Every result carries source, record ID,
+  serving amount/unit, grams, assumptions and verification state. Its injected
+  provider seams follow the order confirmed label → verified database → local
+  canonical record → ingredient calculation → explicitly labelled model
+  estimate. Every candidate passes `NutritionValidationService`; rejected
+  values become unavailable with a review reason rather than silently reaching
+  diary totals.
+* `RecipeCalculationService` calculates a dish from independently resolved
+  ingredients; the language model may propose ingredients, but does not supply
+  their nutrition.
+* `NutritionValidationService` is the central gate already used by the local
+  engine. It rejects invalid numbers, serving confusion, implausible beverage,
+  egg and whey values before totals can be persisted.
+* `UserFoodMemoryRepository` and `PackagedFoodRepository` are injected actor
+  seams. Confirmed aliases, servings and branded products can be ranked on the
+  next parse without retraining a model or storing provider secrets.
+* `MealClarificationService` emits only material questions (for example whey
+  scoop/base or a high-impact recipe oil amount), leaving low-impact spices out.
+
+The in-memory repositories are deterministic development implementations. A
+production account repository should persist the same records behind the
+protocol and retain only user-confirmed preferences.
