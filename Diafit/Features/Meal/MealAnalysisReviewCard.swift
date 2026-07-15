@@ -9,6 +9,7 @@ struct MealAnalysisReviewCard: View {
     let onUpdate: (MealAnalysisDraft) -> Void
     let onConfirm: (MealAnalysisDraft) -> Void
     let onDiscard: () -> Void
+    let onRetryVisual: (MealAnalysisDraft) -> Void
     let confirmationTitle: String
 
     @State private var editableDraft: MealAnalysisDraft
@@ -26,12 +27,14 @@ struct MealAnalysisReviewCard: View {
         onUpdate: @escaping (MealAnalysisDraft) -> Void,
         onConfirm: @escaping (MealAnalysisDraft) -> Void,
         onDiscard: @escaping () -> Void,
+        onRetryVisual: @escaping (MealAnalysisDraft) -> Void = { _ in },
         confirmationTitle: String = "Confirm estimate"
     ) {
         self.draft = draft
         self.onUpdate = onUpdate
         self.onConfirm = onConfirm
         self.onDiscard = onDiscard
+        self.onRetryVisual = onRetryVisual
         self.confirmationTitle = confirmationTitle
         _editableDraft = State(initialValue: draft)
     }
@@ -138,6 +141,11 @@ struct MealAnalysisReviewCard: View {
         .padding(16)
         .background(Color.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(Color.rule.opacity(0.72), lineWidth: 0.8))
+        .onChange(of: draft.result.visualRequest) { _, visualRequest in
+            editableDraft.result.visualRequest = visualRequest
+            editableDraft.result.generatedVisualAsset = draft.result.generatedVisualAsset
+            editableDraft.result.imageType = draft.result.imageType
+        }
         .shadow(color: .black.opacity(0.055), radius: 17, y: 8)
         .accessibilityElement(children: .contain)
     }
@@ -259,7 +267,9 @@ struct MealAnalysisReviewCard: View {
             items: editableDraft.result.detectedItems,
             clarificationQuestions: editableDraft.result.clarificationQuestions
         )
+        editableDraft.result.generatedVisualAsset = nil
         onUpdate(editableDraft)
+        onRetryVisual(editableDraft)
     }
 
     private func item(from definition: IndianFoodDefinition, preserving original: DetectedFoodItem) -> DetectedFoodItem {
@@ -296,6 +306,7 @@ struct MealAnalysisReviewCard: View {
     }
 
     private func recalculate() {
+        let previousVisualRequest = editableDraft.result.visualRequest
         applyVariationSelections()
         applySupplementSelections()
         for index in editableDraft.result.detectedItems.indices {
@@ -342,16 +353,26 @@ struct MealAnalysisReviewCard: View {
         editableDraft.result.nutritionProvenance = allValuesSupported
             ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Bundled recipe estimate — recipe may vary", dataVersion: catalog.version, confidence: .low)
             : .unavailable
-        editableDraft.result.visualRequest = MealVisualRequestBuilder().make(
+        let nextVisualRequest = MealVisualRequestBuilder().make(
             mealID: editableDraft.result.analysisId,
             items: editableDraft.result.detectedItems,
             clarificationQuestions: editableDraft.result.clarificationQuestions
         )
+        let visualChanged = nextVisualRequest?.cacheKey != previousVisualRequest?.cacheKey
+        if visualChanged {
+            editableDraft.result.visualRequest = nextVisualRequest
+            editableDraft.result.generatedVisualAsset = nil
+        } else {
+            editableDraft.result.visualRequest = previousVisualRequest
+        }
         editableDraft.result.warnings = editableDraft.result.warnings.filter { !$0.contains("Nutrition needs confirmation") }
         if !report.isApproved {
             editableDraft.result.warnings.append("Nutrition needs confirmation before it can affect your daily totals.")
         }
         onUpdate(editableDraft)
+        if visualChanged, nextVisualRequest?.state != .waitingForClarification {
+            onRetryVisual(editableDraft)
+        }
     }
 
     private func applySupplementSelections() {
@@ -482,6 +503,7 @@ private struct MealVisualRequestStatus: View {
         case .queued: return "MEAL VISUAL PREPARING"
         case .waitingForClarification: return "VISUAL WAITING FOR DETAILS"
         case .deterministicFallback: return "MEAL VISUAL READY"
+        case .ready: return "EDITORIAL MEAL VISUAL READY"
         case .failed: return "IMAGE UNAVAILABLE"
         }
     }
@@ -492,6 +514,8 @@ private struct MealVisualRequestStatus: View {
         case .waitingForClarification: return "Confirm the shake base and scoop count to make the visual accurate."
         case .deterministicFallback:
             return "A verified component composition is shown while image generation is unavailable."
+        case .ready:
+            return "The quantity-aware editorial image is saved with this meal."
         case .failed:
             return hasOriginalPhoto
                 ? "Retry generation or keep your original photo."

@@ -4,8 +4,12 @@ import SwiftUI
 /// remote analysis service here; previews and offline builds remain local.
 struct AppDependencies: Sendable {
     let photoAnalysis: PhotoAnalysisOrchestrator
+    let mealVisuals: MealVisualGenerationService
 
-    static let local = AppDependencies(photoAnalysis: PhotoAnalysisOrchestrator())
+    static let local = AppDependencies(
+        photoAnalysis: PhotoAnalysisOrchestrator(),
+        mealVisuals: .local
+    )
 }
 
 private struct AppDependenciesKey: EnvironmentKey {

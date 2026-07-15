@@ -26,12 +26,22 @@ struct MealAnalysisResult: Identifiable, Codable, Hashable, Sendable {
     /// enough canonical information. It is intentionally independent of a live
     /// image provider so the app can show a truthful deterministic fallback.
     var visualRequest: MealVisualRequest? = nil
+    /// Sandbox-relative reference written only after an image payload passes
+    /// request association and file validation.
+    var generatedVisualAsset: MealVisualAsset? = nil
 
     var id: UUID { analysisId }
 
     var hasUnsupportedNutrition: Bool {
         nutritionProvenance.kind == .unavailable || mealTotals.isEmpty
     }
+}
+
+struct MealVisualAsset: Codable, Hashable, Sendable {
+    let requestID: UUID
+    let cacheKey: String
+    let fileName: String
+    let mimeType: String
 }
 
 struct MealImageReference: Codable, Hashable, Sendable {

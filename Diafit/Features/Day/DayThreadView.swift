@@ -41,6 +41,16 @@ struct DayThreadView: View {
                                     discardDraft: {
                                         store.remove(itemID: item.id, from: dayID)
                                     },
+                                    retryDraftVisual: { draft in
+                                        Task {
+                                            await dependencies.mealVisuals.prepare(
+                                                draft: draft,
+                                                itemID: item.id,
+                                                in: store,
+                                                dayID: dayID
+                                            )
+                                        }
+                                    },
                                     editMeal: { meal in
                                         mealBeingEdited = meal
                                     },
@@ -110,6 +120,7 @@ struct DayThreadView: View {
             set: { if !$0 { mealPendingDeletion = nil } }
         ), presenting: mealPendingDeletion) { meal in
             Button("Delete", role: .destructive) {
+                Task { await dependencies.mealVisuals.delete(meal: meal) }
                 DiaryMealLoggingService().delete(mealID: meal.id, in: store, dayID: dayID)
                 mealPendingDeletion = nil
             }
@@ -162,7 +173,16 @@ struct DayThreadView: View {
                     to: dayID
                 )
             case .review(let review):
-                store.append(ThreadItem(id: UUID(), kind: .mealAnalysis(review)), to: dayID)
+                let reviewItemID = UUID()
+                store.append(ThreadItem(id: reviewItemID, kind: .mealAnalysis(review)), to: dayID)
+                Task {
+                    await dependencies.mealVisuals.prepare(
+                        draft: review,
+                        itemID: reviewItemID,
+                        in: store,
+                        dayID: dayID
+                    )
+                }
                 try? await Task.sleep(for: .milliseconds(260))
                 store.append(
                     ThreadItem(
@@ -190,13 +210,17 @@ struct DayThreadView: View {
             try? await Task.sleep(for: .milliseconds(520))
             thinkingLabel = "Checking nutrition data"
             let result = await dependencies.photoAnalysis.analyse(image: image, description: description)
-            store.append(
-                ThreadItem(
-                    id: UUID(),
-                    kind: .mealAnalysis(MealAnalysisDraft(result: result, transientImageData: image.data))
-                ),
-                to: dayID
-            )
+            let review = MealAnalysisDraft(result: result, transientImageData: image.data)
+            let reviewItemID = UUID()
+            store.append(ThreadItem(id: reviewItemID, kind: .mealAnalysis(review)), to: dayID)
+            Task {
+                await dependencies.mealVisuals.prepare(
+                    draft: review,
+                    itemID: reviewItemID,
+                    in: store,
+                    dayID: dayID
+                )
+            }
             isThinking = false
         }
     }
@@ -225,6 +249,19 @@ struct DayThreadView: View {
         updated.analysis = draft.result
         DiaryMealLoggingService().update(updated, in: store, dayID: dayID)
         mealBeingEdited = nil
+        if let itemID = store.day(id: dayID)?.messages.first(where: { item in
+            if case .meal(let saved) = item.kind { return saved.id == meal.id }
+            return false
+        })?.id {
+            Task {
+                await dependencies.mealVisuals.prepare(
+                    draft: draft,
+                    itemID: itemID,
+                    in: store,
+                    dayID: dayID
+                )
+            }
+        }
     }
 }
 

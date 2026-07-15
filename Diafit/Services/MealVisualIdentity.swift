@@ -17,6 +17,8 @@ enum MealVisualRequestState: String, Codable, Hashable, Sendable {
     /// A provider is unavailable; the UI has a truthful, retryable component
     /// composition instead of an unexplained blank image area.
     case deterministicFallback
+    /// A validated image is present in the protected local asset cache.
+    case ready
     case failed
 }
 
@@ -49,7 +51,8 @@ struct MealVisualRequestBuilder: Sendable {
         }.sorted()
         let prompt = structuredPrompt(items: items)
         let needsHighImpactAnswer = clarificationQuestions.contains { $0.impactLevel == .high && $0.answer == nil }
-        let state: MealVisualRequestState = needsHighImpactAnswer ? .waitingForClarification : .deterministicFallback
+        let state: MealVisualRequestState = needsHighImpactAnswer ? .waitingForClarification : .queued
+        let requestID = UUID()
         let cacheKey = sha256([
             "components=" + components.sorted().joined(separator: ","),
             "quantity=" + signatures.joined(separator: ","),
@@ -62,19 +65,19 @@ struct MealVisualRequestBuilder: Sendable {
             "components": components.joined(separator: ","),
             "eligibility": state.rawValue,
             "mealID": mealID.uuidString,
-            "requestID": "created"
+            "requestID": requestID.uuidString
         ])
 
         return MealVisualRequest(
             mealID: mealID,
-            requestID: UUID(),
+            requestID: requestID,
             canonicalComponentIDs: components,
             quantitySignature: signatures,
             styleVersion: MealVisualIdentityFactory.styleVersion,
             prompt: prompt,
             cacheKey: cacheKey,
             state: state,
-            failureReason: state == .deterministicFallback ? "No configured image provider; showing a deterministic component composition." : nil
+            failureReason: nil
         )
     }
 
@@ -132,6 +135,7 @@ struct MealVisualIdentity: Codable, Hashable, Sendable {
     let source: MealVisualSource
     let cacheKey: String
     let createdAt: Date
+    let assetFileName: String?
 }
 
 /// Generates a stable identity from structured food information only. Display
@@ -149,7 +153,14 @@ struct MealVisualIdentityFactory: Sendable {
             "\(item.canonicalFoodId):\(item.quantity):\(item.servingUnit.rawValue):\(item.preparationMethod ?? "unspecified")"
         }.sorted()
         let composition: MealVisualIdentity.Composition = foodIDs.count > 1 ? .combinedMeal : .singleFood
-        let source: MealVisualSource = artwork == .neutral ? .deterministicPlaceholder : .bundledEditorial
+        let generatedAsset = result.generatedVisualAsset.flatMap { asset in
+            result.visualRequest?.requestID == asset.requestID && result.visualRequest?.cacheKey == asset.cacheKey
+                ? asset
+                : nil
+        }
+        let source: MealVisualSource = generatedAsset != nil
+            ? .generatedEditorial
+            : (artwork == .neutral ? .deterministicPlaceholder : .bundledEditorial)
         let requestID = UUID()
         let keyParts = [
             "foods=" + foodIDs.joined(separator: ","),
@@ -176,7 +187,8 @@ struct MealVisualIdentityFactory: Sendable {
             composition: composition,
             source: source,
             cacheKey: cacheKey,
-            createdAt: .now
+            createdAt: .now,
+            assetFileName: generatedAsset?.fileName
         )
     }
 
@@ -199,8 +211,7 @@ struct MealVisualIdentityFactory: Sendable {
 
 /// Guards asynchronous generated-image completion. A response can only apply to
 /// the currently active request for the same meal, and deleted meals reject all
-/// late completions. The app has no runtime generator yet; this actor provides
-/// the safe association boundary before one is connected.
+/// late completions.
 actor MealVisualRequestLedger {
     private struct Pending {
         let mealID: UUID

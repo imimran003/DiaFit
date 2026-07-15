@@ -23,7 +23,13 @@ struct FoodArtwork: View {
             TimelineView(.animation(minimumInterval: usesStaticRendering ? 3_600 : 1 / 60)) { timeline in
                 FoodStage(artwork: meal.artwork)
                     .overlay {
-                        if meal.artwork == .neutral {
+                        if let image = generatedImage {
+                            Image(uiImage: image)
+                                .resizable()
+                                .scaledToFit()
+                                .scaleEffect(imageScale)
+                                .padding(imagePadding)
+                        } else if meal.artwork == .neutral {
                             DeterministicMealComposition(
                                 items: meal.analysis?.detectedItems ?? [],
                                 fallbackTitle: meal.title
@@ -51,6 +57,12 @@ struct FoodArtwork: View {
         .accessibilityLabel(meal.artwork == .neutral
             ? "Deterministic meal image for \(meal.title)"
             : "Studio food image of \(meal.title)")
+    }
+
+    private var generatedImage: UIImage? {
+        guard let fileName = meal.visualIdentity?.assetFileName,
+              let url = MealVisualAssetStore.liveURL(for: fileName) else { return nil }
+        return FoodImageCache.image(at: url, cacheKey: "generated-\(fileName)")
     }
 
     private var imageScale: CGFloat {
@@ -91,6 +103,13 @@ private enum FoodImageCache {
         guard let url = Bundle.main.url(forResource: name, withExtension: "png"),
               let image = UIImage(contentsOfFile: url.path) else { return nil }
         cache.setObject(image, forKey: name as NSString)
+        return image
+    }
+
+    static func image(at url: URL, cacheKey: String) -> UIImage? {
+        if let cached = cache.object(forKey: cacheKey as NSString) { return cached }
+        guard let image = UIImage(contentsOfFile: url.path) else { return nil }
+        cache.setObject(image, forKey: cacheKey as NSString)
         return image
     }
 }

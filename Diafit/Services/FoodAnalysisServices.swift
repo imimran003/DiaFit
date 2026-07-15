@@ -681,8 +681,6 @@ actor InMemoryMealAnalysisRepository: MealAnalysisRepository {
 }
 
 struct DiaryMealLoggingService: MealLoggingService {
-    private static let visualLedger = MealVisualRequestLedger()
-
     @MainActor
     func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID, in store: DiaryStore, dayID: Day.ID) -> Meal {
         let result = draft.result
@@ -711,7 +709,7 @@ struct DiaryMealLoggingService: MealLoggingService {
         store.replace(itemID: itemID, with: .meal(meal), in: dayID)
         if let request = result.visualRequest {
             Task {
-                await Self.visualLedger.begin(mealID: mealID, cacheKey: request.cacheKey, requestID: request.requestID)
+                await MealVisualRuntime.ledger.begin(mealID: mealID, cacheKey: request.cacheKey, requestID: request.requestID)
             }
         }
         return meal
@@ -722,7 +720,7 @@ struct DiaryMealLoggingService: MealLoggingService {
         store.update(meal, in: dayID)
         if let request = meal.analysis?.visualRequest {
             Task {
-                await Self.visualLedger.begin(mealID: meal.id, cacheKey: request.cacheKey, requestID: request.requestID)
+                await MealVisualRuntime.ledger.begin(mealID: meal.id, cacheKey: request.cacheKey, requestID: request.requestID)
             }
         }
     }
@@ -730,7 +728,7 @@ struct DiaryMealLoggingService: MealLoggingService {
     @MainActor
     func delete(mealID: Meal.ID, in store: DiaryStore, dayID: Day.ID) {
         store.removeMeal(id: mealID, from: dayID)
-        Task { await Self.visualLedger.delete(mealID: mealID) }
+        Task { await MealVisualRuntime.ledger.delete(mealID: mealID) }
     }
 
     private func mealType(for result: MealAnalysisResult) -> String {

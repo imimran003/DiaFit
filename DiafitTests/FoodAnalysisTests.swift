@@ -238,7 +238,7 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(whey.supplementProfile?.base, .milk)
         XCTAssertFalse(result.mealTotals.isEmpty)
         XCTAssertEqual(result.nutritionValidation?.isApproved, true)
-        XCTAssertEqual(result.visualRequest?.state, .deterministicFallback)
+        XCTAssertEqual(result.visualRequest?.state, .queued)
         XCTAssertNotNil(result.visualRequest?.cacheKey)
     }
 
@@ -451,6 +451,103 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(deletedCanApply)
     }
 
+    @MainActor
+    func testUnavailableVisualProviderProducesTruthfulRecoverableFallback() async throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "sprouts with 3 boiled eggs")
+        let draft = MealAnalysisDraft(result: result)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-visual-fallback-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = MealVisualGenerationService(
+            generator: UnavailableMealVisualGenerator(),
+            assets: MealVisualAssetStore(directory: directory, appliesFileProtection: false),
+            ledger: MealVisualRequestLedger()
+        )
+
+        await service.prepare(draft: draft, itemID: itemID, in: store, dayID: day.id)
+
+        guard case .mealAnalysis(let updated)? = store.day(id: day.id)?.messages.first?.kind else {
+            return XCTFail("Expected an updated review draft")
+        }
+        XCTAssertEqual(updated.result.visualRequest?.state, .deterministicFallback)
+        XCTAssertNil(updated.result.generatedVisualAsset)
+        XCTAssertTrue(updated.result.visualRequest?.failureReason?.contains("unavailable") == true)
+    }
+
+    @MainActor
+    func testGeneratedVisualAttachesToConfirmedMatchingMealAndPersistsReference() async throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "sprouts with 3 boiled eggs")
+        let draft = MealAnalysisDraft(result: result)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-visual-success-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = MealVisualGenerationService(
+            generator: TestMealVisualGenerator(mode: .success),
+            assets: MealVisualAssetStore(directory: directory, appliesFileProtection: false),
+            ledger: MealVisualRequestLedger()
+        )
+
+        // Confirmation can happen before a remote image returns. The service
+        // must then update the saved meal, never an obsolete draft object.
+        _ = DiaryMealLoggingService().confirm(draft, replacing: itemID, in: store, dayID: day.id)
+        await service.prepare(draft: draft, itemID: itemID, in: store, dayID: day.id)
+
+        let meal = try XCTUnwrap(store.day(id: day.id)?.meals.first)
+        XCTAssertEqual(meal.analysis?.visualRequest?.state, .ready)
+        XCTAssertEqual(meal.visualIdentity?.source, .generatedEditorial)
+        let fileName = try XCTUnwrap(meal.visualIdentity?.assetFileName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(fileName).path))
+        let restored = try JSONDecoder().decode(Meal.self, from: JSONEncoder().encode(meal))
+        XCTAssertEqual(restored.visualIdentity?.assetFileName, fileName)
+        XCTAssertEqual(restored.analysis?.generatedVisualAsset?.cacheKey, result.visualRequest?.cacheKey)
+    }
+
+    @MainActor
+    func testMismatchedVisualResponseIsRejectedWithoutWritingAnAsset() async throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "black coffee")
+        let draft = MealAnalysisDraft(result: result)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-visual-mismatch-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = MealVisualGenerationService(
+            generator: TestMealVisualGenerator(mode: .mismatchedMeal),
+            assets: MealVisualAssetStore(directory: directory, appliesFileProtection: false),
+            ledger: MealVisualRequestLedger()
+        )
+
+        await service.prepare(draft: draft, itemID: itemID, in: store, dayID: day.id)
+
+        guard case .mealAnalysis(let updated)? = store.day(id: day.id)?.messages.first?.kind else {
+            return XCTFail("Expected an updated review draft")
+        }
+        XCTAssertEqual(updated.result.visualRequest?.state, .failed)
+        XCTAssertNil(updated.result.generatedVisualAsset)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.path))
+    }
+
     func testAnalysisCodableRoundTripAndDailyTotalRecalculation() throws {
         let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "black coffee")
         let decoded = try JSONDecoder().decode(MealAnalysisResult.self, from: JSONEncoder().encode(result))
@@ -572,4 +669,24 @@ private struct AlwaysFailingDiaryPersistence: DiaryPersisting {
 
     func load() throws -> DiaryArchive? { nil }
     func save(_ archive: DiaryArchive) throws { throw Failure() }
+}
+
+private struct TestMealVisualGenerator: MealVisualGenerating {
+    enum Mode: Sendable { case success, mismatchedMeal }
+
+    let mode: Mode
+    let isConfigured = true
+
+    func generate(_ request: MealVisualRequest) async throws -> GeneratedMealVisual {
+        // Valid 1×1 transparent PNG. Core tests validate association and cache
+        // behavior without depending on a live image model.
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5WQAAAABJRU5ErkJggg==")!
+        return GeneratedMealVisual(
+            mealID: mode == .success ? request.mealID : UUID(),
+            requestID: request.requestID,
+            cacheKey: request.cacheKey,
+            mimeType: "image/png",
+            data: png
+        )
+    }
 }
