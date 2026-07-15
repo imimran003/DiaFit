@@ -89,11 +89,14 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
             }
         }
 
-        if let quantity, (!quantity.isFinite || quantity < 0.1 || quantity > 20) {
+        let maximumQuantity = servingUnit == .millilitres ? 20_000.0 : 20.0
+        if let quantity, (!quantity.isFinite || quantity < 0.1 || quantity > maximumQuantity) {
             issues.append(.init(
                 code: .unreasonableQuantity,
                 severity: .blocking,
-                message: "This serving quantity is outside the supported 0.1–20 range."
+                message: servingUnit == .millilitres
+                    ? "This volume is outside the supported 0.1–20,000 mL range."
+                    : "This serving quantity is outside the supported 0.1–20 range."
             ))
         }
 

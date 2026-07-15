@@ -122,6 +122,7 @@ struct AlternativeFoodMatch: Codable, Hashable, Sendable, Identifiable {
 }
 
 enum FoodCategory: String, Codable, CaseIterable, Hashable, Sendable {
+    case hydration
     case bread
     case rice
     case lentilOrLegume

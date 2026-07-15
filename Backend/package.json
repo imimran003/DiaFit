@@ -8,6 +8,7 @@
     "check": "node --check server.mjs",
     "check:meal-understanding": "node --check meal-understanding.mjs",
     "test": "node meal-understanding.test.mjs",
+    "evaluate:food-resolution": "node evaluate-food-resolution.mjs",
     "evaluate": "node evaluate.mjs"
   },
   "engines": {

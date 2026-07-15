@@ -13,6 +13,11 @@ assert.equal(genericWhey.detectedItems[0].requiresClarification, true);
 assert.equal(genericWhey.clarificationQuestions.length, 1);
 const waterWhey = await new MockMealParser().parse({ text: 'one scoop whey with water' });
 assert.equal(waterWhey.detectedItems[0].requiresClarification, false);
+assert.equal(waterWhey.detectedItems[1].canonicalSearchName, 'water');
+const kadhiChawal = await new MockMealParser().parse({ text: 'kadhi chaawal' });
+assert.deepEqual(kadhiChawal.detectedItems.map(item => item.canonicalSearchName), ['Indian yogurt and gram flour curry', 'cooked white rice']);
+const plainWater = await new MockMealParser().parse({ text: '500 ml water' });
+assert.equal(plainWater.detectedItems[0].quantity, 500);
 
 let request;
 let requestOptions;

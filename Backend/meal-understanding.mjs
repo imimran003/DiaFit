@@ -162,16 +162,28 @@ function defaultMockMealParser({ text }) {
   if (/sprouts?|sprouted\s+moong|mung/.test(normalized)) detectedItems.push(food('sprouts', /bowl/.test(normalized) ? 1 : 1, /bowl/.test(normalized) ? 'medium bowl' : 'serving', 'mung bean sprouts', 0.86));
   const eggMatch = normalized.match(/(?:\b(\d+)\b|\b(one|two|three|four)\b)?\s*(?:boiled\s+)?eggs?/);
   if (eggMatch) detectedItems.push(food('eggs', numberWord(eggMatch[1] ?? eggMatch[2]) || 1, 'whole', 'chicken egg', 0.96, /boiled/.test(normalized) ? 'boiled' : null));
+  if (/\b(?:kadhi|karhi|kadi)\b/.test(normalized)) detectedItems.push(food('kadhi', 1, 'medium bowl', 'Indian yogurt and gram flour curry', 0.84));
+  if (/\b(?:rice|chawal|chaawal)\b/.test(normalized)) detectedItems.push(food('rice', 1, 'cup', 'cooked white rice', 0.9));
+  if (/\b(?:chai|tea)\b/.test(normalized) && !/black\s+coffee/.test(normalized)) detectedItems.push(food('chai', 1, 'cup', 'chai', 0.78, null, [], true));
+  if (/\bparathas?\b/.test(normalized)) detectedItems.push(food('paratha', 1, 'piece', 'paratha', 0.8, null, [], true));
+  if (/\bbanana\b/.test(normalized)) detectedItems.push(food('banana', 1, 'piece', 'banana', 0.9));
+  if (/\boats?\b/.test(normalized)) detectedItems.push(food('oats', 1, 'cup', 'oats', 0.9));
   const wheyMentioned = /whey|protein\s+shake|protein\s+powder/.test(normalized);
   const explicitScoops = normalized.match(/(?:one|two|three|four|\d+(?:\.\d+)?)\s+scoops?/);
   if (wheyMentioned) {
     const needsClarification = !explicitScoops && !/\b(?:water|milk)\b/.test(normalized);
-    detectedItems.push(food('whey protein', numberWord(explicitScoops?.[0]?.split(/\s+/)[0]) || 1, 'scoop', 'whey protein powder', 0.89, null, [], needsClarification));
+    const whey = food('whey protein', numberWord(explicitScoops?.[0]?.split(/\s+/)[0]) || 1, 'scoop', 'whey protein powder', 0.89, null, [], needsClarification);
+    if (/\bwater\b/.test(normalized)) whey.additions.push('water');
+    if (/\bmilk\b/.test(normalized)) whey.additions.push('milk');
+    detectedItems.push(whey);
   }
   if (/black\s+coffee/.test(normalized)) detectedItems.push(food('black coffee', 1, 'cup', 'coffee', 0.94, null, ['milk', 'cream', 'sugar']));
+  if (/\b(?:water|paani|pani)\b/.test(normalized)) detectedItems.push(food('water', waterQuantity(normalized), /\b(?:ml|millilit(?:re|er)s?)\b/.test(normalized) ? 'ml' : 'glass', 'water', 0.99));
   const clarificationQuestions = detectedItems.some(item => item.requiresClarification && item.canonicalSearchName.startsWith('whey protein'))
     ? ['How many scoops, and was it mixed with water or milk?']
-    : [];
+    : detectedItems.some(item => item.requiresClarification && item.canonicalSearchName === 'chai')
+      ? ['Was the chai sweetened, and how much milk was used?']
+      : [];
   return { detectedItems, unresolvedItems: detectedItems.length ? [] : [String(text)], mealDescription: String(text), clarificationQuestions, confidence: detectedItems.length ? 0.82 : 0.2 };
 }
 
@@ -180,3 +192,11 @@ function food(originalText, quantity, unit, canonicalSearchName, confidence, pre
 }
 
 function numberWord(value) { return ({ one: 1, two: 2, three: 3, four: 4 }[value] ?? Number(value)); }
+
+function waterQuantity(normalized) {
+  const millilitres = normalized.match(/(\d+(?:\.\d+)?)\s*(?:ml|millilit(?:re|er)s?)/);
+  if (millilitres) return Number(millilitres[1]);
+  const litres = normalized.match(/(\d+(?:\.\d+)?)\s*(?:litre|liter)s?/);
+  if (litres) return Number(litres[1]) * 1000;
+  return 1;
+}

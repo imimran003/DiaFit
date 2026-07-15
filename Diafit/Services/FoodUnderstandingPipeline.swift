@@ -48,8 +48,11 @@ struct FoodUnderstandingPipeline: Sendable {
 
     func parse(_ rawInput: String) -> FoodUnderstandingTrace {
         let normalized = FoodInputNormalizer.normalize(rawInput)
-        let candidates = suppressShakeBaseAsStandaloneFood(
-            lexiconMatches(in: normalized.tokens),
+        let candidates = suppressRecipeVariantComponents(
+            suppressShakeBaseAsStandaloneFood(
+                lexiconMatches(in: normalized.tokens),
+                tokens: normalized.tokens
+            ),
             tokens: normalized.tokens
         )
         let components = candidates.enumerated().map { index, candidate in
@@ -205,6 +208,18 @@ struct FoodUnderstandingPipeline: Sendable {
         guard hasSupplement, tokens.contains("milk") else { return candidates }
         return candidates.filter { $0.canonicalFoodID != "milk" }
     }
+
+    /// Pakora is a preparation variant of kadhi in phrases such as
+    /// `pakora kadhi chawal`; it should not become a duplicated standalone
+    /// meal component. The ingredient is retained as an assumption on kadhi
+    /// and can be refined by the clarification service.
+    private func suppressRecipeVariantComponents(
+        _ candidates: [FoodEntityCandidate],
+        tokens: [String]
+    ) -> [FoodEntityCandidate] {
+        guard tokens.contains("kadhi") || tokens.contains("karhi") || tokens.contains("kadi") else { return candidates }
+        return candidates.filter { $0.canonicalFoodID != "pakora" }
+    }
 }
 
 private struct NormalizedFoodInput: Sendable {
@@ -264,7 +279,11 @@ private enum QuantityExtractor {
         "tbsp": .tablespoon,
         "teaspoon": .teaspoon, "teaspoons": .teaspoon,
         "tsp": .teaspoon,
-        "gram": .grams, "grams": .grams, "g": .grams
+        "gram": .grams, "grams": .grams, "g": .grams,
+        "ml": .millilitres, "millilitre": .millilitres, "millilitres": .millilitres,
+        "milliliter": .millilitres, "milliliters": .millilitres,
+        "litre": .millilitres, "litres": .millilitres,
+        "liter": .millilitres, "liters": .millilitres
     ]
 
     static func extract(
@@ -299,10 +318,17 @@ private enum QuantityExtractor {
         guard !context.isEmpty else { return nil }
         if let unitIndex = context.lastIndex(where: { unitWords[$0] != nil }) {
             let precedingToken = unitIndex > 0 ? context[unitIndex - 1] : context[unitIndex]
-            let quantity = number(in: Array(context[..<unitIndex])) ?? impliedNumber(precedingToken)
+            let unitToken = context[unitIndex]
+            let isVolume = ["ml", "millilitre", "millilitres", "milliliter", "milliliters", "litre", "litres", "liter", "liters"].contains(unitToken)
+            let quantity = (isVolume ? Double(precedingToken) : nil)
+                ?? number(in: Array(context[..<unitIndex]))
+                ?? impliedNumber(precedingToken)
             if let quantity {
+                let normalizedQuantity = ["litre", "litres", "liter", "liters"].contains(unitToken)
+                    ? quantity * 1_000
+                    : quantity
                 return ParsedQuantity(
-                    quantity: quantity,
+                    quantity: normalizedQuantity,
                     unit: unitWords[context[unitIndex]] ?? defaultUnit,
                     wasExplicit: true
                 )

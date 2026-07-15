@@ -50,3 +50,19 @@ provider hierarchy -> recipe calculation (when needed) -> validation -> review
 The in-memory repositories are deterministic development implementations. A
 production account repository should persist the same records behind the
 protocol and retain only user-confirmed preferences.
+
+## Deterministic routing additions
+
+`DefaultFoodResolutionRouter` is the application-facing seam for text food
+resolution. It checks confirmed memory, exact/local span matches, alias and
+transliteration matches, conservative fuzzy matches, then the backend
+`FoodUnderstandingService`. Water and volume expressions are handled by the
+catalog fast path without an AI request. The router returns separate
+interpretation and nutrition routes, so diagnostics can distinguish an AI
+interpretation from a curated nutrition fallback.
+
+The local catalog now includes canonical hydration and transliterated rice and
+kadhi records. `kadhi chaawal` therefore remains two components, while
+`500 ml water` remains one hydration component with a 500 mL serving and zero
+calories. Confirming a draft writes canonical identity, serving, preparation,
+and product information to the injected user-food memory repository.

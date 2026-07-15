@@ -8,6 +8,8 @@ struct AppDependencies: Sendable {
     /// Food understanding is optional offline; production injects the
     /// authenticated backend implementation without changing SwiftUI views.
     let foodUnderstanding: (any FoodUnderstandingService)?
+    let foodResolutionRouter: any FoodResolutionRouter
+    let textMealAnalysis: HybridMealAnalysisCoordinator
     let normalisation: any FoodNormalisationService
     let nutritionResolution: any NutritionResolutionService
     let recipeCalculation: any RecipeCalculationService
@@ -19,6 +21,8 @@ struct AppDependencies: Sendable {
         photoAnalysis: PhotoAnalysisOrchestrator(),
         mealVisuals: .local,
         foodUnderstanding: nil,
+        foodResolutionRouter: DefaultFoodResolutionRouter(),
+        textMealAnalysis: HybridMealAnalysisCoordinator(),
         normalisation: HybridFoodNormalisationService(),
         nutritionResolution: HybridNutritionResolutionService(),
         recipeCalculation: CatalogRecipeCalculationService(),

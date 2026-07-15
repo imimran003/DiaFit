@@ -154,10 +154,16 @@ struct HybridFoodNormalisationService: FoodNormalisationService, Sendable {
 
     func matches(in description: String) -> [IndianFoodDefinition] {
         var result: [IndianFoodDefinition] = []
-        for phrase in description.split(whereSeparator: { ",;+".contains($0) }) {
+        let separated = [" with ", " and ", " plus ", " along with ", " served with ", " together with "]
+            .reduce(description) { partial, connector in
+                partial.replacingOccurrences(of: connector, with: ",", options: [.caseInsensitive, .diacriticInsensitive])
+            }
+        for phrase in separated.split(whereSeparator: { ",;+".contains($0) }) {
             if let food = normalise(String(phrase)), !result.contains(where: { $0.id == food.id }) { result.append(food) }
         }
-        return result.isEmpty ? catalog.matches(in: description) : result
+        let catalogMatches = catalog.matches(in: description)
+        for food in catalogMatches where !result.contains(where: { $0.id == food.id }) { result.append(food) }
+        return result
     }
 
     private func tokens(_ value: String) -> [String] {
@@ -414,5 +420,336 @@ struct DefaultMealClarificationService: MealClarificationService, Sendable {
         }
         if matches.count < parse.detectedItems.count { questions.append("What food or packaged product should I use for the unmatched item?") }
         return Array(NSOrderedSet(array: questions)) as? [String] ?? questions
+    }
+}
+
+// MARK: - Resolution routing
+
+enum FoodInterpretationRoute: String, Codable, Hashable, Sendable {
+    case userSavedFood
+    case userSavedRecipe
+    case exactLocal
+    case localAlias
+    case localTransliteration
+    case localFuzzy
+    case openAI
+    case clarificationRequired
+    case unavailable
+}
+
+enum FoodNutritionRoute: String, Codable, Hashable, Sendable {
+    case packagedLabel
+    case userSavedFood
+    case verifiedProvider
+    case curatedLocal
+    case recipeCalculated
+    case modelEstimate
+    case clarificationRequired
+    case unavailable
+}
+
+struct FoodResolutionItem: Sendable {
+    let parsedItem: ParsedFoodItem
+    let canonical: CanonicalFoodMatch?
+    let nutrition: NutritionResolution
+    let interpretationRoute: FoodInterpretationRoute
+    let nutritionRoute: FoodNutritionRoute
+}
+
+struct FoodResolutionResult: Sendable {
+    let originalInput: String
+    let normalizedInput: String
+    let items: [FoodResolutionItem]
+    let unresolvedTerms: [String]
+    let clarificationQuestions: [String]
+    let overallConfidence: Double
+
+    var hasUsableNutrition: Bool { !items.isEmpty && items.allSatisfy { !$0.nutrition.lookup.values.isEmpty } }
+    var requiresClarification: Bool { !clarificationQuestions.isEmpty || !unresolvedTerms.isEmpty || !hasUsableNutrition }
+}
+
+protocol FoodResolutionRouter: Sendable {
+    func resolve(text: String) async -> FoodResolutionResult
+}
+
+/// Routes deterministic, user-confirmed and catalog matches before falling
+/// through to structured backend interpretation. The router is deliberately
+/// independent of SwiftUI and can be exercised with mock providers.
+struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
+    let catalog: IndianFoodCatalogService
+    let normalisation: HybridFoodNormalisationService
+    let understanding: (any FoodUnderstandingService)?
+    let nutrition: any NutritionResolutionService
+    let clarification: any MealClarificationService
+    let memory: (any UserFoodMemoryRepository)?
+
+    init(catalog: IndianFoodCatalogService = IndianFoodCatalogService(),
+         understanding: (any FoodUnderstandingService)? = nil,
+         nutrition: any NutritionResolutionService = HybridNutritionResolutionService(),
+         clarification: any MealClarificationService = DefaultMealClarificationService(),
+         memory: (any UserFoodMemoryRepository)? = nil) {
+        self.catalog = catalog
+        self.normalisation = HybridFoodNormalisationService(catalog: catalog)
+        self.understanding = understanding
+        self.nutrition = nutrition
+        self.clarification = clarification
+        self.memory = memory
+    }
+
+    func resolve(text: String) async -> FoodResolutionResult {
+        let normalized = normalize(text)
+        guard !normalized.isEmpty else {
+            return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [], clarificationQuestions: ["What did you eat or drink?"], overallConfidence: 0)
+        }
+
+        if let memory, let remembered = await memory.rankedMatches(for: normalized).first,
+           let food = catalog.food(canonicalID: remembered.canonicalFoodID) {
+            let parsed = ParsedFoodItem(originalText: text, canonicalSearchName: food.englishName,
+                                        regionalName: remembered.alias, quantity: remembered.servingGrams.map { _ in 1 },
+                                        unit: remembered.servingUnit ?? food.standardServing?.unit.rawValue ?? "serving",
+                                        estimatedGrams: remembered.servingGrams, preparationMethod: remembered.preparation)
+            let match = CanonicalFoodMatch(food: food, matchedAlias: remembered.alias, confidence: 0.99, source: "user-confirmed-memory")
+            let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
+            return result(text: text, normalized: normalized, items: [resolvedItem(parsed, match, nutrition, .userSavedFood)], unresolved: [], extraQuestions: [])
+        }
+
+        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(text)
+        if !trace.components.isEmpty, trace.components.allSatisfy({ $0.confidenceScore >= 0.8 }) {
+            let resolved = await resolveLocal(trace.components)
+            let questions = localQuestions(for: resolved, input: normalized)
+            return result(text: text, normalized: normalized, items: resolved, unresolved: [], extraQuestions: questions)
+        }
+
+        // A broad alias/fuzzy pass catches transliterations and phrases that
+        // the span parser cannot safely attach quantities to. It is only used
+        // when every selected match clears the conservative 0.78 threshold.
+        let fuzzyMatches = normalisation.matches(in: text)
+        if !fuzzyMatches.isEmpty {
+            let resolved = await resolveMatches(fuzzyMatches, input: text, route: .localFuzzy)
+            if resolved.allSatisfy({ ($0.canonical?.confidence ?? 0) >= 0.78 }) {
+                return result(text: text, normalized: normalized, items: resolved, unresolved: [], extraQuestions: localQuestions(for: resolved, input: normalized))
+            }
+        }
+
+        if let understanding {
+            do {
+                let parse = try await understanding.parse(text: text, image: nil)
+                let resolved = await resolveAI(parse)
+                let matches = resolved.compactMap(\.canonical)
+                let questions = clarification.questions(for: parse, matches: matches) + localQuestions(for: resolved, input: normalized)
+                let unresolved = parse.unresolvedItems + resolved.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
+                return result(text: text, normalized: normalized, items: resolved, unresolved: Array(Set(unresolved)), extraQuestions: questions)
+            } catch {
+                FoodLoggingDiagnostics.record("resolution.ai", fields: ["status": "unavailable", "reason": "provider-error"])
+            }
+        }
+
+        return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [text], clarificationQuestions: ["I couldn't identify that safely. What food or product should I use?"], overallConfidence: 0.1)
+    }
+
+    private func resolveLocal(_ components: [ParsedFoodComponent]) async -> [FoodResolutionItem] {
+        await withTaskGroup(of: FoodResolutionItem?.self, returning: [FoodResolutionItem].self) { group in
+            for component in components {
+                group.addTask {
+                    let parsed = ParsedFoodItem(originalText: component.matchedAlias,
+                                                canonicalSearchName: component.food.englishName,
+                                                regionalName: component.food.regionalNames.first,
+                                                quantity: component.quantity,
+                                                unit: component.servingUnit.rawValue,
+                                                estimatedGrams: nil,
+                                                preparationMethod: component.preparationMethod,
+                                                additions: component.modifiers)
+                    let match = CanonicalFoodMatch(food: component.food, matchedAlias: component.matchedAlias,
+                                                   confidence: component.confidenceScore, source: "local-canonical-catalog")
+                    let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
+                    return self.resolvedItem(parsed, match, nutrition, self.route(for: component))
+                }
+            }
+            var output: [FoodResolutionItem] = []
+            for await item in group { if let item { output.append(item) } }
+            return output
+        }
+    }
+
+    private func resolveMatches(_ foods: [IndianFoodDefinition], input: String, route: FoodInterpretationRoute) async -> [FoodResolutionItem] {
+        await withTaskGroup(of: FoodResolutionItem?.self, returning: [FoodResolutionItem].self) { group in
+            for food in foods {
+                group.addTask {
+                    let parsed = ParsedFoodItem(originalText: food.canonicalName, canonicalSearchName: food.englishName,
+                                                quantity: food.standardServing?.quantity ?? 1,
+                                                unit: food.standardServing?.unit.rawValue ?? "serving")
+                    let match = CanonicalFoodMatch(food: food, matchedAlias: food.canonicalName, confidence: 0.8, source: "local-fuzzy-catalog")
+                    let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
+                    return self.resolvedItem(parsed, match, nutrition, route)
+                }
+            }
+            var output: [FoodResolutionItem] = []
+            for await item in group { if let item { output.append(item) } }
+            return output
+        }
+    }
+
+    private func resolveAI(_ parse: MealParseResult) async -> [FoodResolutionItem] {
+        await withTaskGroup(of: FoodResolutionItem?.self, returning: [FoodResolutionItem].self) { group in
+            for parsed in parse.detectedItems {
+                group.addTask {
+                    let match = await self.normalisation.match(parsed, memory: self.memory)
+                    let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
+                    return self.resolvedItem(parsed, match, nutrition, .openAI)
+                }
+            }
+            var output: [FoodResolutionItem] = []
+            for await item in group { if let item { output.append(item) } }
+            return output
+        }
+    }
+
+    private func resolvedItem(_ parsed: ParsedFoodItem, _ canonical: CanonicalFoodMatch?, _ nutrition: NutritionResolution, _ route: FoodInterpretationRoute) -> FoodResolutionItem {
+        let nutritionRoute: FoodNutritionRoute
+        switch nutrition.lookup.provenance.kind {
+        case .packagedLabel: nutritionRoute = .packagedLabel
+        case .verifiedDatabase: nutritionRoute = .verifiedProvider
+        case .curatedRecipeEstimate, .userCreated: nutritionRoute = .curatedLocal
+        case .modelFallback: nutritionRoute = .modelEstimate
+        case .unavailable: nutritionRoute = .unavailable
+        }
+        return FoodResolutionItem(parsedItem: parsed, canonical: canonical, nutrition: nutrition,
+                                  interpretationRoute: route,
+                                  nutritionRoute: nutrition.verified ? nutritionRoute : (nutrition.lookup.values.isEmpty ? .clarificationRequired : nutritionRoute))
+    }
+
+    private func route(for component: ParsedFoodComponent) -> FoodInterpretationRoute {
+        let query = normalize(component.matchedAlias)
+        let food = component.food
+        if normalize(food.canonicalName) == query || normalize(food.englishName) == query { return .exactLocal }
+        if food.transliterations.contains(where: { normalize($0) == query }) { return .localTransliteration }
+        return .localAlias
+    }
+
+    private func localQuestions(for items: [FoodResolutionItem], input: String) -> [String] {
+        var questions: [String] = []
+        if items.contains(where: { $0.canonical?.food.canonicalId == "chai" }) { questions.append("Was the chai sweetened, and approximately how much milk was used?") }
+        if items.contains(where: { $0.canonical?.food.canonicalId == "tea" }) { questions.append("Was the tea plain, or did it include milk or sugar?") }
+        if items.contains(where: { $0.canonical?.food.canonicalId == "paratha" }) { questions.append("Was the paratha plain, stuffed or buttered?") }
+        if items.contains(where: { $0.canonical?.food.canonicalId == "kadhi" }) { questions.append("Was it plain kadhi or kadhi with pakoras?") }
+        if items.contains(where: { $0.parsedItem.canonicalSearchName.localizedCaseInsensitiveContains("whey") && !$0.parsedItem.additions.contains(where: { ["water", "milk"].contains($0) }) }) { questions.append("How many scoops, and was it mixed with water or milk?") }
+        return Array(NSOrderedSet(array: questions)) as? [String] ?? questions
+    }
+
+    private func result(text: String, normalized: String, items: [FoodResolutionItem], unresolved: [String], extraQuestions: [String]) -> FoodResolutionResult {
+        let reviewAssumptions = items.reduce(into: [String]()) { partial, item in
+            partial.append(contentsOf: item.nutrition.assumptions.filter { $0.localizedCaseInsensitiveContains("review") })
+        }
+        let questions = Array(NSOrderedSet(array: extraQuestions + reviewAssumptions)) as? [String] ?? extraQuestions
+        let confidence = items.map { $0.parsedItem.confidence }.min() ?? 0
+        FoodLoggingDiagnostics.record("resolution.route", fields: [
+            "inputFingerprint": FoodLoggingDiagnostics.fingerprint(text),
+            "interpretation": items.map { $0.interpretationRoute.rawValue }.joined(separator: ","),
+            "nutrition": items.map { $0.nutritionRoute.rawValue }.joined(separator: ","),
+            "unresolvedCount": String(unresolved.count),
+            "clarificationCount": String(questions.count)
+        ])
+        return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: items,
+                                    unresolvedTerms: unresolved, clarificationQuestions: questions,
+                                    overallConfidence: confidence)
+    }
+
+    private func normalize(_ text: String) -> String {
+        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: " ")
+    }
+}
+
+/// Converts the provider-independent resolution model into the existing
+/// editable diary draft. This keeps the UI model stable while allowing the
+/// router to evolve independently of SwiftUI.
+struct HybridMealAnalysisCoordinator: Sendable {
+    let router: any FoodResolutionRouter
+
+    init(router: any FoodResolutionRouter = DefaultFoodResolutionRouter()) {
+        self.router = router
+    }
+
+    func analyse(text: String, imageReference: MealImageReference = .transient()) async -> MealAnalysisResult {
+        let resolution = await router.resolve(text: text)
+        let items = resolution.items.compactMap(makeDetectedItem)
+        let totals = NutritionValues.total(of: items.map(\.nutrition))
+        let validation = DefaultNutritionValidationService().validate(rawValues: totals)
+        let questions = resolution.clarificationQuestions.map {
+            ClarificationQuestion(id: UUID(), relatedFoodItemId: nil, question: $0,
+                                  answerType: .freeText, options: [], impactLevel: .high, answer: nil)
+        }
+        let analysisID = UUID()
+        let visualRequest = MealVisualRequestBuilder().make(mealID: analysisID, items: items, clarificationQuestions: questions)
+        let provenance = items.first?.nutritionProvenance ?? .unavailable
+        var warnings = resolution.unresolvedTerms.isEmpty ? ["Review the editable serving before saving."] : ["Some terms need confirmation before they can be logged."]
+        if items.contains(where: { $0.nutrition.isEmpty }) { warnings.append("Nutrition unavailable. Confirm the food or enter the nutrition manually.") }
+        if !validation.isApproved { warnings.append(contentsOf: validation.issues.map(\.message)) }
+        return MealAnalysisResult(
+            analysisId: analysisID,
+            imageReference: imageReference,
+            imageType: .noImage,
+            detectedItems: items,
+            mealTotals: validation.safeValues ?? .unavailable,
+            overallConfidence: items.map(\.confidence).min(by: confidenceOrder) ?? .low,
+            assumptions: items.flatMap(\.assumptions),
+            clarificationQuestions: questions,
+            warnings: warnings,
+            createdAt: .now,
+            recognitionModelVersion: items.contains(where: { $0.matchedAlias == nil }) ? "local-router" : nil,
+            nutritionDatabaseVersion: provenance.dataVersion,
+            glycaemicDatabaseVersion: nil,
+            nutritionProvenance: provenance,
+            nutritionValidation: validation,
+            visualRequest: visualRequest
+        )
+    }
+
+    private func makeDetectedItem(_ resolved: FoodResolutionItem) -> DetectedFoodItem? {
+        guard let canonical = resolved.canonical else { return nil }
+        let parsed = resolved.parsedItem
+        let unit = servingUnit(for: parsed.unit, food: canonical.food)
+        let quantity = parsed.quantity ?? 1
+        let values = resolved.nutrition.lookup.values
+        return DetectedFoodItem(
+            id: UUID(), canonicalFoodId: canonical.food.canonicalId,
+            displayName: canonical.food.canonicalName,
+            regionalName: parsed.regionalName ?? canonical.food.regionalNames.first,
+            category: canonical.food.category,
+            confidence: parsed.confidence >= 0.9 ? .high : parsed.confidence >= 0.75 ? .medium : .low,
+            alternatives: [], quantity: quantity, servingUnit: unit,
+            estimatedWeightGrams: resolved.nutrition.estimatedGrams,
+            visibleIngredients: [], inferredIngredients: canonical.food.commonIngredients,
+            possibleIngredients: [], preparationMethod: parsed.preparationMethod,
+            nutrition: values, glycaemicInformation: .unavailable,
+            assumptions: resolved.nutrition.assumptions + ["Serving is editable before confirmation."],
+            warnings: values.isEmpty ? ["Nutrition unavailable. Confirm the food or enter the nutrition manually."] : [],
+            boundingRegion: nil, nutritionProvenance: resolved.nutrition.lookup.provenance,
+            rawNutrition: values, nutritionValidation: nil,
+            matchedAlias: resolved.interpretationRoute == .openAI ? nil : resolved.parsedItem.originalText,
+            confidenceScore: parsed.confidence, modifiers: parsed.additions
+        )
+    }
+
+    private func servingUnit(for raw: String?, food: IndianFoodDefinition) -> ServingUnit {
+        guard let raw else { return food.standardServing?.unit ?? .serving }
+        if let unit = ServingUnit(rawValue: raw) { return unit }
+        switch raw.lowercased() {
+        case "whole", "whole egg", "egg", "eggs": return .wholeEgg
+        case "medium bowl", "bowl": return .mediumBowl
+        case "small bowl": return .smallBowl
+        case "large bowl": return .largeBowl
+        case "ml", "millilitre", "millilitres", "milliliter", "milliliters": return .millilitres
+        case "cup", "cups": return .cup
+        case "glass", "glasses": return .glass
+        case "piece", "pieces": return .piece
+        case "scoop", "scoops": return .scoop
+        default: return food.standardServing?.unit ?? .serving
+        }
+    }
+
+    private func confidenceOrder(_ lhs: ConfidenceLevel, _ rhs: ConfidenceLevel) -> Bool {
+        let rank: [ConfidenceLevel: Int] = [.high: 4, .medium: 3, .low: 2, .unknown: 1]
+        return rank[lhs, default: 0] < rank[rhs, default: 0]
     }
 }

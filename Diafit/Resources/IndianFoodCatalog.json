@@ -29,7 +29,7 @@
     {
       "category": "rice", "dietaryClassification": "vegan", "allergens": [], "methods": ["boiled, steamed, or seasoned"],
       "foods": [
-        {"id":"steamed-rice","name":"Steamed rice","aliases":["steamed rice","white rice","rice"],"ingredients":["rice"],"nutrition":{"caloriesKcal":130,"proteinGrams":2.4,"carbohydrateGrams":28,"fatGrams":0.3,"fibreGrams":0.4},"serving":{"quantity":1,"unit":"cup","grams":160}},
+        {"id":"steamed-rice","name":"Steamed rice","aliases":["steamed rice","white rice","rice","chawal","chaawal"],"regionalNames":["chawal","chaawal"],"transliterations":["chawal","chaawal"],"ingredients":["rice"],"nutrition":{"caloriesKcal":130,"proteinGrams":2.4,"carbohydrateGrams":28,"fatGrams":0.3,"fibreGrams":0.4},"serving":{"quantity":1,"unit":"cup","grams":160}},
         {"id":"basmati-rice","name":"Basmati rice","aliases":["basmati rice"],"ingredients":["basmati rice"],"serving":{"quantity":1,"unit":"cup","grams":160}},
         {"id":"jeera-rice","name":"Jeera rice","aliases":["jeera rice","cumin rice"],"ingredients":["rice","cumin","oil"],"serving":{"quantity":1,"unit":"cup","grams":180}},
         {"id":"pulao","name":"Pulao","aliases":["pulao","pilaf"],"ingredients":["rice","oil","spices"],"serving":{"quantity":1,"unit":"cup","grams":180}},
@@ -61,7 +61,7 @@
         {"id":"chole","name":"Chole","aliases":["chole","chana masala","chickpea curry"],"ingredients":["chickpeas","tomato","spices"],"serving":{"quantity":1,"unit":"katori","grams":170}},
         {"id":"sambar","name":"Sambar","aliases":["sambar","sambhar"],"ingredients":["toor dal","vegetables","tamarind"],"nutrition":{"caloriesKcal":55,"proteinGrams":2.5,"carbohydrateGrams":8,"fatGrams":1.5,"fibreGrams":2.2},"serving":{"quantity":1,"unit":"katori","grams":180}},
         {"id":"rasam","name":"Rasam","aliases":["rasam"],"ingredients":["tamarind","spices"],"serving":{"quantity":1,"unit":"katori","grams":150}},
-        {"id":"kadhi","name":"Kadhi","aliases":["kadhi"],"ingredients":["yogurt","gram flour"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"kadhi","name":"Kadhi","aliases":["kadhi","karhi","kadi","besan kadhi","yogurt curry"],"ingredients":["yogurt","gram flour"],"methods":["plain kadhi; pakora variation needs confirmation"],"nutrition":{"caloriesKcal":120,"proteinGrams":5,"carbohydrateGrams":12,"fatGrams":5,"fibreGrams":1},"serving":{"quantity":1,"unit":"katori","grams":180},"dataSource":"Bundled plain kadhi reference; pakora variation requires confirmation","dataVersion":"2026.08","confidence":"low"},
         {"id":"sprouts-curry","name":"Sprouts curry","aliases":["sprouts curry"],"ingredients":["sprouts","spices"],"serving":{"quantity":1,"unit":"katori","grams":160}}
       ]
     },
@@ -212,6 +212,12 @@
         {"id":"cappuccino","name":"Cappuccino","aliases":["cappuccino"],"ingredients":["espresso","milk foam"],"methods":["unsweetened cappuccino assumed"],"nutrition":{"caloriesKcal":18,"proteinGrams":1.2,"carbohydrateGrams":1.8,"fatGrams":0.8},"serving":{"quantity":1,"unit":"cup","grams":180},"confidence":"low"},
         {"id":"buttermilk","name":"Buttermilk","aliases":["buttermilk","chaas"],"ingredients":["yogurt","water"],"nutrition":{"caloriesKcal":16,"proteinGrams":1.6,"carbohydrateGrams":2.3,"fatGrams":0.6},"serving":{"quantity":1,"unit":"glass","grams":250},"confidence":"low"},
         {"id":"sugarcane-juice","name":"Sugarcane juice","aliases":["sugarcane juice","ganne ka juice"],"ingredients":["sugarcane"],"serving":{"quantity":1,"unit":"glass","grams":250}}
+      ]
+    },
+    {
+      "category": "hydration", "dietaryClassification": "vegan", "allergens": [], "methods": ["still, sparkling, warm, cold, filtered, or bottled"],
+      "foods": [
+        {"id":"water","name":"Water","englishName":"Plain water","aliases":["water","plain water","warm water","cold water","sparkling water","mineral water","filtered water","bottled water","paani","pani"],"regionalNames":["paani","pani"],"transliterations":["paani","pani"],"ingredients":["water"],"nutrition":{"caloriesKcal":0,"proteinGrams":0,"carbohydrateGrams":0,"fatGrams":0,"fibreGrams":0},"serving":{"quantity":250,"unit":"millilitres","grams":250},"dataSource":"Canonical hydration record; nutritionally negligible","dataVersion":"2026.08","confidence":"high"}
       ]
     },
     {

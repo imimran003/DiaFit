@@ -184,7 +184,9 @@ struct DayThreadView: View {
                     ),
                     to: dayID
                 )
-            case .review(let review):
+            case .review(_):
+                let resolvedResult = await dependencies.textMealAnalysis.analyse(text: note)
+                let review = MealAnalysisDraft(result: resolvedResult)
                 let reviewItemID = UUID()
                 store.append(ThreadItem(id: reviewItemID, kind: .mealAnalysis(review)), to: dayID)
                 Task {
@@ -238,7 +240,8 @@ struct DayThreadView: View {
     }
 
     private func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID) {
-        let meal = DiaryMealLoggingService().confirm(draft, replacing: itemID, in: store, dayID: dayID)
+        let meal = DiaryMealLoggingService(userFoodMemory: dependencies.userFoodMemory)
+            .confirm(draft, replacing: itemID, in: store, dayID: dayID)
         store.append(
             ThreadItem(
                 id: UUID(),

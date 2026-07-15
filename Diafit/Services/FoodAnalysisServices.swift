@@ -681,10 +681,20 @@ actor InMemoryMealAnalysisRepository: MealAnalysisRepository {
 }
 
 struct DiaryMealLoggingService: MealLoggingService {
+    let userFoodMemory: (any UserFoodMemoryRepository)?
+
+    init(userFoodMemory: (any UserFoodMemoryRepository)? = nil) {
+        self.userFoodMemory = userFoodMemory
+    }
+
     @MainActor
     func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID, in store: DiaryStore, dayID: Day.ID) -> Meal {
         let result = draft.result
-        let title = result.detectedItems.map(\.displayName).joined(separator: " + ").ifEmpty("Meal draft")
+        let title = result.detectedItems
+            .filter { $0.category != .hydration }
+            .map(\.displayName)
+            .joined(separator: " + ")
+            .ifEmpty("Meal draft")
         // The draft analysis ID is the stable meal identity for any visual work
         // started before confirmation. This makes a late provider response
         // impossible to attach to another saved meal.
@@ -710,6 +720,21 @@ struct DiaryMealLoggingService: MealLoggingService {
         if let request = result.visualRequest {
             Task {
                 await MealVisualRuntime.ledger.begin(mealID: mealID, cacheKey: request.cacheKey, requestID: request.requestID)
+            }
+        }
+        if let userFoodMemory {
+            for item in result.detectedItems {
+                let memory = UserFoodMemory(
+                    id: UUID(),
+                    alias: item.matchedAlias ?? item.displayName,
+                    canonicalFoodID: item.canonicalFoodId,
+                    servingGrams: item.estimatedWeightGrams,
+                    servingUnit: item.servingUnit.rawValue,
+                    preparation: item.preparationMethod,
+                    productID: item.supplementProfile?.barcode,
+                    lastConfirmedAt: .now
+                )
+                Task { await userFoodMemory.save(memory) }
             }
         }
         return meal

@@ -354,6 +354,66 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems[0].nutritionProvenance.dataSource.contains("USDA FoodData Central"))
     }
 
+    func testWaterUsesDeterministicHydrationFastPath() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "500 ml water")
+        let water = try XCTUnwrap(result.detectedItems.first)
+
+        XCTAssertEqual(water.canonicalFoodId, "water")
+        XCTAssertEqual(water.quantity, 500, accuracy: 0.001)
+        XCTAssertEqual(water.servingUnit, .millilitres)
+        XCTAssertEqual(water.nutrition.caloriesKcal ?? -1, 0, accuracy: 0.001)
+        XCTAssertEqual(water.nutrition.carbohydrateGrams ?? -1, 0, accuracy: 0.001)
+        XCTAssertTrue(result.clarificationQuestions.isEmpty)
+        XCTAssertTrue(result.nutritionValidation?.isApproved == true)
+    }
+
+    func testKadhiChawalDecomposesTransliteratedCompoundMeal() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "I had kadhi chaawal")
+        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["kadhi", "steamed-rice"]))
+        XCTAssertFalse(result.detectedItems.contains { $0.canonicalFoodId == "kadhi" && $0.nutrition.isEmpty })
+        XCTAssertFalse(result.detectedItems.contains { $0.canonicalFoodId == "steamed-rice" && $0.nutrition.isEmpty })
+        XCTAssertFalse(result.mealTotals.isEmpty)
+    }
+
+    func testHydrationAliasesAndVolumesRemainDeterministic() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        for input in ["water", "paani", "one glass water", "2 litres water"] {
+            let result = engine.makeAnalysis(description: input)
+            let water = try XCTUnwrap(result.detectedItems.first, input)
+            XCTAssertEqual(water.canonicalFoodId, "water", input)
+            XCTAssertFalse(water.nutrition.isEmpty, input)
+            XCTAssertTrue(result.nutritionValidation?.isApproved == true, input)
+        }
+        XCTAssertEqual(engine.makeAnalysis(description: "2 litres water").detectedItems.first?.quantity, 2_000)
+    }
+
+    func testFoodResolutionRouterUsesLocalCanonicalRouteBeforeAI() async throws {
+        let router = DefaultFoodResolutionRouter(catalog: catalog)
+        let result = await router.resolve(text: "kadhi chaawal")
+
+        XCTAssertEqual(Set(result.items.compactMap { $0.canonical?.food.canonicalId }), Set(["kadhi", "steamed-rice"]))
+        XCTAssertTrue(result.items.allSatisfy { $0.interpretationRoute == .exactLocal || $0.interpretationRoute == .localAlias || $0.interpretationRoute == .localTransliteration })
+        XCTAssertFalse(result.unresolvedTerms.isEmpty == false && result.items.isEmpty)
+        XCTAssertFalse(result.items.contains { $0.nutrition.lookup.values.isEmpty })
+    }
+
+    func testFoodResolutionRouterUsesStructuredAIOnlyAfterLocalMiss() async throws {
+        let parsed = MealParseResult(
+            detectedItems: [ParsedFoodItem(originalText: "dragon fruit", canonicalSearchName: "banana", quantity: 1, unit: "piece", confidence: 0.88)],
+            unresolvedItems: [], mealDescription: "dragon fruit", clarificationQuestions: [], confidence: 0.88
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: StubMealUnderstanding(result: parsed),
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await router.resolve(text: "dragon fruit")
+
+        XCTAssertEqual(result.items.first?.interpretationRoute, .openAI)
+        XCTAssertEqual(result.items.first?.canonical?.food.canonicalId, "banana")
+        XCTAssertFalse(result.items.first?.nutrition.lookup.values.isEmpty ?? true)
+    }
+
     func testChaiAndParathaStaysComponentBasedUntilVariationsAreConfirmed() {
         let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "I had chai and paratha")
         let visual = MealVisualIdentityFactory().make(mealID: UUID(), result: result, artwork: .neutral)
@@ -695,6 +755,22 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(store.day(id: day.id)?.messages.count, 1)
     }
 
+    @MainActor
+    func testConfirmedDraftSavesCanonicalFoodMemoryForFutureRouting() async throws {
+        let memory = InMemoryUserFoodMemoryRepository()
+        let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "black coffee")
+        let draft = MealAnalysisDraft(result: result)
+        let day = Day(id: UUID(), date: .now, messages: [ThreadItem(id: UUID(), kind: .mealAnalysis(draft))], energyGoal: 2_000, carbohydrateGoal: 180)
+        let store = DiaryStore(days: [day])
+
+        _ = DiaryMealLoggingService(userFoodMemory: memory).confirm(draft, replacing: day.messages[0].id, in: store, dayID: day.id)
+        for _ in 0..<10 { await Task.yield() }
+        let matches = await memory.rankedMatches(for: "black coffee")
+
+        XCTAssertEqual(matches.first?.canonicalFoodID, "black-coffee")
+        XCTAssertEqual(matches.first?.servingUnit, ServingUnit.cup.rawValue)
+    }
+
     func testDiaryPersistsEditsAndDeletionAcrossStoreReloads() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("diafit-diary-\(UUID().uuidString)", isDirectory: true)
@@ -776,6 +852,14 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(store.day(id: day.id)?.messages.isEmpty == true)
         store.retryPersistence()
         XCTAssertNotNil(store.persistenceIssue)
+    }
+}
+
+private struct StubMealUnderstanding: FoodUnderstandingService {
+    let result: MealParseResult
+
+    func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult {
+        result
     }
 }
 
