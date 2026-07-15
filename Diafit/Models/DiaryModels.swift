@@ -13,6 +13,22 @@ struct Day: Identifiable, Codable, Hashable {
         }
     }
 
+    var glucoseReadings: [GlucoseReading] {
+        messages.compactMap { item in
+            if case .glucose(let reading) = item.kind { return reading }
+            return nil
+        }
+        .sorted { $0.measuredAt < $1.measuredAt }
+    }
+
+    var latestFastingReading: GlucoseReading? {
+        glucoseReadings.last { $0.type == .fasting }
+    }
+
+    var latestPostMealReading: GlucoseReading? {
+        glucoseReadings.last { $0.type == .postMeal }
+    }
+
     var totalEnergy: Int { meals.reduce(0) { $0 + $1.energy } }
     var totalCarbs: Int { meals.reduce(0) { $0 + $1.carbs } }
 }
@@ -53,6 +69,7 @@ struct ThreadItem: Identifiable, Codable, Hashable {
         case person(text: String)
         case meal(Meal)
         case mealAnalysis(MealAnalysisDraft)
+        case glucose(GlucoseReading)
         case checkpoint(GlucoseCheckpoint)
     }
 

@@ -13,6 +13,9 @@ struct DayThreadView: View {
     @State private var showsPhotoInput = false
     @State private var mealBeingEdited: Meal?
     @State private var mealPendingDeletion: Meal?
+    @State private var showsGlucoseEntry = false
+    @State private var showsGlucoseHistory = false
+    @State private var glucoseDraft: GlucoseDraft?
     @FocusState private var composerFocused: Bool
 
     private var day: Day? { store.day(id: dayID) }
@@ -23,7 +26,7 @@ struct DayThreadView: View {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 18) {
-                            DayHeader(day: day, openAtlas: openAtlas)
+                            DayHeader(day: day, openAtlas: openAtlas, logGlucose: { showsGlucoseEntry = true }, openGlucoseHistory: { showsGlucoseHistory = true })
                                 .padding(.bottom, 4)
 
                             ForEach(day.messages) { item in
@@ -55,7 +58,13 @@ struct DayThreadView: View {
                                     },
                                     deleteMeal: { meal in
                                         mealPendingDeletion = meal
-                                    }
+                                    },
+                                    associatedGlucoseReadings: {
+                                        if case .meal(let meal) = item.kind {
+                                            return day.glucoseReadings.filter { $0.mealId == meal.id }
+                                        }
+                                        return []
+                                    }()
                                 )
                                 .id(item.id)
                             }
@@ -93,6 +102,24 @@ struct DayThreadView: View {
             PhotoMealInput(onContinue: beginPhotoReview)
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $showsGlucoseEntry) {
+            if let day {
+                GlucoseEntrySheet(day: day) { reading in
+                    saveGlucose(reading, in: dayID)
+                }
+            }
+        }
+        .sheet(item: $glucoseDraft) { draft in
+            if let day {
+                GlucoseEntrySheet(day: day, initialDraft: draft) { reading in
+                    saveGlucose(reading, in: dayID)
+                }
+            }
+        }
+        .sheet(isPresented: $showsGlucoseHistory) {
+            GlucoseHistoryView()
+                .environmentObject(store)
         }
         .sheet(item: $mealBeingEdited) { meal in
             if let analysis = meal.analysis {
@@ -165,6 +192,13 @@ struct DayThreadView: View {
         draft = ""
         composerFocused = false
         store.append(ThreadItem(id: UUID(), kind: .person(text: note)), to: dayID)
+
+        if let parsedGlucose = GlucoseNaturalLanguageParser().parse(note) {
+            glucoseDraft = parsedGlucose
+            store.append(ThreadItem(id: UUID(), kind: .agent(text: "I found a glucose reading. Check the unit and context before saving it.", tools: ["Needs confirmation"])), to: dayID)
+            return
+        }
+
         isThinking = true
         thinkingLabel = "Checking nutrition"
 
@@ -210,6 +244,16 @@ struct DayThreadView: View {
                 )
             }
             isThinking = false
+        }
+    }
+
+    private func saveGlucose(_ reading: GlucoseReading, in dayID: Day.ID) {
+        let result = DiaryGlucoseReadingRepository().save(reading, to: dayID, in: store)
+        switch result {
+        case .success:
+            store.append(ThreadItem(id: UUID(), kind: .agent(text: "Saved your \(reading.type.displayName.lowercased()) glucose reading. I kept it informational and tied it to the selected time.", tools: ["Saved", "Glucose history updated"])), to: dayID)
+        case .failure(let error):
+            store.append(ThreadItem(id: UUID(), kind: .agent(text: error.localizedDescription, tools: ["Needs review"])), to: dayID)
         }
     }
 
@@ -283,6 +327,8 @@ struct DayThreadView: View {
 private struct DayHeader: View {
     let day: Day
     let openAtlas: () -> Void
+    let logGlucose: () -> Void
+    let openGlucoseHistory: () -> Void
 
     private var dateTitle: String {
         if Calendar.current.isDateInToday(day.date) { return "Today" }
@@ -317,6 +363,12 @@ private struct DayHeader: View {
             }
 
             DailyRhythm(day: day)
+            GlucoseSummaryStrip(
+                day: day,
+                preferredUnit: GlucoseUnit(rawValue: UserDefaults.standard.string(forKey: "diafit.glucose.preferredUnit") ?? "") ?? .milligramsPerDeciliter,
+                log: logGlucose,
+                openHistory: openGlucoseHistory
+            )
         }
         .padding(.top, 8)
     }

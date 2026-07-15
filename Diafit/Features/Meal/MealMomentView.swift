@@ -4,6 +4,7 @@ struct MealMomentView: View {
     let meal: Meal
     @Binding var isAtlasOpen: Bool
     let mealNamespace: Namespace.ID
+    var associatedGlucoseReadings: [GlucoseReading] = []
     let edit: (Meal) -> Void
     let delete: (Meal) -> Void
     @State private var revealsDetails = false
@@ -68,8 +69,29 @@ struct MealMomentView: View {
                             DetailMetric(label: "Logged", value: meal.time.formatted(date: .omitted, time: .shortened))
                         }
                         .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
+                        if !associatedGlucoseReadings.isEmpty {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Text("GLUCOSE AFTER THIS MEAL")
+                                    .font(.system(size: 9, weight: .bold, design: .rounded))
+                                    .tracking(0.8)
+                                    .foregroundStyle(Color.quietInk)
+                                ForEach(associatedGlucoseReadings) { reading in
+                                    HStack {
+                                        Text(reading.type.displayName)
+                                            .font(DiafitType.caption)
+                                        Spacer()
+                                        Text("\(reading.formattedValue) \(reading.unit.shortName)")
+                                            .font(DiafitType.caption.weight(.semibold))
+                                        Text(reading.measuredAt.formatted(.dateTime.hour().minute()))
+                                            .font(DiafitType.caption)
+                                            .foregroundStyle(Color.quietInk)
+                                    }
+                                }
+                            }
+                            .transition(.opacity.combined(with: .move(edge: .top)))
+                        }
                     }
-                }
             }
         }
         .buttonStyle(PressableStyle(pressedScale: 0.985))

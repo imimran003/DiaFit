@@ -14,6 +14,109 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(catalog.normalise("clarified butter")?.canonicalId, "ghee")
     }
 
+    func testGlucoseUnitConversionAndRoundTripStayStable() {
+        let mmol = Decimal(string: "5.7")!
+        let mg = GlucoseUnit.millimolesPerLiter.normalizedMgPerDl(from: mmol)
+        XCTAssertEqual(NSDecimalNumber(decimal: mg).doubleValue, 102.6, accuracy: 0.0001)
+        let roundTrip = GlucoseUnit.millimolesPerLiter.displayValue(from: mg)
+        XCTAssertEqual(NSDecimalNumber(decimal: roundTrip).doubleValue, 5.7, accuracy: 0.0001)
+
+        let reading = GlucoseReading(value: mmol, unit: .millimolesPerLiter, type: .fasting)
+        XCTAssertEqual(NSDecimalNumber(decimal: reading.normalizedMgPerDl).doubleValue, 102.6, accuracy: 0.0001)
+        XCTAssertEqual(reading.displayed(in: .milligramsPerDeciliter), "103")
+    }
+
+    func testGlucoseNaturalLanguageParserExtractsTypesUnitsAndMealTiming() {
+        let parser = GlucoseNaturalLanguageParser()
+        let fasting = parser.parse("FBS 96")
+        XCTAssertEqual(fasting?.value, Decimal(96))
+        XCTAssertEqual(fasting?.type, .fasting)
+        XCTAssertNil(fasting?.unit)
+        XCTAssertTrue(fasting?.requiresConfirmation == true)
+
+        let postMeal = parser.parse("blood sugar was 7.2 mmol/L two hours after dinner")
+        XCTAssertEqual(postMeal?.value, Decimal(string: "7.2"))
+        XCTAssertEqual(postMeal?.unit, .millimolesPerLiter)
+        XCTAssertEqual(postMeal?.type, .postMeal)
+        XCTAssertEqual(postMeal?.minutesAfterMeal, 120)
+        XCTAssertEqual(postMeal?.mealReference, "dinner")
+        XCTAssertFalse(postMeal?.requiresConfirmation == true)
+
+        XCTAssertEqual(parser.parse("bedtime glucose 118")?.type, .bedtime)
+        XCTAssertEqual(parser.parse("PPBS 142")?.type, .postMeal)
+        XCTAssertNil(parser.parse("I had 2 eggs with rice"), "Meal quantities must not be treated as glucose readings")
+    }
+
+    func testGlucoseValidationFlagsUnusualValuesWithoutDiagnosing() {
+        let validation = DefaultGlucoseValidationService()
+        let unusual = validation.validate(value: Decimal(1_200), unit: .milligramsPerDeciliter, type: .other, minutesAfterMeal: nil)
+        XCTAssertTrue(unusual.isValid)
+        XCTAssertTrue(unusual.requiresConfirmation)
+        XCTAssertTrue(unusual.message?.contains("Check the number and unit") == true)
+
+        let invalid = validation.validate(value: Decimal.zero, unit: .milligramsPerDeciliter, type: .fasting, minutesAfterMeal: nil)
+        XCTAssertFalse(invalid.isValid)
+    }
+
+    @MainActor
+    func testGlucoseReadingRepositoryPersistsEditsAndDeletion() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("diafit-glucose-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistence = FileDiaryPersistence(fileURL: directory.appendingPathComponent("diary.json"), appliesFileProtection: false)
+        let day = Day(id: UUID(), date: .now, messages: [], energyGoal: 2_000, carbohydrateGoal: 180)
+        let store = DiaryStore(seedDays: [day], persistence: persistence)
+        let repository = DiaryGlucoseReadingRepository()
+        let reading = GlucoseReading(value: Decimal(96), unit: .milligramsPerDeciliter, type: .fasting, measuredAt: .now)
+
+        if case .failure(let error) = repository.save(reading, to: day.id, in: store) {
+            XCTFail("Saving glucose reading failed: \(error)")
+        }
+        XCTAssertEqual(store.day(id: day.id)?.glucoseReadings.count, 1)
+        var edited = reading
+        edited.value = Decimal(102)
+        edited.normalizedMgPerDl = Decimal(102)
+        edited.updatedAt = .now
+        if case .failure(let error) = repository.update(edited, in: day.id, store: store) {
+            XCTFail("Updating glucose reading failed: \(error)")
+        }
+        XCTAssertEqual(store.day(id: day.id)?.glucoseReadings.first?.value, Decimal(102))
+        if case .failure(let error) = repository.delete(edited, from: day.id, store: store) {
+            XCTFail("Deleting glucose reading failed: \(error)")
+        }
+        XCTAssertTrue(store.day(id: day.id)?.glucoseReadings.isEmpty == true)
+    }
+
+    func testGlucoseHistorySummaryAndLocalDayGrouping() {
+        let calendar = Calendar(identifier: .gregorian)
+        let day = Day(id: UUID(), date: Date(timeIntervalSince1970: 1_700_000_000), messages: [
+            ThreadItem(id: UUID(), kind: .glucose(GlucoseReading(value: Decimal(90), unit: .milligramsPerDeciliter, type: .fasting, measuredAt: Date(timeIntervalSince1970: 1_700_000_100)))),
+            ThreadItem(id: UUID(), kind: .glucose(GlucoseReading(value: Decimal(126), unit: .milligramsPerDeciliter, type: .postMeal, measuredAt: Date(timeIntervalSince1970: 1_700_000_200))))
+        ], energyGoal: 2_000, carbohydrateGoal: 180)
+        let history = GlucoseHistoryService()
+        let readings = history.readings(in: [day], calendar: calendar)
+        let summary = history.summary(for: readings)
+        XCTAssertEqual(summary.count, 2)
+        XCTAssertEqual(NSDecimalNumber(decimal: summary.averageMgPerDl!).doubleValue, 108, accuracy: 0.001)
+        XCTAssertEqual(history.readings(in: [day], type: .fasting).count, 1)
+    }
+
+    func testDiarySchemaMigrationKeepsLegacyCheckpointData() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("diafit-glucose-migration-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("diary.json")
+        let persistence = FileDiaryPersistence(fileURL: url, appliesFileProtection: false)
+        let legacyDay = Day(id: UUID(), date: .now, messages: [ThreadItem(id: UUID(), kind: .checkpoint(GlucoseCheckpoint(id: UUID(), value: 96, unit: "mg/dL", label: "FBS", note: "legacy")))], energyGoal: 2_000, carbohydrateGoal: 180)
+        try persistence.save(DiaryArchive(schemaVersion: 1, days: [legacyDay]))
+        let loaded = try XCTUnwrap(persistence.load())
+        XCTAssertEqual(loaded.schemaVersion, DiaryArchive.currentVersion)
+        XCTAssertEqual(loaded.days.first?.messages.count, 1)
+        if case .checkpoint(let checkpoint) = loaded.days.first?.messages.first?.kind {
+            XCTAssertEqual(checkpoint.value, 96)
+        } else {
+            XCTFail("Legacy checkpoint was not preserved")
+        }
+    }
+
     func testHybridNormaliserAcceptsSpellingAndRegionalVariants() {
         let normaliser = HybridFoodNormalisationService(catalog: catalog)
         XCTAssertEqual(normaliser.normalise("mung sprouts")?.canonicalId, "moong-sprouts")

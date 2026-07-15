@@ -10,6 +10,7 @@ struct ThreadItemView: View {
     let retryDraftVisual: (MealAnalysisDraft) -> Void
     let editMeal: (Meal) -> Void
     let deleteMeal: (Meal) -> Void
+    var associatedGlucoseReadings: [GlucoseReading] = []
 
     var body: some View {
         switch item.kind {
@@ -22,6 +23,7 @@ struct ThreadItemView: View {
                 meal: meal,
                 isAtlasOpen: $isAtlasOpen,
                 mealNamespace: mealNamespace,
+                associatedGlucoseReadings: associatedGlucoseReadings,
                 edit: editMeal,
                 delete: deleteMeal
             )
@@ -33,6 +35,8 @@ struct ThreadItemView: View {
                 onDiscard: discardDraft,
                 onRetryVisual: retryDraftVisual
             )
+        case .glucose(let reading):
+            GlucoseReadingMoment(reading: reading)
         case .checkpoint(let checkpoint):
             GlucoseMoment(checkpoint: checkpoint)
         }

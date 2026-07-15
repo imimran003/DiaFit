@@ -146,6 +146,31 @@ final class DiafitUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["Market salad bowl"].exists)
     }
 
+    func testFastingGlucoseCanBeLoggedAndAppearsInDailyThread() throws {
+        let logButton = app.buttons["Log glucose"]
+        XCTAssertTrue(logButton.waitForExistence(timeout: 3))
+        logButton.tap()
+
+        let value = app.textFields["Glucose value"]
+        XCTAssertTrue(value.waitForExistence(timeout: 2))
+        value.tap()
+        value.typeText("96")
+        app.buttons["Save glucose"].tap()
+
+        XCTAssertTrue(app.staticTexts["Fasting"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["96 mg/dL"].exists)
+    }
+
+    func testPostMealGlucoseEntryKeepsMealAssociationFlowAvailable() throws {
+        let logButton = app.buttons["Log glucose"]
+        XCTAssertTrue(logButton.waitForExistence(timeout: 3))
+        logButton.tap()
+        app.buttons["Post-meal"].tap()
+
+        XCTAssertTrue(app.buttons["Save glucose"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.buttons["Post-meal"].isSelected)
+    }
+
     private func submitFoodNote(_ text: String) {
         let note = app.textFields["Tell me what you ate"]
         XCTAssertTrue(note.waitForExistence(timeout: 3))

@@ -1,7 +1,7 @@
 import Foundation
 
 struct DiaryArchive: Codable, Hashable {
-    static let currentVersion = 1
+    static let currentVersion = 2
 
     let schemaVersion: Int
     let savedAt: Date
@@ -68,14 +68,16 @@ struct FileDiaryPersistence: DiaryPersisting {
                 current: DiaryArchive.currentVersion
             )
         }
-        guard header.schemaVersion == DiaryArchive.currentVersion,
-              let archive = try? decoder.decode(DiaryArchive.self, from: data) else {
-            // There are no older persisted schemas in the repository. Keeping
-            // this explicit prevents corrupt or unknown records being treated
-            // as an empty diary and overwritten.
+        guard let archive = try? decoder.decode(DiaryArchive.self, from: data) else {
+            // Keeping this explicit prevents corrupt records from being
+            // treated as an empty diary and overwritten.
             throw DiaryPersistenceError.invalidArchive
         }
-        return archive
+        if header.schemaVersion == DiaryArchive.currentVersion { return archive }
+        // Version 1 stored legacy checkpoint thread items. The new glucose
+        // case is additive, so decoding the old days preserves every meal and
+        // checkpoint while the next save upgrades the archive header.
+        return DiaryArchive(schemaVersion: DiaryArchive.currentVersion, savedAt: archive.savedAt, days: archive.days)
     }
 
     func save(_ archive: DiaryArchive) throws {

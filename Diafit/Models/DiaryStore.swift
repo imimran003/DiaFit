@@ -63,6 +63,32 @@ final class DiaryStore: ObservableObject {
         }
     }
 
+    func appendGlucoseReading(_ reading: GlucoseReading, to dayID: Day.ID) {
+        guard let index = days.firstIndex(where: { $0.id == dayID }) else { return }
+        guard reading.mealId == nil || days[index].meals.contains(where: { $0.id == reading.mealId }) else { return }
+        transact { $0[index].messages.append(ThreadItem(id: UUID(), kind: .glucose(reading))) }
+    }
+
+    func updateGlucoseReading(_ reading: GlucoseReading, in dayID: Day.ID) {
+        guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
+              let messageIndex = days[dayIndex].messages.firstIndex(where: { item in
+                  if case .glucose(let existing) = item.kind { return existing.id == reading.id }
+                  return false
+              }) else { return }
+        guard reading.mealId == nil || days[dayIndex].meals.contains(where: { $0.id == reading.mealId }) else { return }
+        transact { $0[dayIndex].messages[messageIndex].kind = .glucose(reading) }
+    }
+
+    func removeGlucoseReading(id: UUID, from dayID: Day.ID) {
+        guard let dayIndex = days.firstIndex(where: { $0.id == dayID }) else { return }
+        transact { days in
+            days[dayIndex].messages.removeAll { item in
+                if case .glucose(let reading) = item.kind { return reading.id == id }
+                return false
+            }
+        }
+    }
+
     func update(_ draft: MealAnalysisDraft, for itemID: ThreadItem.ID, in dayID: Day.ID) {
         guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
               let messageIndex = days[dayIndex].messages.firstIndex(where: { $0.id == itemID }) else { return }
