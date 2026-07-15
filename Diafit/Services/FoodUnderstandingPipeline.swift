@@ -52,19 +52,30 @@ struct FoodUnderstandingPipeline: Sendable {
             lexiconMatches(in: normalized.tokens),
             tokens: normalized.tokens
         )
-        let components = candidates.map { candidate in
+        let components = candidates.enumerated().map { index, candidate in
             let food = catalog.food(canonicalID: candidate.canonicalFoodID)!
+            let scope = componentScope(
+                at: index,
+                candidates: candidates,
+                tokens: normalized.tokens
+            )
+            let scopedTokens = Array(normalized.tokens[scope])
             let quantity = QuantityExtractor.extract(
                 tokens: normalized.tokens,
                 componentStart: candidate.tokenStart,
+                componentEnd: candidate.tokenEnd,
+                scope: scope,
                 food: food
             )
             let modifiers = IngredientModifierExtractor.modifiers(
-                tokens: normalized.tokens,
+                // Shake bases and additions describe the supplement recipe as
+                // a whole. Other foods must remain within their own span so a
+                // sibling's butter, cheese or oil cannot leak across a meal.
+                tokens: food.category == .supplement ? normalized.tokens : scopedTokens,
                 food: food
             )
             let preparation = PreparationExtractor.method(
-                tokens: normalized.tokens,
+                tokens: scopedTokens,
                 food: food
             )
             let supplement = SupplementProfileResolver.profile(
@@ -151,6 +162,37 @@ struct FoodUnderstandingPipeline: Sendable {
         return selected.sorted { $0.tokenStart < $1.tokenStart }
     }
 
+    /// Produces a token range owned by one detected food. Connectors between
+    /// entities are boundaries, while connector words inside a matched alias
+    /// remain part of that food. This keeps quantities and preparations local
+    /// without preventing phrases such as `whey with water` from retaining
+    /// trailing recipe detail when no second food follows.
+    private func componentScope(
+        at index: Int,
+        candidates: [FoodEntityCandidate],
+        tokens: [String]
+    ) -> Range<Int> {
+        let candidate = candidates[index]
+        var lowerBound = index == 0 ? 0 : candidates[index - 1].tokenEnd
+        var upperBound = index == candidates.count - 1 ? tokens.count : candidates[index + 1].tokenStart
+
+        if index > 0,
+           lowerBound < candidate.tokenStart,
+           let connector = tokens[lowerBound..<candidate.tokenStart]
+            .lastIndex(where: FoodConnector.isBoundary) {
+            lowerBound = connector + 1
+        }
+
+        if index < candidates.count - 1,
+           candidate.tokenEnd < upperBound,
+           let connector = tokens[candidate.tokenEnd..<upperBound]
+            .firstIndex(where: FoodConnector.isBoundary) {
+            upperBound = connector
+        }
+
+        return lowerBound..<upperBound
+    }
+
     /// Milk is nutrition-bearing, but in a whey phrase it is the selected shake
     /// base rather than a second plate component. Keeping it on the supplement
     /// profile prevents a powder-plus-milk double count while retaining the
@@ -218,26 +260,51 @@ private enum QuantityExtractor {
         "gram": .grams, "grams": .grams, "g": .grams
     ]
 
-    static func extract(tokens: [String], componentStart: Int, food: IndianFoodDefinition) -> ParsedQuantity {
+    static func extract(
+        tokens: [String],
+        componentStart: Int,
+        componentEnd: Int,
+        scope: Range<Int>,
+        food: IndianFoodDefinition
+    ) -> ParsedQuantity {
         let defaultUnit = food.standardServing?.unit ?? .serving
         let defaultQuantity = food.standardServing?.quantity ?? 1
-        let lowerBound = max(0, componentStart - 6)
-        let context = Array(tokens[lowerBound..<componentStart])
-        guard !context.isEmpty else {
-            return ParsedQuantity(quantity: defaultQuantity, unit: defaultUnit, wasExplicit: false)
-        }
+        let prefix = Array(tokens[scope.lowerBound..<componentStart])
+        let suffix = Array(tokens[componentEnd..<scope.upperBound])
 
-        if let unitIndex = context.lastIndex(where: { unitWords[$0] != nil }) {
-            let quantity = number(in: Array(context[..<unitIndex])) ?? impliedNumber(context[unitIndex - 1 >= 0 ? unitIndex - 1 : unitIndex])
-            if let quantity {
-                return ParsedQuantity(quantity: quantity, unit: unitWords[context[unitIndex]] ?? defaultUnit, wasExplicit: true)
-            }
+        if let explicit = explicitQuantity(in: prefix, defaultUnit: defaultUnit, allowsBareNumber: true) {
+            return explicit
         }
-
-        if let quantity = number(in: context) {
-            return ParsedQuantity(quantity: quantity, unit: defaultUnit, wasExplicit: true)
+        // Post-positive quantities are accepted only with a serving unit. This
+        // supports `whey 2 scoops` without treating trailing times or prose as
+        // the amount of the food.
+        if let explicit = explicitQuantity(in: suffix, defaultUnit: defaultUnit, allowsBareNumber: false) {
+            return explicit
         }
         return ParsedQuantity(quantity: defaultQuantity, unit: defaultUnit, wasExplicit: false)
+    }
+
+    private static func explicitQuantity(
+        in context: [String],
+        defaultUnit: ServingUnit,
+        allowsBareNumber: Bool
+    ) -> ParsedQuantity? {
+        guard !context.isEmpty else { return nil }
+        if let unitIndex = context.lastIndex(where: { unitWords[$0] != nil }) {
+            let precedingToken = unitIndex > 0 ? context[unitIndex - 1] : context[unitIndex]
+            let quantity = number(in: Array(context[..<unitIndex])) ?? impliedNumber(precedingToken)
+            if let quantity {
+                return ParsedQuantity(
+                    quantity: quantity,
+                    unit: unitWords[context[unitIndex]] ?? defaultUnit,
+                    wasExplicit: true
+                )
+            }
+        }
+        if allowsBareNumber, let quantity = number(in: context) {
+            return ParsedQuantity(quantity: quantity, unit: defaultUnit, wasExplicit: true)
+        }
+        return nil
     }
 
     private static func impliedNumber(_ token: String) -> Double? {
@@ -268,6 +335,14 @@ private enum QuantityExtractor {
             if let word = words[token] { return word }
         }
         return nil
+    }
+}
+
+private enum FoodConnector {
+    private static let boundaryTokens = Set(["and", "with", "plus"])
+
+    static func isBoundary(_ token: String) -> Bool {
+        boundaryTokens.contains(token)
     }
 }
 

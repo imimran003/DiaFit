@@ -21,14 +21,21 @@
 
 ## Work sequence
 
-1. **Baseline and inventory — in progress**
+1. **Baseline and inventory — complete**
    - Map targets, services, state, backend, configuration, tests and release settings.
    - Inventory screens and flows.
    - Record actual design-reference observations.
-2. **Correctness — next**
+2. **Correctness — in progress**
    - Add a failing regression for cross-component quantity leakage.
    - Bound quantities, units, preparation methods and modifiers to their component spans.
    - Expand Indian compound-meal and property coverage.
+
+### Correctness evidence recorded
+
+- Red run: 30 tests discovered; the new component-isolation test produced four failures (`3 wholeEgg` on sprouts and `2 scoop` on banana).
+- Green run: 31 tests passed after connector-bounded entity scopes were introduced.
+- Fractional regression retained: `one and a half scoop whey with water` remains 1.5 scoops.
+- Preparation regression added: `fried eggs with raw sprouts` retains `fried` and `raw` independently.
 3. **Durability and idempotency**
    - Introduce a repository boundary and versioned on-device persistence.
    - Test relaunch, corruption, edit/delete totals and day boundaries.
@@ -72,4 +79,3 @@
 - External provider secrets remain server-side.
 - Existing working behavior is retained unless evidence shows that it harms correctness, accessibility, performance or maintainability.
 - A green build is necessary but never sufficient evidence of completion.
-

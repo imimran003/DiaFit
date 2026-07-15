@@ -51,11 +51,15 @@ Impact: data loss on termination and inability to meet the product’s core diar
 
 Impact: nutrition can be multiplied with the wrong unit while validation still approves the component.
 
+Resolution on audit branch: fixed with entity-neighbour scopes bounded only by connectors between detected foods. Quantity parsing now inspects the owning prefix and a unit-qualified suffix. A clean red run recorded four incorrect sibling assertions; the subsequent suite passed 31/31.
+
 ### F-003 — Preparation and modifiers are sentence-global
 
 Preparation and modifier extractors inspect the full token array. A phrase such as `fried eggs with raw sprouts` can assign a preparation based on whichever global check is evaluated first, rather than the component’s local span.
 
 Impact: oil assumptions, canonical variations and meal visuals can become incorrect even when entities are detected.
+
+Partial resolution on audit branch: preparation and non-supplement modifiers now use the component token scope. Supplement bases/additions intentionally retain meal-level context because milk/water can be suppressed as standalone components. Further addition/exclusion fixtures remain required.
 
 ### F-004 — No runtime generated-image provider
 
@@ -115,4 +119,3 @@ No privacy manifest was found. Code signing is disabled in Debug and Release pro
 - Provider-unavailable image UI proof.
 - Small/large phone, dark mode, Dynamic Type and Reduce Motion screenshots.
 - Launch time, image decode/memory and scroll measurements.
-

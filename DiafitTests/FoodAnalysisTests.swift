@@ -143,6 +143,39 @@ final class FoodAnalysisTests: XCTestCase {
         }
     }
 
+    /// Regression from baseline diagnostics: a quantity belongs to the food
+    /// phrase it modifies. It must not cross `with`/`and` and become the next
+    /// component's quantity or serving unit.
+    func testCompoundQuantitiesStayWithTheirFood() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+
+        let eggsAndSprouts = engine.makeAnalysis(description: "three eggs with sprouts")
+        let eggs = try XCTUnwrap(eggsAndSprouts.detectedItems.first { $0.canonicalFoodId == "whole-egg" })
+        let sprouts = try XCTUnwrap(eggsAndSprouts.detectedItems.first { $0.canonicalFoodId == "mixed-sprouts" })
+        XCTAssertEqual(eggs.quantity, 3)
+        XCTAssertEqual(eggs.servingUnit, .wholeEgg)
+        XCTAssertEqual(sprouts.quantity, 1)
+        XCTAssertEqual(sprouts.servingUnit, .mediumBowl)
+
+        let wheyAndBanana = engine.makeAnalysis(description: "two scoops whey and banana")
+        let whey = try XCTUnwrap(wheyAndBanana.detectedItems.first { $0.canonicalFoodId == "generic-whey-protein" })
+        let banana = try XCTUnwrap(wheyAndBanana.detectedItems.first { $0.canonicalFoodId == "banana" })
+        XCTAssertEqual(whey.quantity, 2)
+        XCTAssertEqual(whey.servingUnit, .scoop)
+        XCTAssertEqual(banana.quantity, 1)
+        XCTAssertEqual(banana.servingUnit, .piece)
+    }
+
+    func testCompoundPreparationsStayWithTheirFood() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let result = engine.makeAnalysis(description: "fried eggs with raw sprouts")
+        let eggs = try XCTUnwrap(result.detectedItems.first { $0.canonicalFoodId == "fried-egg" })
+        let sprouts = try XCTUnwrap(result.detectedItems.first { $0.canonicalFoodId == "mixed-sprouts" })
+
+        XCTAssertEqual(eggs.preparationMethod, "fried")
+        XCTAssertEqual(sprouts.preparationMethod, "raw")
+    }
+
     func testWheyVariantsAndBasesUseFirstClassSupplementRecords() throws {
         let engine = LocalMealAnalysisEngine(catalog: catalog)
         let fixtures: [(String, String, Double, ServingUnit, SupplementBase)] = [

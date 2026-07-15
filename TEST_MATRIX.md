@@ -21,6 +21,15 @@ Status legend: **Pass**, **Fail**, **Gap**, **Blocked**, **Not run**.
 | `one scoop whey with water` | Generic whey | 1 scoop, water | Nonblank; water adds zero | No milk/fruit prompt | **Pass** |
 | `three eggs with sprouts` | Egg + sprouts | Sprouts becomes `3 wholeEgg` | Incorrect scaling risk | Incorrect structured identity risk | **Fail** |
 
+Audit-branch result after the component-span repair:
+
+| Input | Expected isolation | Result |
+| --- | --- | --- |
+| `three eggs with sprouts` | Eggs 3 whole; sprouts 1 medium bowl | **Pass** |
+| `two scoops whey and banana` | Whey 2 scoops; banana 1 piece | **Pass** |
+| `fried eggs with raw sprouts` | Fried applies only to eggs; raw only to sprouts | **Pass** |
+| `one and a half scoop whey with water` | Compound number stays 1.5 | **Pass** |
+
 ## Flow inventory
 
 | Flow | Baseline state | Coverage | Next evidence |
@@ -76,4 +85,3 @@ Status legend: **Pass**, **Fail**, **Gap**, **Blocked**, **Not run**.
 | Reduce Transparency | **Not run** |
 | Offline/slow provider | **Not run** |
 | Physical iPhone 15 Pro | **Not run; device availability unknown** |
-
