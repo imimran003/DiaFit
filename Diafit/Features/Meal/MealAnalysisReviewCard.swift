@@ -70,6 +70,15 @@ struct MealAnalysisReviewCard: View {
                     }
             }
 
+            if let request = result.visualRequest {
+                MealVisualRequestStatus(
+                    request: request,
+                    items: result.detectedItems,
+                    hasOriginalPhoto: editableDraft.transientImageData != nil,
+                    retry: retryVisualRequest
+                )
+            }
+
             if result.detectedItems.isEmpty {
                 EmptyAnalysisState(query: $componentQuery, addComponent: addComponent)
             } else {
@@ -244,6 +253,15 @@ struct MealAnalysisReviewCard: View {
         recalculate()
     }
 
+    private func retryVisualRequest() {
+        editableDraft.result.visualRequest = MealVisualRequestBuilder().make(
+            mealID: editableDraft.result.analysisId,
+            items: editableDraft.result.detectedItems,
+            clarificationQuestions: editableDraft.result.clarificationQuestions
+        )
+        onUpdate(editableDraft)
+    }
+
     private func item(from definition: IndianFoodDefinition, preserving original: DetectedFoodItem) -> DetectedFoodItem {
         DetectedFoodItem(
             id: original.id,
@@ -269,26 +287,32 @@ struct MealAnalysisReviewCard: View {
             boundingRegion: original.boundingRegion,
             nutritionProvenance: original.nutritionProvenance,
             rawNutrition: original.rawNutrition,
-            nutritionValidation: original.nutritionValidation
+            nutritionValidation: original.nutritionValidation,
+            matchedAlias: original.matchedAlias,
+            confidenceScore: original.confidenceScore,
+            modifiers: original.modifiers,
+            supplementProfile: original.supplementProfile
         )
     }
 
     private func recalculate() {
         applyVariationSelections()
+        applySupplementSelections()
         for index in editableDraft.result.detectedItems.indices {
             let item = editableDraft.result.detectedItems[index]
             guard let definition = catalog.food(canonicalID: item.canonicalFoodId) else { continue }
             let weight = portions.estimatedWeight(quantity: item.quantity, unit: item.servingUnit, food: definition)
             let lookup = nutrition.nutrition(for: definition, estimatedWeightGrams: weight)
+            let resolvedValues = nutritionIncludingShakeBase(lookup.values, profile: item.supplementProfile)
             let report = validation.validate(
-                rawValues: lookup.values,
+                rawValues: resolvedValues,
                 canonicalFoodID: definition.canonicalId,
                 quantity: item.quantity,
                 servingUnit: item.servingUnit,
                 estimatedWeightGrams: weight
             )
             editableDraft.result.detectedItems[index].estimatedWeightGrams = weight
-            editableDraft.result.detectedItems[index].rawNutrition = lookup.values
+            editableDraft.result.detectedItems[index].rawNutrition = resolvedValues
             editableDraft.result.detectedItems[index].nutrition = report.safeValues ?? .unavailable
             editableDraft.result.detectedItems[index].nutritionValidation = report
             editableDraft.result.detectedItems[index].nutritionProvenance = lookup.provenance
@@ -318,11 +342,49 @@ struct MealAnalysisReviewCard: View {
         editableDraft.result.nutritionProvenance = allValuesSupported
             ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Bundled recipe estimate — recipe may vary", dataVersion: catalog.version, confidence: .low)
             : .unavailable
+        editableDraft.result.visualRequest = MealVisualRequestBuilder().make(
+            mealID: editableDraft.result.analysisId,
+            items: editableDraft.result.detectedItems,
+            clarificationQuestions: editableDraft.result.clarificationQuestions
+        )
         editableDraft.result.warnings = editableDraft.result.warnings.filter { !$0.contains("Nutrition needs confirmation") }
         if !report.isApproved {
             editableDraft.result.warnings.append("Nutrition needs confirmation before it can affect your daily totals.")
         }
         onUpdate(editableDraft)
+    }
+
+    private func applySupplementSelections() {
+        for question in editableDraft.result.clarificationQuestions {
+            guard question.question.contains("How many scoops"),
+                  let answer = question.answer,
+                  let itemID = question.relatedFoodItemId,
+                  let index = editableDraft.result.detectedItems.firstIndex(where: { $0.id == itemID }),
+                  var profile = editableDraft.result.detectedItems[index].supplementProfile else { continue }
+            let scoops: Double = answer.contains("2 scoop") ? 2 : 1
+            profile.base = answer.contains("milk") ? .milk : .water
+            profile.servingUnit = .scoop
+            profile.servingSizeGrams = (profile.gramsPerScoop ?? 30) * scoops
+            profile.isUserConfirmed = true
+            editableDraft.result.detectedItems[index].quantity = scoops
+            editableDraft.result.detectedItems[index].servingUnit = .scoop
+            editableDraft.result.detectedItems[index].supplementProfile = profile
+            editableDraft.result.detectedItems[index].modifiers = Array(Set(
+                editableDraft.result.detectedItems[index].modifiers.filter { $0 != "water" && $0 != "milk" } + [profile.base.rawValue]
+            )).sorted()
+            editableDraft.result.detectedItems[index].assumptions = [
+                "Confirmed \(scoops.formatted(.number.precision(.fractionLength(0)))) scoop(s) mixed with \(profile.base.displayName).",
+                "Swap in your saved or scanned product label whenever it is available."
+            ]
+        }
+    }
+
+    private func nutritionIncludingShakeBase(_ powder: NutritionValues, profile: SupplementProductProfile?) -> NutritionValues {
+        guard profile?.base == .milk,
+              let milk = catalog.normalise("milk") else { return powder }
+        let milkWeight = milk.standardServing?.grams ?? 240
+        let milkValues = nutrition.nutrition(for: milk, estimatedWeightGrams: milkWeight).values
+        return NutritionValues.total(of: [powder, milkValues])
     }
 
     private func applyVariationSelections() {
@@ -373,6 +435,81 @@ struct MealAnalysisReviewCard: View {
                 item.assumptions = ["Adjusted for a typical added-sugar amount; still an estimate."]
             }
             editableDraft.result.detectedItems[index] = item
+        }
+    }
+}
+
+private struct MealVisualRequestStatus: View {
+    let request: MealVisualRequest
+    let items: [DetectedFoodItem]
+    let hasOriginalPhoto: Bool
+    let retry: () -> Void
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 11) {
+            visualGlyph
+                .frame(width: 38, height: 38)
+                .background(Color.lime.opacity(0.36), in: Circle())
+            VStack(alignment: .leading, spacing: 3) {
+                Text(title)
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(0.9)
+                    .foregroundStyle(Color.quietInk)
+                Text(detail)
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
+            }
+            Spacer(minLength: 6)
+            if request.state == .failed || request.state == .deterministicFallback {
+                Button("Retry", action: retry)
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .foregroundStyle(Color.ink)
+                    .padding(.horizontal, 9)
+                    .padding(.vertical, 7)
+                    .background(Color.paper, in: Capsule())
+                    .accessibilityLabel("Retry meal image")
+            }
+        }
+        .padding(11)
+        .background(Color.mist.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Meal image \(title.lowercased()): \(detail)")
+    }
+
+    private var title: String {
+        switch request.state {
+        case .queued: return "MEAL VISUAL PREPARING"
+        case .waitingForClarification: return "VISUAL WAITING FOR DETAILS"
+        case .deterministicFallback: return "MEAL VISUAL READY"
+        case .failed: return "IMAGE UNAVAILABLE"
+        }
+    }
+
+    private var detail: String {
+        switch request.state {
+        case .queued: return "Building a quantity-aware food composition."
+        case .waitingForClarification: return "Confirm the shake base and scoop count to make the visual accurate."
+        case .deterministicFallback:
+            return "A verified component composition is shown while image generation is unavailable."
+        case .failed:
+            return hasOriginalPhoto
+                ? "Retry generation or keep your original photo."
+                : "Retry generation, or add a meal photo from the composer."
+        }
+    }
+
+    @ViewBuilder
+    private var visualGlyph: some View {
+        if items.contains(where: { $0.category == .egg || $0.canonicalFoodId.contains("egg") }) {
+            Image(systemName: "circle.grid.cross.fill")
+                .foregroundStyle(Color.ink)
+        } else if items.contains(where: { $0.category == .supplement }) {
+            Image(systemName: "waterbottle.fill")
+                .foregroundStyle(Color.ink)
+        } else {
+            Image(systemName: "sparkles")
+                .foregroundStyle(Color.ink)
         }
     }
 }
@@ -567,6 +704,9 @@ private struct SummaryMetric: View {
         .frame(maxWidth: .infinity)
         .padding(.vertical, 9)
         .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .accessibilityElement(children: .combine)
+        .accessibilityIdentifier("meal-total-\(label)")
+        .accessibilityLabel("\(value) \(label)")
     }
 }
 

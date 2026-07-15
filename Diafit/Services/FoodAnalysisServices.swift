@@ -294,6 +294,8 @@ struct StandardPortionEstimationService: PortionEstimationService, Sendable {
         case .glass: 250
         case .plate: 300
         case .serving: food.standardServing?.grams
+        case .wholeEgg: 50
+        case .scoop: food.standardServing?.grams ?? 30
         case .grams: nil
         }
         return gramsPerUnit.map { $0 * quantity }
@@ -358,8 +360,8 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
     }
 
     func makeAnalysis(description: String, imageReference: MealImageReference = .transient(), imageType: MealImageType = .noImage) -> MealAnalysisResult {
-        let matches = catalog.matches(in: description)
-        let items = matches.map { makeItem($0, description: description) }
+        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(description)
+        let items = trace.components.map(makeItem)
         let questions = clarificationQuestions(for: items, imageType: imageType)
         let totals = NutritionValues.total(of: items.map(\.nutrition))
         let rawValidation = validationService.validate(
@@ -383,15 +385,22 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
         let provenance = allValuesSupported
             ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: catalog.source, dataVersion: catalog.version, confidence: .low)
             : .unavailable
+        let analysisID = UUID()
+        let visualRequest = MealVisualRequestBuilder().make(
+            mealID: analysisID,
+            items: items,
+            clarificationQuestions: questions
+        )
 
         FoodLoggingDiagnostics.record("analysis.parsed", fields: [
             "components": items.map(\.canonicalFoodId).joined(separator: ","),
             "inputFingerprint": FoodLoggingDiagnostics.fingerprint(description),
-            "nutritionStatus": validation.status.rawValue
+            "nutritionStatus": validation.status.rawValue,
+            "entityCount": String(trace.entities.count)
         ])
 
         return MealAnalysisResult(
-            analysisId: UUID(),
+            analysisId: analysisID,
             imageReference: imageReference,
             imageType: imageType,
             detectedItems: items,
@@ -405,24 +414,38 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
             nutritionDatabaseVersion: catalog.version,
             glycaemicDatabaseVersion: nil,
             nutritionProvenance: provenance,
-            nutritionValidation: validation
+            nutritionValidation: validation,
+            visualRequest: visualRequest
         )
     }
 
-    private func makeItem(_ food: IndianFoodDefinition, description: String) -> DetectedFoodItem {
-        let serving = food.standardServing ?? StandardServing(quantity: 1, unit: .serving, grams: nil)
-        let quantity = quantityHint(for: food, in: description) ?? serving.quantity
-        let weight = portionService.estimatedWeight(quantity: quantity, unit: serving.unit, food: food)
+    private func makeItem(_ component: ParsedFoodComponent) -> DetectedFoodItem {
+        let food = component.food
+        let quantity = component.quantity
+        let unit = component.servingUnit
+        let weight = portionService.estimatedWeight(quantity: quantity, unit: unit, food: food)
         let lookup = nutritionService.nutrition(for: food, estimatedWeightGrams: weight)
+        let resolvedValues = nutritionIncludingShakeBase(
+            lookup.values,
+            supplement: component.supplementProfile
+        )
         let validation = validationService.validate(
-            rawValues: lookup.values,
+            rawValues: resolvedValues,
             canonicalFoodID: food.canonicalId,
             quantity: quantity,
-            servingUnit: serving.unit,
+            servingUnit: unit,
             estimatedWeightGrams: weight
         )
         let safeNutrition = validation.safeValues ?? .unavailable
         let glycaemic = glycaemicService.information(for: food, availableCarbohydrateGrams: safeNutrition.availableCarbohydrateGrams)
+
+        FoodLoggingDiagnostics.record("nutrition.lookup", fields: [
+            "canonicalFoodID": food.canonicalId,
+            "estimatedWeightGrams": weight.map { String(format: "%.1f", $0) } ?? "unavailable",
+            "provenance": lookup.provenance.kind.rawValue,
+            "providerResponse": resolvedValues.isEmpty ? "unavailable" : "usable",
+            "validation": validation.status.rawValue
+        ])
 
         return DetectedFoodItem(
             id: UUID(),
@@ -430,24 +453,57 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
             displayName: food.canonicalName,
             regionalName: food.regionalNames.first,
             category: food.category,
-            confidence: food.confidence == .unknown ? .low : food.confidence,
+            confidence: confidence(for: component),
             alternatives: alternatives(for: food),
             quantity: quantity,
-            servingUnit: serving.unit,
+            servingUnit: unit,
             estimatedWeightGrams: weight,
             visibleIngredients: [],
             inferredIngredients: food.commonIngredients,
             possibleIngredients: [],
-            preparationMethod: food.commonPreparationMethods.first,
+            preparationMethod: component.preparationMethod,
             nutrition: safeNutrition,
             glycaemicInformation: glycaemic,
-            assumptions: ["Serving is an initial suggestion. Recipe and portion may vary."],
-            warnings: itemWarnings(for: lookup.values, validation: validation),
+            assumptions: assumptions(for: component),
+            warnings: itemWarnings(for: resolvedValues, validation: validation),
             boundingRegion: nil,
             nutritionProvenance: lookup.provenance,
-            rawNutrition: lookup.values,
-            nutritionValidation: validation
+            rawNutrition: resolvedValues,
+            nutritionValidation: validation,
+            matchedAlias: component.matchedAlias,
+            confidenceScore: component.confidenceScore,
+            modifiers: component.modifiers,
+            supplementProfile: component.supplementProfile
         )
+    }
+
+    private func nutritionIncludingShakeBase(
+        _ powder: NutritionValues,
+        supplement: SupplementProductProfile?
+    ) -> NutritionValues {
+        guard supplement?.base == .milk,
+              let milk = catalog.normalise("milk") else { return powder }
+        let milkWeight = milk.standardServing?.grams ?? 240
+        let milkValues = nutritionService.nutrition(for: milk, estimatedWeightGrams: milkWeight).values
+        return NutritionValues.total(of: [powder, milkValues])
+    }
+
+    private func confidence(for component: ParsedFoodComponent) -> ConfidenceLevel {
+        if component.food.confidence == .unknown { return .low }
+        if component.confidenceScore >= 0.9 { return .high }
+        if component.confidenceScore >= 0.8 { return .medium }
+        return .low
+    }
+
+    private func assumptions(for component: ParsedFoodComponent) -> [String] {
+        var values = ["Serving is an editable starting estimate."]
+        if component.food.canonicalId == "mixed-sprouts" {
+            values.append("Generic mixed sprouts were used; choose a specific variety if it matters to you.")
+        }
+        if let supplement = component.supplementProfile {
+            values.append("Using \(supplement.productName) at \(supplement.servingSizeGrams.formatted(.number.precision(.fractionLength(0...1)))) g. \(supplement.base == .unspecified ? "Base is still needed." : "Base: \(supplement.base.displayName).")")
+        }
+        return values
     }
 
     private func itemWarnings(for values: NutritionValues, validation: NutritionValidationReport) -> [String] {
@@ -496,6 +552,26 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
 
     private func clarificationQuestions(for items: [DetectedFoodItem], imageType: MealImageType) -> [ClarificationQuestion] {
         var questions: [ClarificationQuestion] = []
+        if let whey = items.first(where: { $0.category == .supplement && $0.supplementProfile?.base == .unspecified }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: whey.id,
+                question: "How many scoops, and was it mixed with water or milk?",
+                answerType: .singleChoice,
+                options: ["1 scoop + water", "1 scoop + milk", "2 scoops + water", "2 scoops + milk"],
+                impactLevel: .high,
+                answer: nil
+            ))
+        }
+        if let sprouts = items.first(where: { $0.canonicalFoodId == "mixed-sprouts" }) {
+            questions.append(ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: sprouts.id,
+                question: "Was the sprouts serving roughly a small, medium, or large bowl?",
+                answerType: .singleChoice,
+                options: ["Small", "Medium", "Large"],
+                impactLevel: .low,
+                answer: nil
+            ))
+        }
         if let coffee = items.first(where: { $0.canonicalFoodId == "coffee" }) {
             questions.append(ClarificationQuestion(
                 id: UUID(), relatedFoodItemId: coffee.id,
@@ -605,11 +681,16 @@ actor InMemoryMealAnalysisRepository: MealAnalysisRepository {
 }
 
 struct DiaryMealLoggingService: MealLoggingService {
+    private static let visualLedger = MealVisualRequestLedger()
+
     @MainActor
     func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID, in store: DiaryStore, dayID: Day.ID) -> Meal {
         let result = draft.result
         let title = result.detectedItems.map(\.displayName).joined(separator: " + ").ifEmpty("Meal draft")
-        let mealID = UUID()
+        // The draft analysis ID is the stable meal identity for any visual work
+        // started before confirmation. This makes a late provider response
+        // impossible to attach to another saved meal.
+        let mealID = result.visualRequest?.mealID ?? result.analysisId
         let artwork = artwork(for: result)
         let visualIdentity = MealVisualIdentityFactory().make(mealID: mealID, result: result, artwork: artwork)
         let meal = Meal(
@@ -628,17 +709,28 @@ struct DiaryMealLoggingService: MealLoggingService {
             visualIdentity: visualIdentity
         )
         store.replace(itemID: itemID, with: .meal(meal), in: dayID)
+        if let request = result.visualRequest {
+            Task {
+                await Self.visualLedger.begin(mealID: mealID, cacheKey: request.cacheKey, requestID: request.requestID)
+            }
+        }
         return meal
     }
 
     @MainActor
     func update(_ meal: Meal, in store: DiaryStore, dayID: Day.ID) {
         store.update(meal, in: dayID)
+        if let request = meal.analysis?.visualRequest {
+            Task {
+                await Self.visualLedger.begin(mealID: meal.id, cacheKey: request.cacheKey, requestID: request.requestID)
+            }
+        }
     }
 
     @MainActor
     func delete(mealID: Meal.ID, in store: DiaryStore, dayID: Day.ID) {
         store.removeMeal(id: mealID, from: dayID)
+        Task { await Self.visualLedger.delete(mealID: mealID) }
     }
 
     private func mealType(for result: MealAnalysisResult) -> String {

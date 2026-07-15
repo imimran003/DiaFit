@@ -32,6 +32,183 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(analysis.warnings.contains { $0.contains("incomplete") })
     }
 
+    /// Regression fixture captured from the free-text composer. This deliberately
+    /// fails against the alias-only resolver: it must become a component meal,
+    /// retain the explicit egg quantity and provide an editable sprouts estimate.
+    func testSproutsWithThreeBoiledEggsIsACompleteComponentMeal() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "I had sprouts with 3 boiled eggs")
+
+        XCTAssertEqual(result.detectedItems.count, 2)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "mixed-sprouts" })?.quantity, 1)
+        let eggs = try XCTUnwrap(result.detectedItems.first(where: { $0.canonicalFoodId == "boiled-egg" }))
+        XCTAssertEqual(eggs.quantity, 3)
+        XCTAssertEqual(eggs.servingUnit, .wholeEgg)
+        XCTAssertEqual(eggs.preparationMethod, "boiled")
+        XCTAssertFalse(eggs.nutrition.isEmpty)
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertTrue(result.visualRequest?.prompt.contains("exactly three peeled boiled eggs") == true)
+    }
+
+    /// A protein shake is a supplement composition, not an unknown drink. The
+    /// default estimate remains editable, but it must never fall into an empty
+    /// nutrition state when there is enough information for a generic record.
+    func testWheyProteinShakeCreatesEditableSupplementDraft() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "whey protein shake")
+
+        let whey = try XCTUnwrap(result.detectedItems.first(where: { $0.canonicalFoodId == "generic-whey-protein" }))
+        XCTAssertEqual(whey.quantity, 1)
+        XCTAssertEqual(whey.servingUnit, .scoop)
+        XCTAssertFalse(whey.nutrition.isEmpty)
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertTrue(result.clarificationQuestions.contains { $0.question.contains("How many scoops") })
+        XCTAssertEqual(result.visualRequest?.state, .waitingForClarification)
+    }
+
+    func testEggRecognitionPreservesPluralQuantityAndPreparation() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let fixtures: [(String, String, Double, ServingUnit, String?)] = [
+            ("1 boiled egg", "boiled-egg", 1, .wholeEgg, "boiled"),
+            ("2 boiled eggs", "boiled-egg", 2, .wholeEgg, "boiled"),
+            ("three boiled eggs", "boiled-egg", 3, .wholeEgg, "boiled"),
+            ("boiled eggs", "boiled-egg", 1, .wholeEgg, "boiled"),
+            ("egg whites", "egg-white", 1, .piece, nil),
+            ("4 egg whites", "egg-white", 4, .piece, nil),
+            ("scrambled eggs", "scrambled-egg", 1, .wholeEgg, "scrambled"),
+            ("omelette", "omelette", 1, .piece, nil),
+            ("fried egg", "fried-egg", 1, .wholeEgg, "fried")
+        ]
+
+        for (input, id, quantity, unit, preparation) in fixtures {
+            let item = try XCTUnwrap(engine.makeAnalysis(description: input).detectedItems.first, input)
+            XCTAssertEqual(item.canonicalFoodId, id, input)
+            XCTAssertEqual(item.quantity, quantity, input)
+            XCTAssertEqual(item.servingUnit, unit, input)
+            if let preparation { XCTAssertEqual(item.preparationMethod, preparation, input) }
+            XCTAssertFalse(item.nutrition.isEmpty, input)
+        }
+    }
+
+    func testSproutRecognitionProducesUsableEditableNutrition() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let fixtures: [(String, String, Double, ServingUnit, String?)] = [
+            ("sprouts", "mixed-sprouts", 1, .mediumBowl, nil),
+            ("mixed sprouts", "mixed-sprouts", 1, .mediumBowl, nil),
+            ("one bowl sprouts", "mixed-sprouts", 1, .mediumBowl, nil),
+            ("moong sprouts", "moong-sprouts", 1, .mediumBowl, nil),
+            ("cooked sprouts", "mixed-sprouts", 1, .mediumBowl, "cooked"),
+            ("sprout salad", "sprout-salad", 1, .mediumBowl, nil)
+        ]
+
+        for (input, id, quantity, unit, preparation) in fixtures {
+            let item = try XCTUnwrap(engine.makeAnalysis(description: input).detectedItems.first, input)
+            XCTAssertEqual(item.canonicalFoodId, id, input)
+            XCTAssertEqual(item.quantity, quantity, input)
+            XCTAssertEqual(item.servingUnit, unit, input)
+            if let preparation { XCTAssertEqual(item.preparationMethod, preparation, input) }
+            XCTAssertFalse(item.nutrition.isEmpty, input)
+        }
+    }
+
+    func testQuantityParserSupportsFractionsPairAndScoops() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let fixtures: [(String, Double, ServingUnit)] = [
+            ("half scoop whey with water", 0.5, .scoop),
+            ("one and a half scoop whey with water", 1.5, .scoop),
+            ("two scoops protein powder with water", 2, .scoop),
+            ("pair boiled eggs", 2, .wholeEgg),
+            ("one bowl sprouts", 1, .mediumBowl)
+        ]
+        for (input, expectedQuantity, expectedUnit) in fixtures {
+            let first = try XCTUnwrap(engine.makeAnalysis(description: input).detectedItems.first, input)
+            XCTAssertEqual(first.quantity, expectedQuantity, accuracy: 0.001, input)
+            XCTAssertEqual(first.servingUnit, expectedUnit, input)
+        }
+    }
+
+    func testCompoundMealsRemainDecomposedAcrossConnectors() {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let fixtures: [(String, Set<String>)] = [
+            ("sprouts with three boiled eggs", ["mixed-sprouts", "boiled-egg"]),
+            ("three eggs with sprouts", ["whole-egg", "mixed-sprouts"]),
+            ("sprouts and egg whites", ["mixed-sprouts", "egg-white"]),
+            ("whey shake and banana", ["generic-whey-protein", "banana"]),
+            ("three boiled eggs with toast", ["boiled-egg", "toast"]),
+            ("sprouts, eggs and black coffee", ["mixed-sprouts", "whole-egg", "black-coffee"]),
+            ("protein shake with oats and milk", ["generic-whey-protein", "oats"])
+        ]
+        for (input, expectedIDs) in fixtures {
+            XCTAssertEqual(Set(engine.makeAnalysis(description: input).detectedItems.map(\.canonicalFoodId)), expectedIDs, input)
+        }
+    }
+
+    func testWheyVariantsAndBasesUseFirstClassSupplementRecords() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let fixtures: [(String, String, Double, ServingUnit, SupplementBase)] = [
+            ("one scoop whey with water", "generic-whey-protein", 1, .scoop, .water),
+            ("two scoops whey with water", "generic-whey-protein", 2, .scoop, .water),
+            ("one scoop whey with milk", "generic-whey-protein", 1, .scoop, .milk),
+            ("whey isolate shake", "generic-whey-isolate", 1, .scoop, .unspecified),
+            ("whey concentrate shake", "generic-whey-concentrate", 1, .scoop, .unspecified),
+            ("chocolate whey protein", "generic-whey-protein", 1, .scoop, .unspecified),
+            ("ready-to-drink protein shake", "ready-to-drink-protein-shake", 1, .serving, .unspecified)
+        ]
+        for (input, id, quantity, unit, base) in fixtures {
+            let item = try XCTUnwrap(engine.makeAnalysis(description: input).detectedItems.first, input)
+            XCTAssertEqual(item.canonicalFoodId, id, input)
+            XCTAssertEqual(item.quantity, quantity, input)
+            XCTAssertEqual(item.servingUnit, unit, input)
+            XCTAssertEqual(item.supplementProfile?.base, base, input)
+            XCTAssertFalse(item.nutrition.isEmpty, input)
+        }
+    }
+
+    func testWheyWaterAddsNoCaloriesAndMilkAddsItsOwnNutrition() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let water = engine.makeAnalysis(description: "one scoop whey protein with water")
+        let milk = engine.makeAnalysis(description: "one scoop whey protein with milk")
+        let waterItem = try XCTUnwrap(water.detectedItems.first)
+        let milkItem = try XCTUnwrap(milk.detectedItems.first)
+
+        XCTAssertEqual(waterItem.supplementProfile?.base, .water)
+        XCTAssertEqual(milkItem.supplementProfile?.base, .milk)
+        XCTAssertEqual(water.mealTotals.caloriesKcal ?? -1, waterItem.nutrition.caloriesKcal ?? -2, accuracy: 0.001)
+        XCTAssertGreaterThan(milk.mealTotals.caloriesKcal ?? 0, water.mealTotals.caloriesKcal ?? .infinity)
+        XCTAssertGreaterThan(milk.mealTotals.proteinGrams ?? 0, water.mealTotals.proteinGrams ?? .infinity)
+        XCTAssertTrue(water.visualRequest?.prompt.contains("water") == true)
+        XCTAssertFalse(water.visualRequest?.prompt.contains("banana") ?? true)
+        XCTAssertFalse(water.visualRequest?.prompt.contains("milk") ?? true)
+    }
+
+    func testQuantitySensitiveVisualPromptAndCacheNeverReuseWrongMealImage() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let threeEggs = engine.makeAnalysis(description: "sprouts with 3 boiled eggs")
+        let twoEggs = engine.makeAnalysis(description: "sprouts with 2 boiled eggs")
+        let prompt = try XCTUnwrap(threeEggs.visualRequest?.prompt)
+
+        XCTAssertTrue(prompt.contains("mixed sprouts"))
+        XCTAssertTrue(prompt.contains("exactly three peeled boiled eggs"))
+        XCTAssertTrue(prompt.contains("No unrelated foods"))
+        XCTAssertTrue(prompt.contains("No extra eggs"))
+        XCTAssertTrue(prompt.contains("No salad ingredients"))
+        XCTAssertNotEqual(threeEggs.visualRequest?.cacheKey, twoEggs.visualRequest?.cacheKey)
+        XCTAssertNotEqual(threeEggs.visualRequest?.requestID, twoEggs.visualRequest?.requestID)
+    }
+
+    func testProviderIndependentIntegrationProducesUIReadyResult() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "protein shake with banana and milk")
+        let whey = try XCTUnwrap(result.detectedItems.first(where: { $0.category == .supplement }))
+
+        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["generic-whey-protein", "banana"]))
+        XCTAssertEqual(whey.supplementProfile?.base, .milk)
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertEqual(result.nutritionValidation?.isApproved, true)
+        XCTAssertEqual(result.visualRequest?.state, .deterministicFallback)
+        XCTAssertNotNil(result.visualRequest?.cacheKey)
+    }
+
     func testServingConversionAndNutritionScaling() {
         let roti = try! XCTUnwrap(catalog.normalise("roti"))
         let portions = StandardPortionEstimationService()

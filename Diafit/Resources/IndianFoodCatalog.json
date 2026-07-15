@@ -1,11 +1,12 @@
 {
-  "version": "2026.07-offline",
+  "version": "2026.08-offline",
   "source": "Bundled recipe estimate — recipe may vary; replace with an authenticated nutrition provider for production.",
   "groups": [
     {
       "category": "bread", "dietaryClassification": "vegan", "allergens": ["wheat"], "methods": ["griddle or tandoor"],
       "foods": [
         {"id":"roti","name":"Roti","aliases":["roti","chapati","phulka"],"ingredients":["whole-wheat flour","water"],"nutrition":{"caloriesKcal":297,"proteinGrams":11.5,"carbohydrateGrams":61.5,"fatGrams":2.2,"fibreGrams":10.0},"serving":{"quantity":1,"unit":"roti","grams":35}},
+        {"id":"toast","name":"Toast","aliases":["toast","toasts","bread toast"],"ingredients":["wheat bread"],"methods":["toasted"],"nutrition":{"caloriesKcal":265,"proteinGrams":9,"carbohydrateGrams":49,"fatGrams":3.2,"fibreGrams":2.7},"serving":{"quantity":1,"unit":"slice","grams":30},"dataSource":"Bundled toast reference","dataVersion":"2026.08","confidence":"medium"},
         {"id":"naan","name":"Naan","aliases":["naan"],"ingredients":["wheat flour","yeast"],"nutrition":{"caloriesKcal":290,"proteinGrams":9,"carbohydrateGrams":55,"fatGrams":5,"fibreGrams":2},"serving":{"quantity":1,"unit":"naan","grams":90}},
         {"id":"butter-naan","name":"Butter naan","aliases":["butter naan"],"ingredients":["wheat flour","butter"],"nutrition":{"caloriesKcal":320,"proteinGrams":8,"carbohydrateGrams":53,"fatGrams":9,"fibreGrams":2},"serving":{"quantity":1,"unit":"naan","grams":95}},
         {"id":"kulcha","name":"Kulcha","aliases":["kulcha"],"ingredients":["wheat flour"],"serving":{"quantity":1,"unit":"piece","grams":90}},
@@ -65,6 +66,16 @@
       ]
     },
     {
+      "category": "sprouts", "dietaryClassification": "vegan", "allergens": [], "methods": ["raw or lightly cooked"],
+      "foods": [
+        {"id":"mixed-sprouts","name":"Mixed sprouts","aliases":["sprouts","sprout","mixed sprout","mixed sprouts","sprouted beans"],"ingredients":["sprouted legumes"],"methods":["raw or lightly cooked, unspecified"],"nutrition":{"caloriesKcal":30,"proteinGrams":3,"carbohydrateGrams":5,"fatGrams":0.2,"fibreGrams":3},"serving":{"quantity":1,"unit":"mediumBowl","grams":150},"dataSource":"Bundled generic mixed-sprouts reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"moong-sprouts","name":"Moong sprouts","aliases":["moong sprouts","mung sprouts","mung bean sprouts","sprouted moong"],"ingredients":["sprouted mung beans"],"methods":["raw or lightly cooked"],"nutrition":{"caloriesKcal":30,"proteinGrams":3,"carbohydrateGrams":5.9,"fatGrams":0.2,"fibreGrams":1.8},"serving":{"quantity":1,"unit":"mediumBowl","grams":150},"dataSource":"Bundled mung-sprouts reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"chickpea-sprouts","name":"Chickpea sprouts","aliases":["chickpea sprouts","kala chana sprouts","sprouted chickpeas"],"ingredients":["sprouted chickpeas"],"methods":["raw or lightly cooked"],"nutrition":{"caloriesKcal":120,"proteinGrams":7,"carbohydrateGrams":20,"fatGrams":2,"fibreGrams":6},"serving":{"quantity":1,"unit":"mediumBowl","grams":150},"dataSource":"Bundled chickpea-sprouts reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"alfalfa-sprouts","name":"Alfalfa sprouts","aliases":["alfalfa sprouts"],"ingredients":["alfalfa sprouts"],"methods":["raw"],"nutrition":{"caloriesKcal":23,"proteinGrams":4,"carbohydrateGrams":2,"fatGrams":0.7,"fibreGrams":2},"serving":{"quantity":1,"unit":"mediumBowl","grams":80},"dataSource":"Bundled alfalfa-sprouts reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"sprout-salad","name":"Sprout salad","aliases":["sprout salad","sprouts salad"],"ingredients":["mixed sprouts","vegetables"],"methods":["raw salad"],"nutrition":{"caloriesKcal":35,"proteinGrams":3,"carbohydrateGrams":6,"fatGrams":0.3,"fibreGrams":3},"serving":{"quantity":1,"unit":"mediumBowl","grams":180},"dataSource":"Bundled sprout-salad reference","dataVersion":"2026.08","confidence":"medium"}
+      ]
+    },
+    {
       "category": "vegetarianCurry", "dietaryClassification": "vegetarian", "allergens": ["milk"], "methods": ["curry or dry sauté"],
       "foods": [
         {"id":"paneer-butter-masala","name":"Paneer butter masala","aliases":["paneer butter masala","butter paneer"],"ingredients":["paneer","tomato","butter","cream"],"nutrition":{"caloriesKcal":280,"proteinGrams":12,"carbohydrateGrams":10,"fatGrams":21,"fibreGrams":2},"serving":{"quantity":1,"unit":"katori","grams":180}},
@@ -108,6 +119,19 @@
       ]
     },
     {
+      "category": "egg", "dietaryClassification": "containsEgg", "allergens": ["egg"], "methods": ["boiled, poached, scrambled, fried, or baked"],
+      "foods": [
+        {"id":"whole-egg","name":"Whole egg","aliases":["egg","eggs","anda","ande"],"ingredients":["chicken egg"],"methods":["preparation unspecified"],"nutrition":{"caloriesKcal":143,"proteinGrams":12.6,"carbohydrateGrams":0.7,"fatGrams":9.5,"cholesterolMilligrams":372},"serving":{"quantity":1,"unit":"wholeEgg","grams":50},"dataSource":"Bundled standard large chicken egg reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"hard-boiled-egg","name":"Hard-boiled egg","aliases":["hard boiled egg","hard boiled eggs","boiled anda"],"ingredients":["chicken egg"],"methods":["hard-boiled, no added oil"],"nutrition":{"caloriesKcal":155,"proteinGrams":12.6,"carbohydrateGrams":1.1,"fatGrams":10.6,"cholesterolMilligrams":373},"serving":{"quantity":1,"unit":"wholeEgg","grams":50},"dataSource":"Bundled hard-boiled egg reference","dataVersion":"2026.08","confidence":"high"},
+        {"id":"soft-boiled-egg","name":"Soft-boiled egg","aliases":["soft boiled egg","soft boiled eggs"],"ingredients":["chicken egg"],"methods":["soft-boiled, no added oil"],"nutrition":{"caloriesKcal":155,"proteinGrams":12.6,"carbohydrateGrams":1.1,"fatGrams":10.6,"cholesterolMilligrams":373},"serving":{"quantity":1,"unit":"wholeEgg","grams":50},"dataSource":"Bundled soft-boiled egg reference","dataVersion":"2026.08","confidence":"high"},
+        {"id":"poached-egg","name":"Poached egg","aliases":["poached egg","poached eggs"],"ingredients":["chicken egg"],"methods":["poached, no added oil"],"nutrition":{"caloriesKcal":143,"proteinGrams":12.6,"carbohydrateGrams":0.7,"fatGrams":9.5},"serving":{"quantity":1,"unit":"wholeEgg","grams":50},"dataSource":"Bundled poached egg reference","dataVersion":"2026.08","confidence":"high"},
+        {"id":"fried-egg","name":"Fried egg","aliases":["fried egg","fried eggs"],"ingredients":["chicken egg","cooking oil"],"methods":["fried with a small oil allowance"],"nutrition":{"caloriesKcal":196,"proteinGrams":13.6,"carbohydrateGrams":1.2,"fatGrams":15.3},"serving":{"quantity":1,"unit":"wholeEgg","grams":50},"dataSource":"Bundled fried egg reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"scrambled-egg","name":"Scrambled egg","aliases":["scrambled egg","scrambled eggs"],"ingredients":["chicken egg"],"methods":["scrambled, no dairy assumed"],"nutrition":{"caloriesKcal":149,"proteinGrams":10,"carbohydrateGrams":1.6,"fatGrams":10.9},"serving":{"quantity":1,"unit":"wholeEgg","grams":55},"dataSource":"Bundled scrambled egg reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"egg-white","name":"Egg white","aliases":["egg white","egg whites","white","whites"],"ingredients":["chicken egg white"],"methods":["boiled or cooked, unspecified"],"nutrition":{"caloriesKcal":52,"proteinGrams":10.9,"carbohydrateGrams":0.7,"fatGrams":0.2},"serving":{"quantity":1,"unit":"piece","grams":33},"dataSource":"Bundled egg-white reference","dataVersion":"2026.08","confidence":"high"},
+        {"id":"egg-yolk","name":"Egg yolk","aliases":["egg yolk","egg yolks","yolk","yolks"],"ingredients":["chicken egg yolk"],"methods":["cooked or raw, unspecified"],"nutrition":{"caloriesKcal":322,"proteinGrams":15.9,"carbohydrateGrams":3.6,"fatGrams":26.5},"serving":{"quantity":1,"unit":"piece","grams":17},"dataSource":"Bundled egg-yolk reference","dataVersion":"2026.08","confidence":"medium"}
+      ]
+    },
+    {
       "category": "breakfastOrSnack", "dietaryClassification": "vegetarian", "allergens": [], "methods": ["steamed, fried, or sautéed"],
       "foods": [
         {"id":"idli","name":"Idli","aliases":["idli","idlis"],"ingredients":["rice","urad dal"],"nutrition":{"caloriesKcal":146,"proteinGrams":4,"carbohydrateGrams":28,"fatGrams":1,"fibreGrams":1},"serving":{"quantity":1,"unit":"idli","grams":40}},
@@ -128,14 +152,15 @@
         {"id":"aloo-tikki","name":"Aloo tikki","aliases":["aloo tikki","potato patty"],"ingredients":["potato","oil"],"serving":{"quantity":1,"unit":"piece","grams":80}},
         {"id":"vada-pav","name":"Vada pav","aliases":["vada pav"],"ingredients":["bread roll","potato fritter"],"serving":{"quantity":1,"unit":"piece","grams":150}},
         {"id":"misal-pav","name":"Misal pav","aliases":["misal pav"],"ingredients":["sprouts","bread roll"],"serving":{"quantity":1,"unit":"plate","grams":280}},
-        {"id":"omelette","name":"Omelette","aliases":["omelette","omelet"],"ingredients":["egg","oil"],"serving":{"quantity":1,"unit":"piece","grams":110}},
-        {"id":"boiled-egg","name":"Boiled egg","aliases":["boiled egg","boiled eggs"],"ingredients":["egg"],"serving":{"quantity":1,"unit":"piece","grams":50}}
+        {"id":"omelette","name":"Omelette","aliases":["omelette","omelet"],"ingredients":["egg","oil"],"methods":["plain omelette with a small oil allowance"],"nutrition":{"caloriesKcal":154,"proteinGrams":10.9,"carbohydrateGrams":1.9,"fatGrams":11.9},"serving":{"quantity":1,"unit":"piece","grams":110},"dataSource":"Bundled plain omelette reference","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"boiled-egg","name":"Boiled egg","aliases":["boiled egg","boiled eggs"],"ingredients":["chicken egg"],"methods":["boiled, no added oil"],"nutrition":{"caloriesKcal":155,"proteinGrams":12.6,"carbohydrateGrams":1.1,"fatGrams":10.6,"cholesterolMilligrams":373},"serving":{"quantity":1,"unit":"wholeEgg","grams":50},"dataSource":"Bundled boiled chicken egg reference","dataVersion":"2026.08","confidence":"high"}
       ]
     },
     {
       "category": "dairyOrSide", "dietaryClassification": "vegetarian", "allergens": ["milk"], "methods": ["fresh or chilled"],
       "foods": [
         {"id":"dahi","name":"Dahi","aliases":["dahi","curd","yogurt"],"ingredients":["milk culture"],"nutrition":{"caloriesKcal":61,"proteinGrams":3.5,"carbohydrateGrams":4.7,"fatGrams":3.3,"fibreGrams":0},"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"milk","name":"Milk","aliases":["milk","whole milk","cow milk"],"ingredients":["milk"],"nutrition":{"caloriesKcal":61,"proteinGrams":3.2,"carbohydrateGrams":4.8,"fatGrams":3.3,"totalSugarGrams":4.8},"serving":{"quantity":1,"unit":"cup","grams":240},"dataSource":"Bundled whole-milk reference","dataVersion":"2026.08","confidence":"medium"},
         {"id":"raita","name":"Raita","aliases":["raita"],"ingredients":["yogurt","vegetables"],"nutrition":{"caloriesKcal":70,"proteinGrams":3.5,"carbohydrateGrams":5,"fatGrams":3.5,"fibreGrams":0.5},"serving":{"quantity":1,"unit":"katori","grams":150}},
         {"id":"paneer","name":"Paneer","aliases":["paneer","cottage cheese"],"ingredients":["milk"],"serving":{"quantity":1,"unit":"serving","grams":75}},
         {"id":"ghee","name":"Ghee","aliases":["ghee","clarified butter"],"ingredients":["clarified butter"],"serving":{"quantity":1,"unit":"teaspoon","grams":5}},
@@ -146,6 +171,13 @@
         {"id":"mint-chutney","name":"Mint chutney","aliases":["mint chutney","green chutney"],"ingredients":["mint","coriander"],"serving":{"quantity":1,"unit":"tablespoon","grams":20}},
         {"id":"tamarind-chutney","name":"Tamarind chutney","aliases":["tamarind chutney","imli chutney"],"ingredients":["tamarind","jaggery"],"serving":{"quantity":1,"unit":"tablespoon","grams":20}},
         {"id":"salad","name":"Salad","aliases":["salad","kachumber"],"ingredients":["raw vegetables"],"serving":{"quantity":1,"unit":"smallBowl","grams":100}}
+      ]
+    },
+    {
+      "category": "fruitOrVegetable", "dietaryClassification": "vegan", "allergens": [], "methods": ["fresh or blended"],
+      "foods": [
+        {"id":"banana","name":"Banana","aliases":["banana","bananas"],"ingredients":["banana"],"nutrition":{"caloriesKcal":89,"proteinGrams":1.1,"carbohydrateGrams":22.8,"fatGrams":0.3,"fibreGrams":2.6,"totalSugarGrams":12.2},"serving":{"quantity":1,"unit":"piece","grams":118},"dataSource":"Bundled banana reference","dataVersion":"2026.08","confidence":"high"},
+        {"id":"oats","name":"Oats","aliases":["oats","rolled oats","oatmeal"],"ingredients":["oats"],"nutrition":{"caloriesKcal":389,"proteinGrams":16.9,"carbohydrateGrams":66.3,"fatGrams":6.9,"fibreGrams":10.6},"serving":{"quantity":1,"unit":"cup","grams":40},"dataSource":"Bundled dry oats reference","dataVersion":"2026.08","confidence":"medium"}
       ]
     },
     {
@@ -180,6 +212,15 @@
         {"id":"cappuccino","name":"Cappuccino","aliases":["cappuccino"],"ingredients":["espresso","milk foam"],"methods":["unsweetened cappuccino assumed"],"nutrition":{"caloriesKcal":18,"proteinGrams":1.2,"carbohydrateGrams":1.8,"fatGrams":0.8},"serving":{"quantity":1,"unit":"cup","grams":180},"confidence":"low"},
         {"id":"buttermilk","name":"Buttermilk","aliases":["buttermilk","chaas"],"ingredients":["yogurt","water"],"nutrition":{"caloriesKcal":16,"proteinGrams":1.6,"carbohydrateGrams":2.3,"fatGrams":0.6},"serving":{"quantity":1,"unit":"glass","grams":250},"confidence":"low"},
         {"id":"sugarcane-juice","name":"Sugarcane juice","aliases":["sugarcane juice","ganne ka juice"],"ingredients":["sugarcane"],"serving":{"quantity":1,"unit":"glass","grams":250}}
+      ]
+    },
+    {
+      "category": "supplement", "dietaryClassification": "vegetarian", "allergens": ["milk"], "methods": ["mixed as a shake or smoothie"],
+      "foods": [
+        {"id":"generic-whey-protein","name":"Whey protein","aliases":["whey","whey protein","whey protein shake","whey shake","protein powder","protein shake","protein drink","scoop of whey","chocolate whey","chocolate whey protein","vanilla whey","unflavoured whey","unflavored whey"],"ingredients":["whey protein powder"],"methods":["mixed with water or milk"],"nutrition":{"caloriesKcal":400,"proteinGrams":75,"carbohydrateGrams":10,"fatGrams":7},"serving":{"quantity":1,"unit":"scoop","grams":30},"dataSource":"Bundled generic whey-protein fallback","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"generic-whey-isolate","name":"Whey isolate","aliases":["whey isolate","whey isolate shake","isolate shake","isolate whey"],"ingredients":["whey protein isolate"],"methods":["mixed with water or milk"],"nutrition":{"caloriesKcal":370,"proteinGrams":85,"carbohydrateGrams":5,"fatGrams":2},"serving":{"quantity":1,"unit":"scoop","grams":30},"dataSource":"Bundled generic whey-isolate fallback","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"generic-whey-concentrate","name":"Whey concentrate","aliases":["whey concentrate","whey concentrate shake","concentrate shake"],"ingredients":["whey protein concentrate"],"methods":["mixed with water or milk"],"nutrition":{"caloriesKcal":400,"proteinGrams":75,"carbohydrateGrams":10,"fatGrams":7},"serving":{"quantity":1,"unit":"scoop","grams":30},"dataSource":"Bundled generic whey-concentrate fallback","dataVersion":"2026.08","confidence":"medium"},
+        {"id":"ready-to-drink-protein-shake","name":"Ready-to-drink protein shake","aliases":["ready to drink protein shake","ready-to-drink protein shake","bottled protein shake","packaged protein shake"],"ingredients":["packaged protein beverage"],"methods":["ready to drink"],"nutrition":{"caloriesKcal":160,"proteinGrams":25,"carbohydrateGrams":8,"fatGrams":3},"serving":{"quantity":1,"unit":"serving","grams":330},"dataSource":"Bundled ready-to-drink protein beverage fallback","dataVersion":"2026.08","confidence":"low"}
       ]
     },
     {

@@ -22,6 +22,10 @@ struct MealAnalysisResult: Identifiable, Codable, Hashable, Sendable {
     /// `mealTotals` holds only values approved for display and saving. The raw
     /// provider proposal stays in this report when validation blocks it.
     var nutritionValidation: NutritionValidationReport? = nil
+    /// A structured visual request is created as soon as the food pipeline has
+    /// enough canonical information. It is intentionally independent of a live
+    /// image provider so the app can show a truthful deterministic fallback.
+    var visualRequest: MealVisualRequest? = nil
 
     var id: UUID { analysisId }
 
@@ -91,6 +95,12 @@ struct DetectedFoodItem: Identifiable, Codable, Hashable, Sendable {
     var nutritionProvenance: NutritionProvenance
     var rawNutrition: NutritionValues? = nil
     var nutritionValidation: NutritionValidationReport? = nil
+    /// The alias and parsing confidence make a local estimate inspectable
+    /// without retaining the member's entire raw food note on the meal.
+    var matchedAlias: String? = nil
+    var confidenceScore: Double = 0
+    var modifiers: [String] = []
+    var supplementProfile: SupplementProductProfile? = nil
 }
 
 struct AlternativeFoodMatch: Codable, Hashable, Sendable, Identifiable {
@@ -111,6 +121,9 @@ enum FoodCategory: String, Codable, CaseIterable, Hashable, Sendable {
     case dairyOrSide
     case dessertOrDrink
     case fruitOrVegetable
+    case egg
+    case sprouts
+    case supplement
     case unknown
 }
 
@@ -147,14 +160,17 @@ enum ServingUnit: String, Codable, CaseIterable, Hashable, Sendable {
     case glass
     case plate
     case serving
+    case wholeEgg
+    case scoop
 
     var singularDisplayName: String {
         switch self {
         case .smallBowl: return "small bowl"
         case .mediumBowl: return "medium bowl"
         case .largeBowl: return "large bowl"
+        case .wholeEgg: return "whole egg"
         default: return rawValue
-    }
+        }
     }
 }
 
@@ -273,6 +289,37 @@ struct NutritionProvenance: Codable, Hashable, Sendable {
         dataVersion: nil,
         confidence: .unknown
     )
+}
+
+enum SupplementBase: String, Codable, CaseIterable, Hashable, Sendable {
+    case water
+    case milk
+    case unspecified
+
+    var displayName: String {
+        switch self {
+        case .water: return "water"
+        case .milk: return "milk"
+        case .unspecified: return "base not specified"
+        }
+    }
+}
+
+/// Packaged supplements are represented as products, never as restaurant
+/// recipes. A saved account-level product can replace this generic profile in a
+/// future provider without changing the analysis or review contracts.
+struct SupplementProductProfile: Codable, Hashable, Sendable {
+    var brand: String?
+    var productName: String
+    var barcode: String?
+    var flavour: String?
+    var servingSizeGrams: Double
+    var servingUnit: ServingUnit
+    var gramsPerScoop: Double?
+    var base: SupplementBase
+    var source: String
+    var sourceVersion: String?
+    var isUserConfirmed: Bool
 }
 
 struct GlycaemicInformation: Codable, Hashable, Sendable {

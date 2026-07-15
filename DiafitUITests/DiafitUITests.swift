@@ -56,6 +56,60 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Confirm estimate"].waitForExistence(timeout: 2))
     }
 
+    func testSproutsWithThreeBoiledEggsShowsComponentsTotalsVisualAndPersists() throws {
+        submitFoodNote("sprouts with 3 boiled eggs")
+
+        XCTAssertTrue(app.staticTexts["Mixed sprouts"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Boiled egg"].exists)
+        XCTAssertEqual(app.textFields["Boiled egg quantity"].value as? String, "3")
+        XCTAssertTrue(app.descendants(matching: .any)["meal-total-kcal"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.descendants(matching: .any)["meal-total-protein"].exists)
+        XCTAssertTrue(app.staticTexts["MEAL VISUAL READY"].exists)
+
+        let caloriesBefore = metricLabel("meal-total-kcal")
+        // The review card is taller than the simulator viewport; reveal the
+        // editable component row before changing its explicit serving control.
+        app.swipeDown()
+        app.swipeDown()
+        let unitMenu = app.buttons["Change Mixed sprouts serving unit"]
+        XCTAssertTrue(unitMenu.exists)
+        unitMenu.tap()
+        app.buttons["small bowl"].tap()
+        XCTAssertNotEqual(metricLabel("meal-total-kcal"), caloriesBefore)
+
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+
+        let saved = app.buttons["Saved meal Mixed sprouts + Boiled egg"]
+        XCTAssertTrue(saved.waitForExistence(timeout: 4))
+        saved.press(forDuration: 1.1)
+        let refine = app.buttons["Refine estimate"]
+        XCTAssertTrue(refine.waitForExistence(timeout: 2))
+        refine.tap()
+        XCTAssertTrue(app.staticTexts["Mixed sprouts"].waitForExistence(timeout: 2))
+        XCTAssertTrue(app.staticTexts["MEAL VISUAL READY"].exists)
+        attachScreenshot(named: "sprouts-and-three-eggs-review")
+    }
+
+    func testOneScoopWheyWithWaterShowsNutritionVisualAndPersists() throws {
+        submitFoodNote("one scoop whey protein with water")
+
+        XCTAssertTrue(app.staticTexts["Whey protein"].waitForExistence(timeout: 4))
+        XCTAssertEqual(app.textFields["Whey protein quantity"].value as? String, "1")
+        XCTAssertTrue(app.descendants(matching: .any)["meal-total-kcal"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["meal-total-protein"].exists)
+        XCTAssertTrue(app.staticTexts["MEAL VISUAL READY"].exists)
+        XCTAssertFalse(metricLabel("meal-total-kcal").contains("—"))
+        XCTAssertFalse(metricLabel("meal-total-protein").contains("—"))
+
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+        XCTAssertTrue(app.buttons["Saved meal Whey protein"].waitForExistence(timeout: 4))
+        attachScreenshot(named: "whey-water-review")
+    }
+
     func testChaiAndParathaShowsBothComponentsThenUsesNeutralPlaceholder() throws {
         submitFoodNote("chai and paratha")
 
@@ -83,6 +137,10 @@ final class DiafitUITests: XCTestCase {
         let send = app.buttons["Send food note"]
         XCTAssertTrue(send.waitForExistence(timeout: 2))
         send.tap()
+    }
+
+    private func metricLabel(_ identifier: String) -> String {
+        app.descendants(matching: .any)[identifier].label
     }
 
     func testPhotoReviewFixtureWithUnsupportedComponentStaysUnconfirmed() throws {

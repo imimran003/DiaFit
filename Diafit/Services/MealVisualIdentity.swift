@@ -8,6 +8,115 @@ enum MealVisualSource: String, Codable, Hashable, Sendable {
     case deterministicPlaceholder
 }
 
+enum MealVisualRequestState: String, Codable, Hashable, Sendable {
+    /// A provider may run with the structured prompt. Local builds replace this
+    /// immediately with a deterministic component composition.
+    case queued
+    /// A high-impact food detail would materially change the requested image.
+    case waitingForClarification
+    /// A provider is unavailable; the UI has a truthful, retryable component
+    /// composition instead of an unexplained blank image area.
+    case deterministicFallback
+    case failed
+}
+
+/// The request contract remains useful whether an image is produced by a
+/// server, a small local model, a cache, or the deterministic fallback. It is
+/// bound to a meal/analysis ID and carries a quantity-sensitive signature.
+struct MealVisualRequest: Codable, Hashable, Sendable {
+    let mealID: UUID
+    let requestID: UUID
+    let canonicalComponentIDs: [String]
+    let quantitySignature: [String]
+    let styleVersion: String
+    let prompt: String
+    let cacheKey: String
+    var state: MealVisualRequestState
+    var failureReason: String?
+}
+
+struct MealVisualRequestBuilder: Sendable {
+    func make(
+        mealID: UUID,
+        items: [DetectedFoodItem],
+        clarificationQuestions: [ClarificationQuestion]
+    ) -> MealVisualRequest? {
+        guard !items.isEmpty else { return nil }
+        let components = items.map(\.canonicalFoodId)
+        let signatures = items.map { item in
+            let preparation = item.preparationMethod ?? "unspecified"
+            return "\(item.canonicalFoodId):\(item.quantity):\(item.servingUnit.rawValue):\(preparation)"
+        }.sorted()
+        let prompt = structuredPrompt(items: items)
+        let needsHighImpactAnswer = clarificationQuestions.contains { $0.impactLevel == .high && $0.answer == nil }
+        let state: MealVisualRequestState = needsHighImpactAnswer ? .waitingForClarification : .deterministicFallback
+        let cacheKey = sha256([
+            "components=" + components.sorted().joined(separator: ","),
+            "quantity=" + signatures.joined(separator: ","),
+            "style=" + MealVisualIdentityFactory.styleVersion,
+            "prompt=" + prompt
+        ].joined(separator: "|"))
+
+        FoodLoggingDiagnostics.record("visual.request", fields: [
+            "cacheKey": String(cacheKey.prefix(12)),
+            "components": components.joined(separator: ","),
+            "eligibility": state.rawValue,
+            "mealID": mealID.uuidString,
+            "requestID": "created"
+        ])
+
+        return MealVisualRequest(
+            mealID: mealID,
+            requestID: UUID(),
+            canonicalComponentIDs: components,
+            quantitySignature: signatures,
+            styleVersion: MealVisualIdentityFactory.styleVersion,
+            prompt: prompt,
+            cacheKey: cacheKey,
+            state: state,
+            failureReason: state == .deterministicFallback ? "No configured image provider; showing a deterministic component composition." : nil
+        )
+    }
+
+    private func structuredPrompt(items: [DetectedFoodItem]) -> String {
+        let components = items.map(componentDescription).joined(separator: "; ")
+        let type = items.count > 1 ? "simple balanced meal" : "single food or drink"
+        let hasSprouts = items.contains { $0.category == .sprouts }
+        let hasEggs = items.contains { $0.category == .egg || $0.canonicalFoodId.contains("egg") }
+        let hasSupplement = items.contains { $0.category == .supplement }
+        let sproutConstraint = hasSprouts ? "No salad ingredients unless a sprout salad is explicitly listed." : ""
+        let eggConstraint = hasEggs ? "No extra eggs; preserve the stated egg count." : ""
+        let shakeConstraint = hasSupplement ? "No fruit unless it is listed as a component; no fake product label." : ""
+        return "Meal components: \(components). Meal type: \(type). Style: isolated studio food photography. Background: clean warm-neutral. Composition: show every requested component clearly and preserve stated quantities when visually important. Lighting: soft natural studio lighting. Perspective: slightly elevated. No unrelated foods, no text, no branding, no cutlery obscuring food, no decorative garnish that changes identity. \(sproutConstraint) \(eggConstraint) \(shakeConstraint)"
+    }
+
+    private func componentDescription(_ item: DetectedFoodItem) -> String {
+        let count = quantityDescription(item)
+        switch item.canonicalFoodId {
+        case "boiled-egg", "hard-boiled-egg", "soft-boiled-egg":
+            return "exactly \(count) peeled \(item.preparationMethod ?? "boiled") eggs"
+        case "mixed-sprouts", "moong-sprouts", "chickpea-sprouts", "alfalfa-sprouts", "sprout-salad":
+            return "\(count) \(item.servingUnit.singularDisplayName) of \(item.displayName.lowercased()), \(item.preparationMethod ?? "preparation unspecified")"
+        default:
+            if let supplement = item.supplementProfile {
+                let flavour = supplement.flavour.map { "\($0) " } ?? ""
+                return "\(count) \(item.servingUnit.singularDisplayName) of \(flavour)\(item.displayName.lowercased()), mixed with \(supplement.base.displayName)"
+            }
+            return "\(count) \(item.servingUnit.singularDisplayName) of \(item.displayName.lowercased())"
+        }
+    }
+
+    private func quantityDescription(_ item: DetectedFoodItem) -> String {
+        let value = item.quantity
+        let words: [Double: String] = [1: "one", 2: "two", 3: "three", 4: "four"]
+        return words[value] ?? value.formatted(.number.precision(.fractionLength(0...1)))
+    }
+
+    private func sha256(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+}
+
 struct MealVisualIdentity: Codable, Hashable, Sendable {
     enum Composition: String, Codable, Hashable, Sendable {
         case singleFood
@@ -36,7 +145,9 @@ struct MealVisualIdentityFactory: Sendable {
         // The canonical ID encodes the selected preparation (for example,
         // `black-coffee` versus `coffee-with-milk`). It is intentionally used
         // instead of localised display or method text in the cache identity.
-        let variations = result.detectedItems.map(\.canonicalFoodId).sorted()
+        let variations = result.detectedItems.map { item in
+            "\(item.canonicalFoodId):\(item.quantity):\(item.servingUnit.rawValue):\(item.preparationMethod ?? "unspecified")"
+        }.sorted()
         let composition: MealVisualIdentity.Composition = foodIDs.count > 1 ? .combinedMeal : .singleFood
         let source: MealVisualSource = artwork == .neutral ? .deterministicPlaceholder : .bundledEditorial
         let requestID = UUID()

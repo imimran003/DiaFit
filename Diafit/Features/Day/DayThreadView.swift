@@ -110,7 +110,7 @@ struct DayThreadView: View {
             set: { if !$0 { mealPendingDeletion = nil } }
         ), presenting: mealPendingDeletion) { meal in
             Button("Delete", role: .destructive) {
-                store.removeMeal(id: meal.id, from: dayID)
+                DiaryMealLoggingService().delete(mealID: meal.id, in: store, dayID: dayID)
                 mealPendingDeletion = nil
             }
             Button("Cancel", role: .cancel) { mealPendingDeletion = nil }
@@ -223,7 +223,7 @@ struct DayThreadView: View {
         updated.fat = Int(draft.result.mealTotals.fatGrams?.rounded() ?? 0)
         updated.subtitle = "Confirmed estimate · \(draft.result.nutritionProvenance.dataSource)"
         updated.analysis = draft.result
-        store.update(updated, in: dayID)
+        DiaryMealLoggingService().update(updated, in: store, dayID: dayID)
         mealBeingEdited = nil
     }
 }

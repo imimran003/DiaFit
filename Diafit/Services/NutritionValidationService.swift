@@ -17,6 +17,8 @@ struct NutritionValidationReport: Codable, Hashable, Sendable {
             case unreasonableWeight
             case energyMismatch
             case implausibleBeverageEnergy
+            case implausibleEggEnergy
+            case implausibleSupplementServing
             case unavailableNutrition
         }
 
@@ -82,7 +84,7 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
                 issues.append(.init(
                     code: .invalidNumber,
                     severity: .blocking,
-                    message: "(name) must be a finite, non-negative value."
+                    message: "\(name) must be a finite, non-negative value."
                 ))
             }
         }
@@ -136,6 +138,46 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
                     code: .implausibleBeverageEnergy,
                     severity: .blocking,
                     message: "A plain unsweetened beverage cannot use this calorie estimate. Check milk, sugar, cream, and serving details."
+                ))
+            }
+        }
+
+        if let canonicalFoodID,
+           canonicalFoodID.contains("egg"),
+           let calories = rawValues.caloriesKcal {
+            let count = max(quantity ?? 1, 1)
+            let perEgg = calories / count
+            let isBoiled = canonicalFoodID.contains("boiled")
+            let range: ClosedRange<Double>
+            if canonicalFoodID.contains("white") {
+                range = 10...40
+            } else if canonicalFoodID.contains("yolk") {
+                range = 30...85
+            } else {
+                range = isBoiled ? 50...110 : 35...160
+            }
+            if !range.contains(perEgg) {
+                issues.append(.init(
+                    code: .implausibleEggEnergy,
+                    severity: .blocking,
+                    message: "This egg estimate does not scale plausibly for the selected preparation and quantity."
+                ))
+            }
+        }
+
+        if let canonicalFoodID,
+           canonicalFoodID.contains("whey"),
+           let protein = rawValues.proteinGrams,
+           servingUnit == .scoop {
+            let scoops = max(quantity ?? 1, 1)
+            let proteinPerScoop = protein / scoops
+            // Generic whey usually supplies roughly 15–35 g protein per scoop.
+            // Values outside this range often reveal scoop/gram confusion.
+            if proteinPerScoop < 12 || proteinPerScoop > 40 {
+                issues.append(.init(
+                    code: .implausibleSupplementServing,
+                    severity: .blocking,
+                    message: "Protein per scoop is implausible for whey. Check scoop count and the product label."
                 ))
             }
         }
