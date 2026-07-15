@@ -20,9 +20,9 @@ struct AppDependencies: Sendable {
     static let local = AppDependencies(
         photoAnalysis: PhotoAnalysisOrchestrator(),
         mealVisuals: .local,
-        foodUnderstanding: nil,
-        foodResolutionRouter: DefaultFoodResolutionRouter(),
-        textMealAnalysis: HybridMealAnalysisCoordinator(),
+        foodUnderstanding: LocalStructuredMealUnderstandingService(),
+        foodResolutionRouter: DefaultFoodResolutionRouter(understanding: LocalStructuredMealUnderstandingService()),
+        textMealAnalysis: HybridMealAnalysisCoordinator(router: DefaultFoodResolutionRouter(understanding: LocalStructuredMealUnderstandingService())),
         normalisation: HybridFoodNormalisationService(),
         nutritionResolution: HybridNutritionResolutionService(),
         recipeCalculation: CatalogRecipeCalculationService(),

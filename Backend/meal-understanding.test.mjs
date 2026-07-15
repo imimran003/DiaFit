@@ -18,6 +18,10 @@ const kadhiChawal = await new MockMealParser().parse({ text: 'kadhi chaawal' });
 assert.deepEqual(kadhiChawal.detectedItems.map(item => item.canonicalSearchName), ['Indian yogurt and gram flour curry', 'cooked white rice']);
 const plainWater = await new MockMealParser().parse({ text: '500 ml water' });
 assert.equal(plainWater.detectedItems[0].quantity, 500);
+const arharChawal = await new MockMealParser().parse({ text: 'arhar daal with chaawal' });
+assert.deepEqual(arharChawal.detectedItems.map(item => item.canonicalSearchName), ['toor dal', 'cooked white rice']);
+const khichdi = await new MockMealParser().parse({ text: 'khichdi' });
+assert.equal(khichdi.detectedItems[0].canonicalSearchName, 'khichdi');
 
 let request;
 let requestOptions;

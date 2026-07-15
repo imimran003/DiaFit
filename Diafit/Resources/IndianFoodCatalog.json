@@ -55,7 +55,7 @@
         {"id":"dal-makhani","name":"Dal makhani","aliases":["dal makhani"],"ingredients":["black lentils","cream","butter"],"serving":{"quantity":1,"unit":"katori","grams":180}},
         {"id":"moong-dal","name":"Moong dal","aliases":["moong dal","mung dal"],"ingredients":["mung beans"],"serving":{"quantity":1,"unit":"katori","grams":150}},
         {"id":"masoor-dal","name":"Masoor dal","aliases":["masoor dal","red lentil dal"],"ingredients":["red lentils"],"serving":{"quantity":1,"unit":"katori","grams":150}},
-        {"id":"toor-dal","name":"Toor dal","aliases":["toor dal","arhar dal"],"ingredients":["pigeon peas"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"toor-dal","name":"Toor dal","aliases":["toor dal","toor daal","arhar dal","arhar daal","tur dal","tur daal"],"regionalNames":["arhar daal","toor daal"],"transliterations":["arhar daal","toor daal","tur daal"],"ingredients":["pigeon peas"],"serving":{"quantity":1,"unit":"katori","grams":150}},
         {"id":"chana-dal","name":"Chana dal","aliases":["chana dal"],"ingredients":["split chickpeas"],"serving":{"quantity":1,"unit":"katori","grams":150}},
         {"id":"rajma","name":"Rajma","aliases":["rajma","kidney bean curry"],"ingredients":["kidney beans","tomato"],"nutrition":{"caloriesKcal":127,"proteinGrams":8.7,"carbohydrateGrams":22.8,"fatGrams":0.5,"fibreGrams":6.4},"serving":{"quantity":1,"unit":"katori","grams":170}},
         {"id":"chole","name":"Chole","aliases":["chole","chana masala","chickpea curry"],"ingredients":["chickpeas","tomato","spices"],"serving":{"quantity":1,"unit":"katori","grams":170}},

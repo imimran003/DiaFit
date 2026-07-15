@@ -56,6 +56,43 @@ protocol FoodUnderstandingService: Sendable {
     func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult
 }
 
+/// Offline development implementation of the same structured boundary. It is
+/// deliberately used only when a backend client is not configured; production
+/// composition should inject `BackendFoodUnderstandingService` here. Keeping
+/// this adapter non-optional means an incomplete local record still traverses
+/// the interpretation stage instead of silently ending in the local parser.
+struct LocalStructuredMealUnderstandingService: FoodUnderstandingService, Sendable {
+    let catalog: IndianFoodCatalogService
+
+    init(catalog: IndianFoodCatalogService = IndianFoodCatalogService()) {
+        self.catalog = catalog
+    }
+
+    func parse(text: String, image: PreparedFoodImage? = nil) async throws -> MealParseResult {
+        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(text)
+        let items = trace.components.map { component in
+            ParsedFoodItem(
+                originalText: component.matchedAlias,
+                canonicalSearchName: component.food.englishName,
+                regionalName: component.food.regionalNames.first,
+                quantity: component.quantity,
+                unit: component.servingUnit.rawValue,
+                preparationMethod: component.preparationMethod,
+                additions: component.modifiers,
+                confidence: component.confidenceScore,
+                requiresClarification: false
+            )
+        }
+        return MealParseResult(
+            detectedItems: items,
+            unresolvedItems: items.isEmpty ? [text] : [],
+            mealDescription: text,
+            clarificationQuestions: [],
+            confidence: items.map(\.confidence).min() ?? 0.1
+        )
+    }
+}
+
 /// A backend client is intentionally the only OpenAI-facing implementation.
 /// The iOS target receives an account token; it never contains a provider key.
 struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
@@ -379,6 +416,107 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
     }
 }
 
+/// Last-resort, traceable nutrition for a recognised food after the backend
+/// interpretation path has been attempted. This is intentionally a curated
+/// ingredient/category estimate, never a language-model nutrition answer.
+struct CuratedNutritionFallbackService: Sendable {
+    let catalog: IndianFoodCatalogService
+    let portions: StandardPortionEstimationService
+    let validation: any NutritionValidationService
+
+    init(catalog: IndianFoodCatalogService = IndianFoodCatalogService(),
+         portions: StandardPortionEstimationService = .init(),
+         validation: any NutritionValidationService = DefaultNutritionValidationService()) {
+        self.catalog = catalog
+        self.portions = portions
+        self.validation = validation
+    }
+
+    func resolve(item: ParsedFoodItem, canonical: CanonicalFoodMatch?) -> NutritionResolution {
+        guard let canonical else {
+            return unavailable(item: item, assumptions: ["No canonical food identity was available for the curated fallback."])
+        }
+        let amount = item.quantity ?? 1
+        let servingUnit = ServingUnit(rawValue: item.unit ?? "") ?? canonical.food.standardServing?.unit ?? .serving
+        let grams = item.estimatedGrams
+            ?? portions.estimatedWeight(quantity: amount, unit: servingUnit, food: canonical.food)
+            ?? canonical.food.standardServing?.grams
+            ?? 200
+
+        let values: NutritionValues
+        let assumptions: [String]
+        let ingredientFoods = canonical.food.commonIngredients.compactMap(ingredientFood)
+            .filter { $0.nutritionPer100Grams != nil }
+        if !ingredientFoods.isEmpty {
+            let gramsPerIngredient = grams / Double(ingredientFoods.count)
+            values = NutritionValues.total(of: ingredientFoods.map { food in
+                food.nutritionPer100Grams?.scaled(by: gramsPerIngredient / 100) ?? .unavailable
+            })
+            assumptions = [
+                "Calculated from curated ingredient records for \(canonical.food.canonicalName).",
+                "Ingredient weights are distributed evenly because the recipe ratio was not provided."
+            ]
+        } else {
+            values = genericValues(for: canonical.food.category, grams: grams)
+            assumptions = [
+                "Using a curated generic \(canonical.food.category.rawValue) estimate because no complete food record was available.",
+                "Serving size is editable before confirmation."
+            ]
+        }
+
+        let report = validation.validate(rawValues: values, canonicalFoodID: canonical.food.canonicalId,
+                                         quantity: amount, servingUnit: servingUnit, estimatedWeightGrams: grams)
+        let safe = report.safeValues ?? .unavailable
+        return NutritionResolution(
+            lookup: NutritionLookup(
+                values: safe,
+                provenance: report.isApproved
+                    ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Diafit curated fallback", dataVersion: catalog.version, confidence: .low)
+                    : .unavailable
+            ),
+            sourceRecordID: report.isApproved ? canonical.food.canonicalId : nil,
+            servingAmount: amount,
+            servingUnit: servingUnit.rawValue,
+            estimatedGrams: grams,
+            assumptions: assumptions + report.issues.map(\.message),
+            verified: report.isApproved && !safe.isEmpty
+        )
+    }
+
+    private func unavailable(item: ParsedFoodItem, assumptions: [String]) -> NutritionResolution {
+        NutritionResolution(lookup: NutritionLookup(values: .unavailable, provenance: .unavailable),
+                             sourceRecordID: nil, servingAmount: item.quantity ?? 1,
+                             servingUnit: item.unit ?? "serving", estimatedGrams: item.estimatedGrams,
+                             assumptions: assumptions, verified: false)
+    }
+
+    private func ingredientFood(_ ingredient: String) -> IndianFoodDefinition? {
+        if let exact = catalog.normalise(ingredient) { return exact }
+        let normalized = ingredient.lowercased()
+        if normalized.contains("lentil") || normalized.contains("pea") || normalized.contains("dal") {
+            return catalog.foods.first { $0.category == .lentilOrLegume && $0.nutritionPer100Grams != nil }
+        }
+        if normalized.contains("rice") {
+            return catalog.foods.first { $0.category == .rice && $0.nutritionPer100Grams != nil }
+        }
+        return nil
+    }
+
+    private func genericValues(for category: FoodCategory, grams: Double) -> NutritionValues {
+        let per100: NutritionValues
+        switch category {
+        case .rice: per100 = NutritionValues(caloriesKcal: 130, proteinGrams: 2.4, carbohydrateGrams: 28, fatGrams: 0.3, fibreGrams: 0.4)
+        case .lentilOrLegume: per100 = NutritionValues(caloriesKcal: 120, proteinGrams: 8, carbohydrateGrams: 20, fatGrams: 1.5, fibreGrams: 6)
+        case .bread: per100 = NutritionValues(caloriesKcal: 280, proteinGrams: 8, carbohydrateGrams: 45, fatGrams: 8, fibreGrams: 3)
+        case .dairyOrSide: per100 = NutritionValues(caloriesKcal: 90, proteinGrams: 4, carbohydrateGrams: 8, fatGrams: 4, fibreGrams: 1)
+        case .dessertOrDrink: per100 = NutritionValues(caloriesKcal: 65, proteinGrams: 2, carbohydrateGrams: 10, fatGrams: 2, fibreGrams: 0)
+        case .supplement: per100 = NutritionValues(caloriesKcal: 380, proteinGrams: 75, carbohydrateGrams: 10, fatGrams: 6, fibreGrams: 1)
+        default: per100 = NutritionValues(caloriesKcal: 140, proteinGrams: 5, carbohydrateGrams: 18, fatGrams: 5, fibreGrams: 3)
+        }
+        return per100.scaled(by: grams / 100)
+    }
+}
+
 // MARK: - Recipe calculation and clarification
 
 struct RecipeIngredient: Hashable, Sendable {
@@ -448,6 +586,88 @@ enum FoodNutritionRoute: String, Codable, Hashable, Sendable {
     case unavailable
 }
 
+/// Explicit lifecycle states keep a recognised name from being mistaken for a
+/// nutrition resolution. A local catalog hit can still require interpretation,
+/// recipe calculation, or a provider-backed retry.
+enum FoodResolutionState: Equatable, Sendable {
+    case inputReceived
+    case checkingUserFoods
+    case checkingLocalData
+    case localCandidateFound
+    case evaluatingCompleteness
+    case requiresAIInterpretation
+    case callingBackend
+    case interpretingFood
+    case resolvingNutrition
+    case calculatingRecipe
+    case validatingNutrition
+    case clarificationRequired
+    case readyForReview
+    case unavailable(ResolutionFailure)
+}
+
+enum ResolutionFailure: String, Equatable, Sendable {
+    case backendUnavailable
+    case malformedAIResponse
+    case nutritionProviderUnavailable
+    case incompleteNutrition
+    case invalidNutrition
+    case unknownFood
+}
+
+struct FoodResolutionCompletenessReport: Equatable, Sendable {
+    let isComplete: Bool
+    let missingRequirements: [String]
+
+    static let complete = FoodResolutionCompletenessReport(isComplete: true, missingRequirements: [])
+}
+
+/// The central gate used after every candidate nutrition lookup. Display names,
+/// IDs, quantities, and serving labels are not sufficient for a successful
+/// resolution; core nutrients and traceable provenance must also be present.
+struct FoodResolutionCompletenessEvaluator: Sendable {
+    func evaluate(_ item: FoodResolutionItem) -> FoodResolutionCompletenessReport {
+        var missing: [String] = []
+        if item.canonical == nil { missing.append("canonical food identity") }
+
+        let parsed = item.parsedItem
+        guard let quantity = parsed.quantity, quantity.isFinite, quantity > 0 else {
+            missing.append("quantity")
+            return FoodResolutionCompletenessReport(isComplete: false, missingRequirements: missing)
+        }
+        if parsed.unit?.isEmpty != false { missing.append("serving unit") }
+        if let grams = item.nutrition.estimatedGrams {
+            if !grams.isFinite || grams <= 0 { missing.append("serving conversion") }
+        } else {
+            missing.append("serving conversion")
+        }
+
+        let values = item.nutrition.lookup.values
+        if values.caloriesKcal == nil { missing.append("calories") }
+        if values.carbohydrateGrams == nil { missing.append("carbohydrates") }
+        if values.proteinGrams == nil { missing.append("protein") }
+        if item.nutrition.lookup.provenance.kind == .unavailable { missing.append("nutrition source") }
+        if !item.nutrition.verified { missing.append("nutrition validation") }
+
+        return FoodResolutionCompletenessReport(
+            isComplete: missing.isEmpty,
+            missingRequirements: Array(NSOrderedSet(array: missing)) as? [String] ?? missing
+        )
+    }
+
+    func evaluate(_ items: [FoodResolutionItem]) -> FoodResolutionCompletenessReport {
+        guard !items.isEmpty else {
+            return FoodResolutionCompletenessReport(isComplete: false, missingRequirements: ["food component"])
+        }
+        let reports = items.map(evaluate)
+        let missing = reports.flatMap(\.missingRequirements)
+        return FoodResolutionCompletenessReport(
+            isComplete: reports.allSatisfy(\.isComplete),
+            missingRequirements: Array(NSOrderedSet(array: missing)) as? [String] ?? missing
+        )
+    }
+}
+
 struct FoodResolutionItem: Sendable {
     let parsedItem: ParsedFoodItem
     let canonical: CanonicalFoodMatch?
@@ -463,6 +683,7 @@ struct FoodResolutionResult: Sendable {
     let unresolvedTerms: [String]
     let clarificationQuestions: [String]
     let overallConfidence: Double
+    let state: FoodResolutionState
 
     var hasUsableNutrition: Bool { !items.isEmpty && items.allSatisfy { !$0.nutrition.lookup.values.isEmpty } }
     var requiresClarification: Bool { !clarificationQuestions.isEmpty || !unresolvedTerms.isEmpty || !hasUsableNutrition }
@@ -487,19 +708,24 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
          understanding: (any FoodUnderstandingService)? = nil,
          nutrition: any NutritionResolutionService = HybridNutritionResolutionService(),
          clarification: any MealClarificationService = DefaultMealClarificationService(),
-         memory: (any UserFoodMemoryRepository)? = nil) {
+         memory: (any UserFoodMemoryRepository)? = nil,
+         fallback: CuratedNutritionFallbackService? = nil) {
         self.catalog = catalog
         self.normalisation = HybridFoodNormalisationService(catalog: catalog)
         self.understanding = understanding
         self.nutrition = nutrition
         self.clarification = clarification
         self.memory = memory
+        self.fallback = fallback ?? CuratedNutritionFallbackService(catalog: catalog)
     }
+
+    let fallback: CuratedNutritionFallbackService
+    let completeness = FoodResolutionCompletenessEvaluator()
 
     func resolve(text: String) async -> FoodResolutionResult {
         let normalized = normalize(text)
         guard !normalized.isEmpty else {
-            return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [], clarificationQuestions: ["What did you eat or drink?"], overallConfidence: 0)
+            return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [], clarificationQuestions: ["What did you eat or drink?"], overallConfidence: 0, state: .clarificationRequired)
         }
 
         if let memory, let remembered = await memory.rankedMatches(for: normalized).first,
@@ -510,14 +736,27 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
                                         estimatedGrams: remembered.servingGrams, preparationMethod: remembered.preparation)
             let match = CanonicalFoodMatch(food: food, matchedAlias: remembered.alias, confidence: 0.99, source: "user-confirmed-memory")
             let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
-            return result(text: text, normalized: normalized, items: [resolvedItem(parsed, match, nutrition, .userSavedFood)], unresolved: [], extraQuestions: [])
+            return result(text: text, normalized: normalized, items: [resolvedItem(parsed, match, nutrition, .userSavedFood)], unresolved: [], extraQuestions: [], attemptedAI: false)
         }
 
         let trace = FoodUnderstandingPipeline(catalog: catalog).parse(text)
         if !trace.components.isEmpty, trace.components.allSatisfy({ $0.confidenceScore >= 0.8 }) {
             let resolved = await resolveLocal(trace.components)
-            let questions = localQuestions(for: resolved, input: normalized)
-            return result(text: text, normalized: normalized, items: resolved, unresolved: [], extraQuestions: questions)
+            let completeness = completeness.evaluate(resolved)
+            if completeness.isComplete {
+                let questions = localQuestions(for: resolved, input: normalized)
+                return result(text: text, normalized: normalized, items: resolved, unresolved: [], extraQuestions: questions, attemptedAI: false)
+            }
+            FoodLoggingDiagnostics.record("resolution.completeness", fields: [
+                "status": "requires-ai",
+                "missing": completeness.missingRequirements.joined(separator: ",")
+            ])
+            if let understanding {
+                return await resolveIncompleteLocal(text: text, normalized: normalized, local: resolved, understanding: understanding)
+            }
+            let fallbackItems = resolved.map { completeWithCuratedFallback($0) }
+            return result(text: text, normalized: normalized, items: fallbackItems, unresolved: [],
+                          extraQuestions: localQuestions(for: fallbackItems, input: normalized), attemptedAI: true)
         }
 
         // A broad alias/fuzzy pass catches transliterations and phrases that
@@ -526,7 +765,8 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         let fuzzyMatches = normalisation.matches(in: text)
         if !fuzzyMatches.isEmpty {
             let resolved = await resolveMatches(fuzzyMatches, input: text, route: .localFuzzy)
-            if resolved.allSatisfy({ ($0.canonical?.confidence ?? 0) >= 0.78 }) {
+            let completeness = completeness.evaluate(resolved)
+            if resolved.allSatisfy({ ($0.canonical?.confidence ?? 0) >= 0.78 }) && completeness.isComplete {
                 return result(text: text, normalized: normalized, items: resolved, unresolved: [], extraQuestions: localQuestions(for: resolved, input: normalized))
             }
         }
@@ -538,13 +778,36 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
                 let matches = resolved.compactMap(\.canonical)
                 let questions = clarification.questions(for: parse, matches: matches) + localQuestions(for: resolved, input: normalized)
                 let unresolved = parse.unresolvedItems + resolved.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
-                return result(text: text, normalized: normalized, items: resolved, unresolved: Array(Set(unresolved)), extraQuestions: questions)
+                let completed = resolved.map { completeWithCuratedFallback($0) }
+                return result(text: text, normalized: normalized, items: completed, unresolved: Array(Set(unresolved)), extraQuestions: questions, attemptedAI: true)
             } catch {
                 FoodLoggingDiagnostics.record("resolution.ai", fields: ["status": "unavailable", "reason": "provider-error"])
             }
         }
 
-        return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [text], clarificationQuestions: ["I couldn't identify that safely. What food or product should I use?"], overallConfidence: 0.1)
+        return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [text], clarificationQuestions: ["I couldn't identify that safely. What food or product should I use?"], overallConfidence: 0.1, state: .unavailable(.unknownFood))
+    }
+
+    private func resolveIncompleteLocal(text: String, normalized: String, local: [FoodResolutionItem], understanding: any FoodUnderstandingService) async -> FoodResolutionResult {
+        do {
+            let parse = try await understanding.parse(text: text, image: nil)
+            let aiItems = await resolveAI(parse).map { completeWithCuratedFallback($0) }
+            let questions = clarification.questions(for: parse, matches: aiItems.compactMap(\.canonical))
+                + localQuestions(for: aiItems, input: normalized)
+            let unresolved = parse.unresolvedItems + aiItems.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
+            return result(text: text, normalized: normalized, items: aiItems, unresolved: Array(Set(unresolved)), extraQuestions: questions, attemptedAI: true)
+        } catch {
+            FoodLoggingDiagnostics.record("resolution.ai", fields: ["status": "unavailable", "reason": "provider-error", "fallback": "curated"])
+            let fallbackItems = local.map { completeWithCuratedFallback($0) }
+            return result(text: text, normalized: normalized, items: fallbackItems, unresolved: [],
+                          extraQuestions: localQuestions(for: fallbackItems, input: normalized), attemptedAI: true)
+        }
+    }
+
+    private func completeWithCuratedFallback(_ item: FoodResolutionItem) -> FoodResolutionItem {
+        guard !completeness.evaluate(item).isComplete else { return item }
+        let nutrition = fallback.resolve(item: item.parsedItem, canonical: item.canonical)
+        return resolvedItem(item.parsedItem, item.canonical, nutrition, item.interpretationRoute)
     }
 
     private func resolveLocal(_ components: [ParsedFoodComponent]) async -> [FoodResolutionItem] {
@@ -636,7 +899,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         return Array(NSOrderedSet(array: questions)) as? [String] ?? questions
     }
 
-    private func result(text: String, normalized: String, items: [FoodResolutionItem], unresolved: [String], extraQuestions: [String]) -> FoodResolutionResult {
+    private func result(text: String, normalized: String, items: [FoodResolutionItem], unresolved: [String], extraQuestions: [String], attemptedAI: Bool = false) -> FoodResolutionResult {
         let reviewAssumptions = items.reduce(into: [String]()) { partial, item in
             partial.append(contentsOf: item.nutrition.assumptions.filter { $0.localizedCaseInsensitiveContains("review") })
         }
@@ -649,9 +912,20 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
             "unresolvedCount": String(unresolved.count),
             "clarificationCount": String(questions.count)
         ])
+        let report = completeness.evaluate(items)
+        let state: FoodResolutionState
+        if !questions.isEmpty || !unresolved.isEmpty {
+            state = .clarificationRequired
+        } else if report.isComplete {
+            state = .readyForReview
+        } else if attemptedAI {
+            state = .unavailable(.incompleteNutrition)
+        } else {
+            state = .requiresAIInterpretation
+        }
         return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: items,
                                     unresolvedTerms: unresolved, clarificationQuestions: questions,
-                                    overallConfidence: confidence)
+                                    overallConfidence: confidence, state: state)
     }
 
     private func normalize(_ text: String) -> String {

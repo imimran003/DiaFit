@@ -51,6 +51,25 @@ The in-memory repositories are deterministic development implementations. A
 production account repository should persist the same records behind the
 protocol and retain only user-confirmed preferences.
 
+## Completeness gate
+
+`FoodResolutionCompletenessEvaluator` is the non-negotiable boundary between
+recognition and a review-ready meal. A canonical ID, display name, quantity, or
+serving label alone is not success. Each component must have a valid serving
+conversion, calories, carbohydrates, protein, traceable provenance, and a
+passing validation report. If a local candidate fails that gate,
+`DefaultFoodResolutionRouter` automatically attempts the structured backend
+parser before returning a result. If the backend is unavailable, the router
+uses an explicitly labelled curated ingredient/category fallback for common
+foods; it never forwards a blank nutrition object as a successful resolution.
+The lifecycle is exposed through `FoodResolutionState`, including
+`requiresAIInterpretation`, `callingBackend`, `calculatingRecipe`,
+`clarificationRequired`, `readyForReview`, and explicit unavailable failures.
+The local simulator composition uses `LocalStructuredMealUnderstandingService`
+when no authenticated backend client is configured, so the same interpretation
+stage is still exercised offline; production replaces that adapter with
+`BackendFoodUnderstandingService`.
+
 ## Deterministic routing additions
 
 `DefaultFoodResolutionRouter` is the application-facing seam for text food

@@ -414,6 +414,73 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(result.items.first?.nutrition.lookup.values.isEmpty ?? true)
     }
 
+    func testNamedLocalCandidateWithBlankNutritionTriggersStructuredAIAndReturnsUsableNutrition() async throws {
+        let counter = ParseCounter()
+        let parsed = MealParseResult(
+            detectedItems: [ParsedFoodItem(originalText: "khichdi", canonicalSearchName: "khichdi", quantity: 1, unit: "mediumBowl", confidence: 0.92)],
+            unresolvedItems: [], mealDescription: "khichdi", clarificationQuestions: [], confidence: 0.92
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: CountingMealUnderstanding(result: parsed, counter: counter),
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+
+        let result = await router.resolve(text: "khichdi")
+
+        let parseCount = await counter.value
+        XCTAssertEqual(parseCount, 1, "An incomplete local record must invoke structured meal interpretation")
+        XCTAssertEqual(result.items.first?.canonical?.food.canonicalId, "khichdi")
+        XCTAssertFalse(result.items.first?.nutrition.lookup.values.isEmpty ?? true)
+        XCTAssertNotEqual(result.items.first?.nutrition.lookup.provenance.kind, .unavailable)
+        XCTAssertEqual(result.state, .readyForReview)
+    }
+
+    func testCompletenessGateRejectsRecognisedFoodWithMissingNutrition() {
+        let food = catalog.food(canonicalID: "khichdi")!
+        let parsed = ParsedFoodItem(originalText: "khichdi", canonicalSearchName: "Khichdi", quantity: 1, unit: "mediumBowl")
+        let match = CanonicalFoodMatch(food: food, matchedAlias: "khichdi", confidence: 0.95, source: "local-canonical-catalog")
+        let item = FoodResolutionItem(
+            parsedItem: parsed,
+            canonical: match,
+            nutrition: NutritionResolution(lookup: NutritionLookup(values: .unavailable, provenance: .unavailable), sourceRecordID: nil, servingAmount: 1, servingUnit: "mediumBowl", estimatedGrams: 250, assumptions: [], verified: false),
+            interpretationRoute: .exactLocal,
+            nutritionRoute: .unavailable
+        )
+
+        let report = FoodResolutionCompletenessEvaluator().evaluate(item)
+        XCTAssertFalse(report.isComplete)
+        XCTAssertTrue(report.missingRequirements.contains("calories"))
+        XCTAssertTrue(report.missingRequirements.contains("nutrition source"))
+    }
+
+    func testCoordinatorProducesEditableNutritionForKhichdiInsteadOfBlankDashes() async throws {
+        let parsed = MealParseResult(
+            detectedItems: [ParsedFoodItem(originalText: "khichdi", canonicalSearchName: "khichdi", quantity: 1, unit: "mediumBowl", confidence: 0.92)],
+            unresolvedItems: [], mealDescription: "khichdi", clarificationQuestions: [], confidence: 0.92
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: StubMealUnderstanding(result: parsed),
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await HybridMealAnalysisCoordinator(router: router).analyse(text: "khichdi")
+
+        XCTAssertFalse(result.detectedItems.isEmpty)
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertNotEqual(result.nutritionProvenance.kind, .unavailable)
+        XCTAssertTrue(result.nutritionValidation?.isApproved == true)
+    }
+
+    func testArharDaalWithChaawalDoesNotStopAtIncompleteLocalDaalRecord() async throws {
+        let result = await DefaultFoodResolutionRouter(catalog: catalog).resolve(text: "arhar daal with chaawal")
+
+        XCTAssertEqual(Set(result.items.compactMap { $0.canonical?.food.canonicalId }), Set(["toor-dal", "steamed-rice"]))
+        XCTAssertTrue(result.items.allSatisfy { !$0.nutrition.lookup.values.isEmpty })
+        XCTAssertNotEqual(result.items.first?.nutrition.lookup.provenance.kind, .unavailable)
+        XCTAssertEqual(result.state, .readyForReview)
+    }
+
     func testChaiAndParathaStaysComponentBasedUntilVariationsAreConfirmed() {
         let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "I had chai and paratha")
         let visual = MealVisualIdentityFactory().make(mealID: UUID(), result: result, artwork: .neutral)
@@ -860,6 +927,21 @@ private struct StubMealUnderstanding: FoodUnderstandingService {
 
     func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult {
         result
+    }
+}
+
+private actor ParseCounter {
+    private(set) var value = 0
+    func increment() { value += 1 }
+}
+
+private struct CountingMealUnderstanding: FoodUnderstandingService {
+    let result: MealParseResult
+    let counter: ParseCounter
+
+    func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult {
+        await counter.increment()
+        return result
     }
 }
 
