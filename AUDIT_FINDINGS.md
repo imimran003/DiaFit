@@ -143,6 +143,11 @@ Additional root-cause fixes made after the checkpoint:
 - Visual identity request IDs and cache keys now follow the structured meal
   request across redraws and reloads. The edit-meal sheet can retry a changed
   visual request without mutating top-level nutrition before confirmation.
+- Runtime testing exposed and corrected a catalog classification defect: the
+  `boiled-egg` record was duplicated in the breakfast/snack group, so parsed
+  boiled eggs did not carry the canonical `.egg` category used by validation,
+  visuals and UI assertions. It now lives in the egg group with the other egg
+  preparations.
 - The daily thread no longer jumps to the conversation tail on first render;
   the day header and carbohydrate context are the settled starting point. A
   small branded launch mark covers the synchronous persistence-load interval.

@@ -603,7 +603,10 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(updated.id, meal.id)
         XCTAssertEqual(updated.energy, originalEnergy)
         XCTAssertEqual(updated.analysis?.visualRequest?.state, .deterministicFallback)
-        XCTAssertEqual(updated.analysis?.detectedItems.first { $0.category == .egg }?.quantity, 3)
+        // The edited nutrition draft remains local until the user confirms;
+        // only the visual request is allowed to advance during a retry.
+        XCTAssertEqual(updated.analysis?.detectedItems.first { $0.category == .egg }?.quantity, 2)
+        XCTAssertTrue(updated.analysis?.visualRequest?.quantitySignature.contains { $0.contains(":3.0:") } == true)
     }
 
     @MainActor

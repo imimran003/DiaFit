@@ -7,8 +7,8 @@ Status legend: **Pass**, **Fail**, **Gap**, **Blocked**, **Not run**.
 | Suite | Device | Result |
 | --- | --- | --- |
 | Debug build | Generic iOS Simulator SDK | **Pass** |
-| Unit + provider-independent integration | 41 XCTest cases compiled | **Blocked at runtime — CoreSimulatorService unavailable** |
-| UI | 9 UI tests compiled | **Blocked at runtime — no concrete simulator device** |
+| Unit + provider-independent integration | iPhone 17 Pro / iOS 26.5 | **Pass — 41/41** |
+| UI | iPhone 17 Pro / iOS 26.5 | **Pass — sprouts/eggs and whey/water flows; full-suite relaunch run remains unstable** |
 
 ## Known food regressions
 

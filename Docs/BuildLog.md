@@ -55,3 +55,18 @@
 - Added editable generic whey profiles with scoop grams, flavour, milk/water base, and a safe nutrition fallback. Water adds no calories; milk is calculated once into the shake profile.
 - Added category-aware egg and whey validation plus structured, quantity-sensitive visual requests. Parsed meals render a persistent deterministic component composition when no authenticated generator is configured, rather than a blank or unrelated image.
 - Added a full regression matrix and iPhone 17 Pro simulator flows for sprouts/three eggs and one-scoop whey/water. The first UI attempt exposed two test automation quirks (offscreen field focus and simulator text replacement); the final flow uses the explicit serving-unit editor and passes.
+
+## 2026-07-15 — Runtime verification resumed
+
+- CoreSimulatorService recovered after relaunching Simulator.app. Diafit was
+  installed and launched on the booted iPhone 17 Pro (iOS 26.5).
+- The concrete `DiafitUnitTests` scheme executed all 41 tests with 0 failures.
+- Runtime verification caught two defects that compilation could not: the
+  `boiled-egg` catalog record was incorrectly grouped under breakfast/snack,
+  and the edit-visual regression expected nutrition to change before explicit
+  confirmation. The record was moved into the egg category and the test now
+  verifies visual-request advancement while nutrition remains unchanged.
+- The focused UI flows for sprouts with three boiled eggs and one-scoop whey
+  with water both passed on the iPhone 17 Pro simulator. A full nine-test UI
+  invocation became unstable during repeated relaunches and was stopped; it
+  is not reported as a pass.
