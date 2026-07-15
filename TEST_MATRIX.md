@@ -44,7 +44,7 @@ Audit-branch result after the component-span repair:
 | Nutrition review | Working | UI | Large text and VoiceOver |
 | Portion correction | Working in review | UI for sprouts | Repeated-edit monotonicity |
 | Clarification | Working for chai/whey | Unit/UI partial | Persistence and duplicate reply handling |
-| Confirmation | Working in memory | UI | Relaunch persistence |
+| Confirmation | Durable local archive | Unit + process-relaunch UI | Multi-device migration coverage |
 | Edit | Context-menu refine | Same-process UI partial | Totals exactly once + relaunch |
 | Delete | Alert and in-memory removal | **Gap** | Totals, images, persistence, cancellation |
 | Previous-day edit | Day pages exist | **Gap** | State and totals |
@@ -55,7 +55,7 @@ Audit-branch result after the component-span repair:
 | Recent/saved foods | Suggestion strings only | **Gap** | Domain + persistence |
 | Packaged whey | Generic records | Unit partial | Saved product/label/barcode |
 | Offline | Local parser works | Implicit | Explicit UI/provider degradation |
-| Background/termination | Not durable | **Fail** | Repository integration/UI |
+| Background/termination | Confirmed meal survives process relaunch | **Pass** | Background task/provider restoration remains |
 | Settings | Not found | **Gap** | Privacy, goals, accessibility, data deletion |
 | Dark mode | Forced light mode | **Fail** | Adaptive design screenshots |
 | Dynamic Type | Mostly fixed fonts | **Gap** | Accessibility sizes |

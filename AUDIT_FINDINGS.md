@@ -45,6 +45,8 @@ flowchart TD
 
 Impact: data loss on termination and inability to meet the product’s core diary contract.
 
+Resolution on audit branch: the existing store API now commits through a versioned, atomic Application Support archive. The app loads it before using first-install seed data, applies file protection, omits transient photo bytes, rejects unknown future schemas, rolls back failed mutations and exposes a retry path. Unit tests cover save/edit/delete/reload; a UI test verifies process termination and relaunch.
+
 ### F-002 — Component quantities are not span-bound
 
 `QuantityExtractor` scans six tokens preceding every entity. It does not stop at connectors or the previous entity. In `three eggs with sprouts`, the sprouts component consumes the egg quantity and unit.

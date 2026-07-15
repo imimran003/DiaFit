@@ -482,4 +482,94 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(store.day(id: day.id)?.meals.first?.id, meal.id)
         XCTAssertEqual(store.day(id: day.id)?.messages.count, 1)
     }
+
+    func testDiaryPersistsEditsAndDeletionAcrossStoreReloads() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-diary-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistence = FileDiaryPersistence(
+            fileURL: directory.appendingPathComponent("diary.json"),
+            appliesFileProtection: false
+        )
+        let day = Day(id: UUID(), date: .now, messages: [], energyGoal: 2_000, carbohydrateGoal: 180)
+        let meal = Meal(
+            id: UUID(), title: "Black coffee", subtitle: "Curated", mealType: "Drink", time: .now,
+            energy: 2, carbs: 0, protein: 0, fat: 0, artwork: .neutral, confidence: .estimated
+        )
+
+        let firstStore = DiaryStore(seedDays: [day], persistence: persistence)
+        firstStore.append(ThreadItem(id: UUID(), kind: .meal(meal)), to: day.id)
+
+        let reloaded = DiaryStore(seedDays: [], persistence: persistence)
+        let persistedMeal = try XCTUnwrap(reloaded.day(id: day.id)?.meals.first)
+        XCTAssertEqual(persistedMeal.id, meal.id)
+        XCTAssertEqual(persistedMeal.energy, meal.energy)
+        XCTAssertEqual(
+            persistedMeal.time.timeIntervalSince1970,
+            meal.time.timeIntervalSince1970,
+            accuracy: 0.001
+        )
+
+        var edited = meal
+        edited.energy = 4
+        reloaded.update(edited, in: day.id)
+        let afterEdit = DiaryStore(seedDays: [], persistence: persistence)
+        XCTAssertEqual(afterEdit.day(id: day.id)?.totalEnergy, 4)
+        XCTAssertEqual(afterEdit.day(id: day.id)?.meals.count, 1)
+
+        afterEdit.removeMeal(id: meal.id, from: day.id)
+        let afterDelete = DiaryStore(seedDays: [], persistence: persistence)
+        XCTAssertEqual(afterDelete.day(id: day.id)?.totalEnergy, 0)
+        XCTAssertTrue(afterDelete.day(id: day.id)?.meals.isEmpty == true)
+    }
+
+    func testDiaryArchiveDropsTransientPhotoBytesAndRejectsFutureSchemas() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-diary-privacy-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("diary.json")
+        let persistence = FileDiaryPersistence(fileURL: fileURL, appliesFileProtection: false)
+        let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "black coffee")
+        let draft = MealAnalysisDraft(result: result, transientImageData: Data([0x01, 0x02, 0x03]))
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: UUID(), kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+
+        _ = DiaryStore(seedDays: [day], persistence: persistence)
+        let restored = DiaryStore(seedDays: [], persistence: persistence)
+        guard case .mealAnalysis(let restoredDraft)? = restored.day(id: day.id)?.messages.first?.kind else {
+            return XCTFail("Expected a restored analysis draft")
+        }
+        XCTAssertNil(restoredDraft.transientImageData)
+        XCTAssertEqual(restoredDraft.result.analysisId, result.analysisId)
+
+        let futureArchive = Data("{\"schemaVersion\":999}".utf8)
+        try futureArchive.write(to: fileURL, options: .atomic)
+        XCTAssertThrowsError(try persistence.load()) { error in
+            XCTAssertEqual(
+                error as? DiaryPersistenceError,
+                .unsupportedSchema(found: 999, current: DiaryArchive.currentVersion)
+            )
+        }
+    }
+
+    func testFailedPersistenceNeverPretendsMutationWasSaved() {
+        let day = Day(id: UUID(), date: .now, messages: [], energyGoal: 2_000, carbohydrateGoal: 180)
+        let store = DiaryStore(seedDays: [day], persistence: AlwaysFailingDiaryPersistence())
+
+        XCTAssertNotNil(store.persistenceIssue)
+        store.append(ThreadItem(id: UUID(), kind: .person(text: "black coffee")), to: day.id)
+        XCTAssertTrue(store.day(id: day.id)?.messages.isEmpty == true)
+        store.retryPersistence()
+        XCTAssertNotNil(store.persistenceIssue)
+    }
+}
+
+private struct AlwaysFailingDiaryPersistence: DiaryPersisting {
+    struct Failure: Error {}
+
+    func load() throws -> DiaryArchive? { nil }
+    func save(_ archive: DiaryArchive) throws { throw Failure() }
 }

@@ -36,9 +36,18 @@
 - Green run: 31 tests passed after connector-bounded entity scopes were introduced.
 - Fractional regression retained: `one and a half scoop whey with water` remains 1.5 scoops.
 - Preparation regression added: `fried eggs with raw sprouts` retains `fried` and `raw` independently.
-3. **Durability and idempotency**
+3. **Durability and idempotency — complete for local diary archive**
    - Introduce a repository boundary and versioned on-device persistence.
    - Test relaunch, corruption, edit/delete totals and day boundaries.
+
+### Persistence evidence recorded
+
+- Versioned `DiaryArchive` stored atomically in Application Support with iOS file protection.
+- Unreadable/future archives are never silently interpreted as an empty diary.
+- Confirmed meals, edits and deletions pass save/reload tests with totals applied exactly once.
+- Analysis drafts restore without transient raw photo bytes.
+- A focused UI test confirms a whey meal survives process termination and relaunch.
+- Failed writes retain the previous committed state and expose a retryable storage issue.
 4. **Nutrition integrity**
    - Make source, fallback level and assumptions explicit in the domain and UI.
    - Expand category sanity checks and scale/property tests.

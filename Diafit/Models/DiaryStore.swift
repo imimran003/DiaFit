@@ -2,10 +2,37 @@ import Foundation
 import Combine
 
 final class DiaryStore: ObservableObject {
-    @Published var days: [Day]
+    @Published private(set) var days: [Day]
+    @Published private(set) var persistenceIssue: String?
+    private let persistence: any DiaryPersisting
+    private var canPersist: Bool
 
     init(days: [Day]) {
         self.days = days
+        persistence = TransientDiaryPersistence()
+        canPersist = true
+    }
+
+    init(seedDays: [Day], persistence: any DiaryPersisting) {
+        self.persistence = persistence
+        canPersist = true
+        do {
+            if let archive = try persistence.load() {
+                days = archive.days
+                persistenceIssue = nil
+            } else {
+                days = seedDays
+                try persistence.save(DiaryArchive(days: seedDays))
+                persistenceIssue = nil
+            }
+        } catch {
+            // Never overwrite an unreadable archive. The seed remains usable,
+            // while the visible issue prevents the app claiming changes are
+            // durable until storage is repaired.
+            days = seedDays
+            canPersist = false
+            persistenceIssue = Self.userMessage(for: error, operation: "load")
+        }
     }
 
     func day(id: Day.ID) -> Day? {
@@ -14,7 +41,7 @@ final class DiaryStore: ObservableObject {
 
     func append(_ item: ThreadItem, to dayID: Day.ID) {
         guard let index = days.firstIndex(where: { $0.id == dayID }) else { return }
-        days[index].messages.append(item)
+        transact { $0[index].messages.append(item) }
     }
 
     func update(_ meal: Meal, in dayID: Day.ID) {
@@ -23,32 +50,65 @@ final class DiaryStore: ObservableObject {
                   if case .meal(let existing) = item.kind { return existing.id == meal.id }
                   return false
               }) else { return }
-        days[dayIndex].messages[messageIndex].kind = .meal(meal)
+        transact { $0[dayIndex].messages[messageIndex].kind = .meal(meal) }
     }
 
     func removeMeal(id: Meal.ID, from dayID: Day.ID) {
         guard let dayIndex = days.firstIndex(where: { $0.id == dayID }) else { return }
-        days[dayIndex].messages.removeAll { item in
-            if case .meal(let meal) = item.kind { return meal.id == id }
-            return false
+        transact { days in
+            days[dayIndex].messages.removeAll { item in
+                if case .meal(let meal) = item.kind { return meal.id == id }
+                return false
+            }
         }
     }
 
     func update(_ draft: MealAnalysisDraft, for itemID: ThreadItem.ID, in dayID: Day.ID) {
         guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
               let messageIndex = days[dayIndex].messages.firstIndex(where: { $0.id == itemID }) else { return }
-        days[dayIndex].messages[messageIndex].kind = .mealAnalysis(draft)
+        transact { $0[dayIndex].messages[messageIndex].kind = .mealAnalysis(draft) }
     }
 
     func replace(itemID: ThreadItem.ID, with kind: ThreadItem.Kind, in dayID: Day.ID) {
         guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
               let messageIndex = days[dayIndex].messages.firstIndex(where: { $0.id == itemID }) else { return }
-        days[dayIndex].messages[messageIndex].kind = kind
+        transact { $0[dayIndex].messages[messageIndex].kind = kind }
     }
 
     func remove(itemID: ThreadItem.ID, from dayID: Day.ID) {
         guard let dayIndex = days.firstIndex(where: { $0.id == dayID }) else { return }
-        days[dayIndex].messages.removeAll { $0.id == itemID }
+        transact { $0[dayIndex].messages.removeAll { $0.id == itemID } }
+    }
+
+    func retryPersistence() {
+        do {
+            try persistence.save(DiaryArchive(days: days))
+            canPersist = true
+            persistenceIssue = nil
+        } catch {
+            persistenceIssue = Self.userMessage(for: error, operation: "save")
+        }
+    }
+
+    private func transact(_ mutation: (inout [Day]) -> Void) {
+        guard canPersist else { return }
+        var candidate = days
+        mutation(&candidate)
+        guard candidate != days else { return }
+        do {
+            try persistence.save(DiaryArchive(days: candidate))
+            days = candidate
+            persistenceIssue = nil
+        } catch {
+            persistenceIssue = Self.userMessage(for: error, operation: "save")
+        }
+    }
+
+    private static func userMessage(for error: Error, operation: String) -> String {
+        if operation == "load" {
+            return "Your saved diary could not be opened. The original data was left untouched."
+        }
+        return "This change could not be saved on this device. Check available storage, then retry."
     }
 
     static let preview = DiaryStore(days: SampleDiary.days)

@@ -110,6 +110,24 @@ final class DiafitUITests: XCTestCase {
         attachScreenshot(named: "whey-water-review")
     }
 
+    func testConfirmedMealSurvivesProcessRelaunch() throws {
+        app.terminate()
+        app.launchArguments = ["UITestMode", "UITestPersistentDiary"]
+        app.launchEnvironment["DIAFIT_UI_TEST_DIARY_ID"] = UUID().uuidString
+        app.launch()
+
+        submitFoodNote("one scoop whey protein with water")
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 4))
+        confirm.tap()
+        XCTAssertTrue(app.buttons["Saved meal Whey protein"].waitForExistence(timeout: 4))
+
+        app.terminate()
+        app.launch()
+        XCTAssertTrue(app.buttons["Saved meal Whey protein"].waitForExistence(timeout: 5))
+        attachScreenshot(named: "persisted-meal-after-relaunch")
+    }
+
     func testChaiAndParathaShowsBothComponentsThenUsesNeutralPlaceholder() throws {
         submitFoodNote("chai and paratha")
 

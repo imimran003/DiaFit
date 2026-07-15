@@ -4,8 +4,8 @@ Current verdict: **not ready for TestFlight or App Store submission**. The app i
 
 ## Blocking product/data issues
 
-- Confirmed meals, edits and deletions are lost on process restart.
-- Cross-component quantities can contaminate sibling foods.
+- Local confirmed meals, edits and deletions now persist atomically; cloud/account sync and migration from future shipped schemas remain unimplemented.
+- Connector-bounded quantities and preparation methods now prevent sibling foods contaminating one another; broader multilingual and free-form parser coverage remains a production risk.
 - Saved foods, recent foods, packaged labels/barcodes and settings are not complete product flows.
 - Multi-day history/semantic zoom is not implemented; the atlas is single-day.
 - No real generated-image runtime, retry queue or restored request state.
@@ -74,4 +74,3 @@ Production readiness can be reconsidered only after:
 6. privacy manifest, data deletion and backend security posture are complete;
 7. Release build, archive, TestFlight and physical-device verification succeed;
 8. remaining legal/account/content blockers are owned outside the codebase.
-

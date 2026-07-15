@@ -1,6 +1,6 @@
 import Foundation
 
-struct Day: Identifiable, Hashable {
+struct Day: Identifiable, Codable, Hashable {
     let id: UUID
     let date: Date
     var messages: [ThreadItem]
@@ -17,8 +17,8 @@ struct Day: Identifiable, Hashable {
     var totalCarbs: Int { meals.reduce(0) { $0 + $1.carbs } }
 }
 
-struct Meal: Identifiable, Hashable {
-    enum Artwork: String, CaseIterable, Hashable {
+struct Meal: Identifiable, Codable, Hashable {
+    enum Artwork: String, Codable, CaseIterable, Hashable {
         case bowl, toast, berry, pasta, green, neutral
     }
 
@@ -40,15 +40,15 @@ struct Meal: Identifiable, Hashable {
     /// from and which structured meal it belongs to.
     var visualIdentity: MealVisualIdentity? = nil
 
-    enum Confidence: String, Hashable {
+    enum Confidence: String, Codable, Hashable {
         case known = "Saved recipe"
         case estimated = "Estimated"
         case verified = "Verified"
     }
 }
 
-struct ThreadItem: Identifiable, Hashable {
-    enum Kind: Hashable {
+struct ThreadItem: Identifiable, Codable, Hashable {
+    enum Kind: Codable, Hashable {
         case agent(text: String, tools: [String])
         case person(text: String)
         case meal(Meal)
@@ -60,7 +60,7 @@ struct ThreadItem: Identifiable, Hashable {
     var kind: Kind
 }
 
-struct GlucoseCheckpoint: Identifiable, Hashable {
+struct GlucoseCheckpoint: Identifiable, Codable, Hashable {
     let id: UUID
     let value: Int
     let unit: String

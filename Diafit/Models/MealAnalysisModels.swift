@@ -375,14 +375,14 @@ enum ClarificationImpact: String, Codable, Hashable, Sendable {
     case low
 }
 
-struct MealAnalysisDraft: Identifiable, Hashable {
+struct MealAnalysisDraft: Identifiable, Codable, Hashable {
     let id: UUID
     var result: MealAnalysisResult
     /// Kept only while the review sheet is onscreen unless a member explicitly opts in to retention.
     var transientImageData: Data?
     var state: State
 
-    enum State: Hashable {
+    enum State: Codable, Hashable {
         case preparing
         case ready
         case failed(message: String)
@@ -393,6 +393,29 @@ struct MealAnalysisDraft: Identifiable, Hashable {
         self.result = result
         self.transientImageData = transientImageData
         self.state = state
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case result
+        case state
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        result = try container.decode(MealAnalysisResult.self, forKey: .result)
+        state = try container.decodeIfPresent(State.self, forKey: .state) ?? .ready
+        // Raw member photos are deliberately session-only. A restored draft
+        // retains its structured analysis but never silently persists bytes.
+        transientImageData = nil
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(result, forKey: .result)
+        try container.encode(state, forKey: .state)
     }
 }
 
