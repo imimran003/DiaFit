@@ -47,3 +47,11 @@
 - Replaced that path with canonical component parsing, explicit beverage/preparation variations, an editable review state, central nutrition validation, and a truthful neutral component visual for free-text meals.
 - Added deterministic meal visual identities and a request ledger that rejects stale, cross-meal, cancelled, and deleted async results.
 - Added 19 focused analysis/validation/visual tests and simulator UI regressions for black coffee and chai/paratha. XCTest needed a static-rendering test mode because the production Metal artwork intentionally updates at display cadence; the live artwork is unchanged.
+
+## 2026-07-15 — Compound meals and supplements
+
+- Reproduced `sprouts with 3 boiled eggs` and `whey protein shake` before changing implementation. The old alias-only scan missed sprouts and whey, while boiled egg had no curated nutrition and the local build never created a meal visual request.
+- Added a staged, provider-independent parser with longest-span alias matching, non-overlapping compound decomposition, word/decimal/fraction quantity parsing, preparation and modifier extraction, confidence scoring, and data-driven egg, sprout, and supplement catalog records.
+- Added editable generic whey profiles with scoop grams, flavour, milk/water base, and a safe nutrition fallback. Water adds no calories; milk is calculated once into the shake profile.
+- Added category-aware egg and whey validation plus structured, quantity-sensitive visual requests. Parsed meals render a persistent deterministic component composition when no authenticated generator is configured, rather than a blank or unrelated image.
+- Added a full regression matrix and iPhone 17 Pro simulator flows for sprouts/three eggs and one-scoop whey/water. The first UI attempt exposed two test automation quirks (offscreen field focus and simulator text replacement); the final flow uses the explicit serving-unit editor and passes.
