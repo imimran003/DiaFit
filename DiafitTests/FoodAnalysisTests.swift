@@ -951,8 +951,8 @@ final class FoodAnalysisTests: XCTestCase {
         )
         let day = Day(id: UUID(), date: .now, messages: [], energyGoal: 2_000, carbohydrateGoal: 180)
         let meal = Meal(
-            id: UUID(), title: "Black coffee", subtitle: "Curated", mealType: "Drink", time: .now,
-            energy: 2, carbs: 0, protein: 0, fat: 0, artwork: .neutral, confidence: .estimated
+            id: UUID(), title: "Logged meal", subtitle: "Curated", mealType: "Lunch", time: .now,
+            energy: 240, carbs: 30, protein: 18, fat: 6, artwork: .neutral, confidence: .estimated
         )
 
         let firstStore = DiaryStore(seedDays: [day], persistence: persistence)
@@ -962,6 +962,8 @@ final class FoodAnalysisTests: XCTestCase {
         let persistedMeal = try XCTUnwrap(reloaded.day(id: day.id)?.meals.first)
         XCTAssertEqual(persistedMeal.id, meal.id)
         XCTAssertEqual(persistedMeal.energy, meal.energy)
+        XCTAssertEqual(reloaded.day(id: day.id)?.totalCarbs, 30)
+        XCTAssertEqual(reloaded.day(id: day.id)?.totalProtein, 18)
         XCTAssertEqual(
             persistedMeal.time.timeIntervalSince1970,
             meal.time.timeIntervalSince1970,
@@ -969,16 +971,103 @@ final class FoodAnalysisTests: XCTestCase {
         )
 
         var edited = meal
-        edited.energy = 4
+        edited.energy = 360
+        edited.carbs = 44
+        edited.protein = 27
         reloaded.update(edited, in: day.id)
         let afterEdit = DiaryStore(seedDays: [], persistence: persistence)
-        XCTAssertEqual(afterEdit.day(id: day.id)?.totalEnergy, 4)
+        XCTAssertEqual(afterEdit.day(id: day.id)?.totalEnergy, 360)
+        XCTAssertEqual(afterEdit.day(id: day.id)?.totalCarbs, 44)
+        XCTAssertEqual(afterEdit.day(id: day.id)?.totalProtein, 27)
         XCTAssertEqual(afterEdit.day(id: day.id)?.meals.count, 1)
 
         afterEdit.removeMeal(id: meal.id, from: day.id)
         let afterDelete = DiaryStore(seedDays: [], persistence: persistence)
         XCTAssertEqual(afterDelete.day(id: day.id)?.totalEnergy, 0)
+        XCTAssertEqual(afterDelete.day(id: day.id)?.totalCarbs, 0)
+        XCTAssertEqual(afterDelete.day(id: day.id)?.totalProtein, 0)
         XCTAssertTrue(afterDelete.day(id: day.id)?.meals.isEmpty == true)
+    }
+
+    func testDailyNutritionTotalsAggregateMultipleMealsExactlyOnce() {
+        let first = Meal(
+            id: UUID(), title: "First", subtitle: "", mealType: "Breakfast", time: .now,
+            energy: 320, carbs: 34, protein: 21, fat: 11, artwork: .neutral, confidence: .verified
+        )
+        let second = Meal(
+            id: UUID(), title: "Second", subtitle: "", mealType: "Lunch", time: .now,
+            energy: 510, carbs: 58, protein: 29, fat: 18, artwork: .neutral, confidence: .verified
+        )
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [
+                ThreadItem(id: UUID(), kind: .meal(first)),
+                ThreadItem(id: UUID(), kind: .agent(text: "Logged.", tools: [])),
+                ThreadItem(id: UUID(), kind: .meal(second))
+            ],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+
+        XCTAssertEqual(day.totalEnergy, 830)
+        XCTAssertEqual(day.totalCarbs, 92)
+        XCTAssertEqual(day.totalProtein, 50)
+    }
+
+    func testRuntimeDiaryDefaultsContainNoFixtureContent() {
+        let now = Date(timeIntervalSince1970: 1_753_000_000)
+        let days = RuntimeDiaryDefaults.days(now: now)
+
+        XCTAssertEqual(days.count, 1)
+        XCTAssertTrue(Calendar.current.isDate(days[0].date, inSameDayAs: now))
+        XCTAssertTrue(days[0].messages.isEmpty)
+        XCTAssertTrue(days[0].meals.isEmpty)
+        XCTAssertTrue(days[0].glucoseReadings.isEmpty)
+        XCTAssertEqual(days[0].totalEnergy, 0)
+        XCTAssertEqual(days[0].totalCarbs, 0)
+        XCTAssertEqual(days[0].totalProtein, 0)
+    }
+
+    func testUntouchedLegacyDemoArchiveIsRemovedWithoutReappearing() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-legacy-demo-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistence = FileDiaryPersistence(
+            fileURL: directory.appendingPathComponent("diary.json"),
+            appliesFileProtection: false
+        )
+        try persistence.save(DiaryArchive(days: PreviewDiaryFixtures.days))
+
+        let store = DiaryStore(seedDays: [], persistence: persistence)
+        let titles = store.days.flatMap(\.meals).map(\.title)
+
+        XCTAssertTrue(titles.isEmpty)
+        XCTAssertFalse(titles.contains("Yogurt, berries & seeds"))
+        XCTAssertFalse(titles.contains("Miso salmon plate"))
+
+        let reloaded = DiaryStore(seedDays: [], persistence: persistence)
+        XCTAssertTrue(reloaded.days.flatMap(\.meals).isEmpty)
+    }
+
+    func testArchiveWithUserContentIsNeverTreatedAsUntouchedDemo() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-mixed-legacy-demo-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistence = FileDiaryPersistence(
+            fileURL: directory.appendingPathComponent("diary.json"),
+            appliesFileProtection: false
+        )
+        var days = PreviewDiaryFixtures.days
+        let userMeal = Meal(
+            id: UUID(), title: "My family recipe", subtitle: "User entered", mealType: "Dinner", time: .now,
+            energy: 410, carbs: 48, protein: 22, fat: 14, artwork: .neutral, confidence: .verified
+        )
+        days[days.count - 1].messages.append(ThreadItem(id: UUID(), kind: .meal(userMeal)))
+        try persistence.save(DiaryArchive(days: days))
+
+        let store = DiaryStore(seedDays: [], persistence: persistence)
+
+        XCTAssertNotNil(store.days.flatMap(\.meals).first { $0.id == userMeal.id })
+        XCTAssertEqual(store.days.flatMap(\.meals).count, PreviewDiaryFixtures.days.flatMap(\.meals).count + 1)
     }
 
     func testDiaryArchiveDropsTransientPhotoBytesAndRejectsFutureSchemas() throws {

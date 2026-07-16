@@ -18,18 +18,33 @@ final class DiaryStore: ObservableObject {
         canPersist = true
         do {
             if let archive = try persistence.load() {
-                days = archive.days
+                let preparedDays = DiaryStartupPolicy.prepare(archive.days)
+                days = preparedDays
                 persistenceIssue = nil
+                if preparedDays != archive.days {
+                    do {
+                        try persistence.save(DiaryArchive(days: preparedDays))
+                    } catch {
+                        canPersist = false
+                        persistenceIssue = Self.userMessage(for: error, operation: "save")
+                    }
+                }
             } else {
-                days = seedDays
-                try persistence.save(DiaryArchive(days: seedDays))
-                persistenceIssue = nil
+                let preparedDays = DiaryStartupPolicy.prepare(seedDays)
+                days = preparedDays
+                do {
+                    try persistence.save(DiaryArchive(days: preparedDays))
+                    persistenceIssue = nil
+                } catch {
+                    canPersist = false
+                    persistenceIssue = Self.userMessage(for: error, operation: "save")
+                }
             }
         } catch {
             // Never overwrite an unreadable archive. The seed remains usable,
             // while the visible issue prevents the app claiming changes are
             // durable until storage is repaired.
-            days = seedDays
+            days = DiaryStartupPolicy.prepare(seedDays)
             canPersist = false
             persistenceIssue = Self.userMessage(for: error, operation: "load")
         }
@@ -137,10 +152,26 @@ final class DiaryStore: ObservableObject {
         return "This change could not be saved on this device. Check available storage, then retry."
     }
 
-    static let preview = DiaryStore(days: SampleDiary.days)
+    static let preview = DiaryStore(days: PreviewDiaryFixtures.days)
 }
 
-enum SampleDiary {
+enum RuntimeDiaryDefaults {
+    static func days(now: Date = .now, calendar: Calendar = .current) -> [Day] {
+        [
+            Day(
+                id: UUID(),
+                date: calendar.startOfDay(for: now),
+                messages: [],
+                energyGoal: 2_100,
+                carbohydrateGoal: 180
+            )
+        ]
+    }
+}
+
+/// The sample diary is deliberately scoped to previews and deterministic tests.
+/// Normal app launches must use `RuntimeDiaryDefaults` instead.
+enum PreviewDiaryFixtures {
     private static let calendar = Calendar.current
 
     static var days: [Day] {
@@ -170,6 +201,66 @@ enum SampleDiary {
     private static func makeDay(offset: Int, messages: [ThreadItem]) -> Day {
         let date = calendar.date(byAdding: .day, value: offset, to: .now)!
         return Day(id: UUID(), date: date, messages: messages, energyGoal: 2_100, carbohydrateGoal: 180)
+    }
+}
+
+/// Normalises persisted startup state without making title-based guesses about
+/// user data. Only the exact, untouched three-day fixture shipped by earlier
+/// builds is removed. Any edit or additional item makes the archive ineligible
+/// for cleanup, preserving the complete archive.
+private enum DiaryStartupPolicy {
+    static func prepare(
+        _ storedDays: [Day],
+        now: Date = .now,
+        calendar: Calendar = .current
+    ) -> [Day] {
+        var prepared = isUntouchedLegacyPreview(storedDays) ? [] : storedDays
+        if !prepared.contains(where: { calendar.isDate($0.date, inSameDayAs: now) }) {
+            prepared.append(contentsOf: RuntimeDiaryDefaults.days(now: now, calendar: calendar))
+        }
+        return prepared.sorted { $0.date < $1.date }
+    }
+
+    private static func isUntouchedLegacyPreview(_ days: [Day]) -> Bool {
+        guard days.count == 3,
+              days.map(\.energyGoal) == [2_100, 2_100, 2_100],
+              days.map(\.carbohydrateGoal) == [180, 180, 180]
+        else { return false }
+
+        let dates = days.map(\.date).sorted()
+        let calendar = Calendar.current
+        guard calendar.dateComponents([.day], from: dates[0], to: dates[1]).day == 1,
+              calendar.dateComponents([.day], from: dates[1], to: dates[2]).day == 1
+        else { return false }
+
+        return fingerprint(days) == fingerprint(PreviewDiaryFixtures.days)
+    }
+
+    private static func fingerprint(_ days: [Day]) -> [[String]] {
+        days.map { day in day.messages.map(fingerprint) }
+    }
+
+    private static func fingerprint(_ item: ThreadItem) -> String {
+        switch item.kind {
+        case .agent(let text, let tools):
+            return "agent|\(text)|\(tools.joined(separator: "¦"))"
+        case .person(let text):
+            return "person|\(text)"
+        case .meal(let meal):
+            return [
+                "meal", meal.title, meal.subtitle, meal.mealType,
+                String(meal.energy), String(meal.carbs), String(meal.protein), String(meal.fat),
+                meal.artwork.rawValue, meal.confidence.rawValue,
+                meal.analysis == nil ? "no-analysis" : "has-analysis",
+                meal.visualIdentity == nil ? "no-visual" : "has-visual"
+            ].joined(separator: "|")
+        case .mealAnalysis:
+            return "meal-analysis"
+        case .glucose(let reading):
+            return "glucose|\(reading.type.rawValue)|\(reading.normalizedMgPerDl)"
+        case .checkpoint(let checkpoint):
+            return "checkpoint|\(checkpoint.value)|\(checkpoint.unit)|\(checkpoint.label)|\(checkpoint.note)"
+        }
     }
 }
 

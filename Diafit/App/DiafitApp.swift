@@ -10,16 +10,16 @@ struct DiafitApp: App {
         let usesTransientFixtures = process.arguments.contains("UITestMode") && !usesPersistentUITestDiary
         let diary: DiaryStore
         if usesTransientFixtures {
-            diary = DiaryStore(days: SampleDiary.days)
+            diary = DiaryStore(days: RuntimeDiaryDefaults.days())
         } else if usesPersistentUITestDiary {
             let rawIdentifier = process.environment["DIAFIT_UI_TEST_DIARY_ID"] ?? UUID().uuidString
             let identifier = rawIdentifier.filter { $0.isLetter || $0.isNumber || $0 == "-" }
             diary = DiaryStore(
-                seedDays: SampleDiary.days,
+                seedDays: RuntimeDiaryDefaults.days(),
                 persistence: FileDiaryPersistence.live(fileName: "ui-test-\(identifier).json")
             )
         } else {
-            diary = DiaryStore(seedDays: SampleDiary.days, persistence: FileDiaryPersistence.live())
+            diary = DiaryStore(seedDays: RuntimeDiaryDefaults.days(), persistence: FileDiaryPersistence.live())
         }
         _store = StateObject(wrappedValue: diary)
     }
@@ -29,7 +29,6 @@ struct DiafitApp: App {
             RootExperience()
                 .environmentObject(store)
                 .environment(\.appDependencies, .local)
-                .preferredColorScheme(.light)
         }
     }
 }

@@ -31,6 +31,17 @@ struct Day: Identifiable, Codable, Hashable {
 
     var totalEnergy: Int { meals.reduce(0) { $0 + $1.energy } }
     var totalCarbs: Int { meals.reduce(0) { $0 + $1.carbs } }
+    var totalProtein: Int { meals.reduce(0) { $0 + $1.protein } }
+
+    /// Meals saved by the structured review flow retain unavailable protein as
+    /// `nil` in their analysis result. The headline can still show the sum of
+    /// known values while callers keep that partial-data state available.
+    var proteinTotalIsComplete: Bool {
+        !meals.contains { meal in
+            guard let analysis = meal.analysis else { return false }
+            return analysis.mealTotals.proteinGrams == nil
+        }
+    }
 }
 
 struct Meal: Identifiable, Codable, Hashable {
