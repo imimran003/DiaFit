@@ -91,6 +91,23 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Confirm estimate"].waitForExistence(timeout: 2))
     }
 
+    func testFoodQuantitiesAndSugarExclusionStayInFoodRoute() throws {
+        submitFoodNote("Sprouts with 2 walnut and 2 almonds and 2 whole boiled eggs with 2 whole wheat bread slice and 1 milk tea without sugar")
+
+        XCTAssertTrue(app.staticTexts["Mixed sprouts"].waitForExistence(timeout: 5))
+        XCTAssertFalse(app.staticTexts["I found a glucose reading. Check the unit and context before saving it."].exists)
+        XCTAssertFalse(app.textFields["Glucose value"].exists)
+    }
+
+    func testConversationalGlucoseUsesReadingValueNotTimeQuantity() throws {
+        submitFoodNote("2-hour post-meal glucose 126")
+
+        let glucoseValue = app.textFields["Glucose value"]
+        XCTAssertTrue(glucoseValue.waitForExistence(timeout: 4))
+        XCTAssertEqual(glucoseValue.value as? String, "126")
+        XCTAssertTrue(app.buttons["Post-meal"].isSelected)
+    }
+
     func testSproutsWithThreeBoiledEggsShowsComponentsTotalsVisualAndPersists() throws {
         submitFoodNote("sprouts with 3 boiled eggs")
 

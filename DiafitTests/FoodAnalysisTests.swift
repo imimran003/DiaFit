@@ -47,6 +47,71 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertNil(parser.parse("I had 2 eggs with rice"), "Meal quantities must not be treated as glucose readings")
     }
 
+    func testFoodSugarExclusionsNeverBecomeGlucoseDrafts() {
+        let parser = GlucoseNaturalLanguageParser()
+        let foodNotes = [
+            "Sprouts with 2 walnut and 2 almonds and 2 whole boiled eggs with 2 whole wheat bread slice and 1 milk tea without sugar",
+            "one scoop whey with no sugar",
+            "2 slices toast and sugar-free yogurt",
+            "I had sugar, 2 teaspoons, in my tea"
+        ]
+
+        for note in foodNotes {
+            XCTAssertNil(parser.parse(note), "Food note was misclassified as glucose: \(note)")
+        }
+    }
+
+    func testGlucoseParserAnchorsReadingInsteadOfTimeOrFoodQuantities() {
+        let parser = GlucoseNaturalLanguageParser()
+
+        XCTAssertEqual(parser.parse("2-hour post-meal glucose 126")?.value, Decimal(126))
+        XCTAssertEqual(parser.parse("my glucose reading after 2 hours was 134")?.value, Decimal(134))
+        XCTAssertEqual(parser.parse("blood sugar 128 after eating 2 eggs")?.value, Decimal(128))
+        XCTAssertEqual(parser.parse("without sugar, my blood glucose was 120 mg/dL")?.value, Decimal(120))
+        XCTAssertEqual(parser.parse("my glucose was 120 and dinner was 2 eggs")?.value, Decimal(120))
+    }
+
+    func testConversationIntentClassifierSeparatesFoodGlucoseAndAmbiguity() {
+        let classifier = DefaultConversationInputIntentClassifier()
+
+        XCTAssertEqual(
+            classifier.classify("Sprouts with 2 walnuts and milk tea without sugar").intent,
+            .food
+        )
+        XCTAssertEqual(classifier.classify("glucose syrup, 2 teaspoons").intent, .food)
+        XCTAssertEqual(classifier.classify("2 low-sugar yogurts").intent, .food)
+        XCTAssertEqual(classifier.classify("120 g sugar for baking").intent, .food)
+        XCTAssertEqual(classifier.classify("fasting sugar 102").intent, .glucose)
+        XCTAssertEqual(classifier.classify("sugar after lunch was 134").intent, .glucose)
+        XCTAssertEqual(classifier.classify("7.2 mmol/L two hours after dinner").intent, .glucose)
+        XCTAssertEqual(classifier.classify("tea without sugar, glucose 120").intent, .glucose)
+        XCTAssertEqual(classifier.classify("sugar 120").intent, .ambiguous)
+    }
+
+    func testConversationInputRouterOnlyCreatesGlucoseDraftForGlucoseIntent() {
+        let router = DefaultConversationInputRouter()
+
+        if case .food = router.route("2 eggs, 2 bread slices and tea without sugar") {
+            // Expected.
+        } else {
+            XCTFail("Food quantities were routed away from food understanding")
+        }
+
+        if case .glucose(let draft) = router.route("2-hour post-meal glucose 126") {
+            XCTAssertEqual(draft.value, Decimal(126))
+            XCTAssertEqual(draft.type, .postMeal)
+            XCTAssertEqual(draft.minutesAfterMeal, 120)
+        } else {
+            XCTFail("Explicit glucose reading did not produce a glucose draft")
+        }
+
+        if case .clarification = router.route("sugar 120") {
+            // Expected: one question is safer than silently choosing a domain.
+        } else {
+            XCTFail("Ambiguous sugar input should request intent clarification")
+        }
+    }
+
     func testGlucoseValidationFlagsUnusualValuesWithoutDiagnosing() {
         let validation = DefaultGlucoseValidationService()
         let unusual = validation.validate(value: Decimal(1_200), unit: .milligramsPerDeciliter, type: .other, minutesAfterMeal: nil)

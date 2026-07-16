@@ -98,27 +98,20 @@ struct GlucoseNaturalLanguageParser: Sendable {
         let normalized = text
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
             .lowercased()
-        // A number alone is not a glucose entry: ordinary meal text such as
-        // “2 eggs” must continue through the food-understanding pipeline.
-        let glucoseMarkers = [
-            "glucose", "blood sugar", "blood glucose", "sugar", "fbs", "ppbs",
-            "fasting", "post-meal", "post meal", "pre-meal", "pre meal", "bedtime",
-            "mg/dl", "mg dl", "mgdl", "mmol"
-        ]
-        guard glucoseMarkers.contains(where: normalized.contains) else { return nil }
+        guard DefaultConversationInputIntentClassifier().classify(normalized).intent == .glucose else { return nil }
         guard let value = extractValue(from: normalized) else { return nil }
 
         let unit: GlucoseUnit?
-        if normalized.contains("mmol") { unit = .millimolesPerLiter }
-        else if normalized.contains("mg/dl") || normalized.contains("mg dl") || normalized.contains("mgdl") { unit = .milligramsPerDeciliter }
+        if normalized.range(of: #"\bmmol\s*/?\s*l\b"#, options: .regularExpression) != nil { unit = .millimolesPerLiter }
+        else if normalized.range(of: #"\b(?:mg\s*/?\s*dl|mgdl)\b"#, options: .regularExpression) != nil { unit = .milligramsPerDeciliter }
         else { unit = nil }
 
         let type: GlucoseReadingType
         if normalized.contains("fbs") || normalized.contains("fasting") || normalized.contains("morning sugar") || normalized.contains("morning blood") {
             type = .fasting
-        } else if normalized.contains("ppbs") || normalized.contains("post-meal") || normalized.contains("post meal") || normalized.contains("after lunch") || normalized.contains("after dinner") || normalized.contains("after breakfast") || normalized.contains("after meal") {
+        } else if normalized.contains("ppbs") || normalized.contains("post-meal") || normalized.contains("post meal") || normalized.contains("postmeal") || normalized.contains("postprandial") || normalized.contains("after lunch") || normalized.contains("after dinner") || normalized.contains("after breakfast") || normalized.contains("after meal") {
             type = .postMeal
-        } else if normalized.contains("before meal") || normalized.contains("pre-meal") || normalized.contains("pre meal") {
+        } else if normalized.contains("before meal") || normalized.contains("pre-meal") || normalized.contains("pre meal") || normalized.contains("premeal") {
             type = .preMeal
         } else if normalized.contains("bedtime") || normalized.contains("before bed") {
             type = .bedtime
@@ -146,19 +139,41 @@ struct GlucoseNaturalLanguageParser: Sendable {
     }
 
     private func extractValue(from text: String) -> Decimal? {
-        let pattern = #"(?<![a-z])([0-9]{1,4}(?:[\.,][0-9]{1,2})?)(?![a-z])"#
-        guard let match = text.range(of: pattern, options: .regularExpression) else { return nil }
-        let raw = String(text[match]).replacingOccurrences(of: ",", with: ".")
+        let value = #"([0-9]{1,4}(?:[\.,][0-9]{1,2})?)"#
+        let marker = #"(?:fbs|ppbs|blood\s+(?:sugar|glucose)|glucose|(?:fasting|morning|post[-\s]?meal|postprandial|pre[-\s]?meal|bedtime)\s+(?:blood\s+)?sugar|sugar\s+after\s+(?:breakfast|lunch|dinner|meal))"#
+        let unit = #"(?:mg\s*/?\s*dl|mgdl|mmol\s*/?\s*l)"#
+        let patterns = [
+            #"\#(marker).{0,64}?\b(?:was|is|at|of)\s*\#(value)"#,
+            #"\#(marker)\s*(?:reading\s*)?[:=\-]?\s*\#(value)"#,
+            #"\#(marker)\s+(?:reading\s+)?(?:after|before)\s+(?:breakfast|lunch|dinner|meal)\s*(?:was|is)?\s*\#(value)"#,
+            #"\#(value)\s*\#(unit)\b"#,
+            #"\#(value)\s+\#(marker)\b"#
+        ]
+
+        for pattern in patterns {
+            if let parsed = capturedDecimal(in: text, pattern: pattern) { return parsed }
+        }
+        return nil
+    }
+
+    private func capturedDecimal(in text: String, pattern: String) -> Decimal? {
+        guard let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) else { return nil }
+        let searchRange = NSRange(text.startIndex..<text.endIndex, in: text)
+        guard let match = expression.firstMatch(in: text, range: searchRange),
+              match.numberOfRanges > 1,
+              let range = Range(match.range(at: 1), in: text)
+        else { return nil }
+        let raw = String(text[range]).replacingOccurrences(of: ",", with: ".")
         return Decimal(string: raw, locale: Locale(identifier: "en_US_POSIX"))
     }
 
     private func extractMinutesAfterMeal(from text: String) -> Int? {
         let patterns: [(String, Int)] = [
-            (#"30\s*(?:min|mins|minute|minutes)"#, 30),
-            (#"(?:1|one)\s*(?:hour|hr)"#, 60),
-            (#"90\s*(?:min|mins|minute|minutes)"#, 90),
-            (#"(?:2|two)\s*(?:hour|hr|hours)"#, 120),
-            (#"(?:3|three)\s*(?:hour|hr|hours)"#, 180)
+            (#"30[-\s]*(?:min|mins|minute|minutes)"#, 30),
+            (#"(?:1|one)[-\s]*(?:hour|hr)"#, 60),
+            (#"90[-\s]*(?:min|mins|minute|minutes)"#, 90),
+            (#"(?:2|two)[-\s]*(?:hour|hr|hours)"#, 120),
+            (#"(?:3|three)[-\s]*(?:hour|hr|hours)"#, 180)
         ]
         for (pattern, minutes) in patterns where text.range(of: pattern, options: .regularExpression) != nil {
             return minutes

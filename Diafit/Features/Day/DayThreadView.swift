@@ -206,10 +206,16 @@ struct DayThreadView: View {
         composerFocused = false
         store.append(ThreadItem(id: UUID(), kind: .person(text: note)), to: dayID)
 
-        if let parsedGlucose = GlucoseNaturalLanguageParser().parse(note) {
+        switch dependencies.conversationInputRouter.route(note) {
+        case .glucose(let parsedGlucose):
             glucoseDraft = parsedGlucose
             store.append(ThreadItem(id: UUID(), kind: .agent(text: "I found a glucose reading. Check the unit and context before saving it.", tools: ["Needs confirmation"])), to: dayID)
             return
+        case .clarification(let question):
+            store.append(ThreadItem(id: UUID(), kind: .agent(text: question, tools: ["Clarify intent"])), to: dayID)
+            return
+        case .food:
+            break
         }
 
         isThinking = true
