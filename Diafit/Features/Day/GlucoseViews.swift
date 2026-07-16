@@ -5,43 +5,70 @@ struct GlucoseSummaryStrip: View {
     let preferredUnit: GlucoseUnit
     let log: () -> Void
     let openHistory: () -> Void
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
         VStack(alignment: .leading, spacing: 11) {
-            HStack(alignment: .firstTextBaseline) {
-                Text("GLUCOSE")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(1.2)
-                    .foregroundStyle(Color.quietInk)
-                Spacer()
-                Button("History", action: openHistory)
-                    .font(DiafitType.caption.weight(.semibold))
-                    .foregroundStyle(Color.quietInk)
-                    .frame(minHeight: 44)
-            }
+            summaryHeader
 
-            HStack(spacing: 14) {
-                GlucoseSnapshot(label: "Fasting", reading: day.latestFastingReading, preferredUnit: preferredUnit)
-                Rectangle()
-                    .fill(Color.rule.opacity(0.45))
-                    .frame(width: 1, height: 34)
-                GlucoseSnapshot(label: "Post-meal", reading: day.latestPostMealReading, preferredUnit: preferredUnit)
-                Spacer(minLength: 0)
-                Button(action: log) {
-                    Label("Log glucose", systemImage: "plus")
-                        .font(DiafitType.caption.weight(.semibold))
-                        .foregroundStyle(Color.ink)
-                        .padding(.horizontal, 12)
-                        .frame(minHeight: 42)
-                        .background(Color.lime.opacity(0.42), in: Capsule())
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 0) {
+                    GlucoseSnapshot(label: "Fasting", reading: day.latestFastingReading, preferredUnit: preferredUnit)
+                        .padding(.vertical, 8)
+                    Divider().overlay(Color.rule.opacity(0.5))
+                    GlucoseSnapshot(label: "Post-meal", reading: day.latestPostMealReading, preferredUnit: preferredUnit)
+                        .padding(.vertical, 8)
+
+                    logButton
+                        .padding(.top, 10)
                 }
-                .buttonStyle(PressableStyle(pressedScale: 0.94))
-                .accessibilityIdentifier("Log glucose")
+            } else {
+                HStack(spacing: 14) {
+                    GlucoseSnapshot(label: "Fasting", reading: day.latestFastingReading, preferredUnit: preferredUnit)
+                    Rectangle()
+                        .fill(Color.rule.opacity(0.45))
+                        .frame(width: 1, height: 34)
+                    GlucoseSnapshot(label: "Post-meal", reading: day.latestPostMealReading, preferredUnit: preferredUnit)
+                    Spacer(minLength: 0)
+                    logButton
+                }
             }
         }
         .padding(.top, 2)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Daily blood glucose")
+    }
+
+    private var summaryHeader: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            Text("GLUCOSE")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(1.2)
+                .foregroundStyle(Color.quietInk)
+            Spacer(minLength: 8)
+            Button("History", action: openHistory)
+                .font(DiafitType.caption.weight(.semibold))
+                .foregroundStyle(Color.quietInk)
+                .lineLimit(1)
+                .minimumScaleFactor(0.8)
+                .frame(minHeight: 44)
+        }
+    }
+
+    private var logButton: some View {
+        Button(action: log) {
+            Label("Log glucose", systemImage: "plus")
+                .font(DiafitType.caption.weight(.semibold))
+                .foregroundStyle(Color.ink)
+                .lineLimit(2)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 12)
+                .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil)
+                .frame(minHeight: 44)
+                .background(Color.lime.opacity(0.42), in: Capsule())
+        }
+        .buttonStyle(PressableStyle(pressedScale: 0.94))
+        .accessibilityIdentifier("Log glucose")
     }
 }
 
@@ -57,20 +84,21 @@ private struct GlucoseSnapshot: View {
                 .foregroundStyle(Color.quietInk)
             if let reading {
                 Text("\(reading.displayed(in: preferredUnit)) \(preferredUnit.shortName)")
-                    .font(.system(size: 17, weight: .bold, design: .rounded))
+                    .font(DiafitType.body.weight(.bold))
                     .foregroundStyle(Color.ink)
                 Text(reading.measuredAt.formatted(.dateTime.hour().minute()))
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(DiafitType.caption)
                     .foregroundStyle(Color.quietInk.opacity(0.76))
             } else {
                 Text("—")
-                    .font(.system(size: 19, weight: .medium, design: .rounded))
+                    .font(DiafitType.title.weight(.medium))
                     .foregroundStyle(Color.quietInk.opacity(0.65))
                 Text("Not logged")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .font(DiafitType.caption)
                     .foregroundStyle(Color.quietInk.opacity(0.76))
             }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(reading.map { "\(label) glucose, \($0.accessibilityValue), measured \($0.measuredAt.formatted(date: .omitted, time: .shortened))" } ?? "No \(label.lowercased()) glucose reading")
     }

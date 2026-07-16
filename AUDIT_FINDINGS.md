@@ -41,11 +41,11 @@ flowchart TD
 
 ### F-001 — No durable diary persistence
 
-`DiafitApp` constructs `DiaryStore(days: SampleDiary.days)` on every launch. Confirmed meals, edits and deletions live only in memory. There is no schema version, migration, atomic write, corruption recovery or deletion implementation for stored health-related history.
+At the time of the audit, `DiafitApp` constructed `DiaryStore(days: SampleDiary.days)` on every launch. That original implementation had no durable history and also allowed preview meals to become runtime content.
 
 Impact: data loss on termination and inability to meet the product’s core diary contract.
 
-Resolution on audit branch: the existing store API now commits through a versioned, atomic Application Support archive. The app loads it before using first-install seed data, applies file protection, omits transient photo bytes, rejects unknown future schemas, rolls back failed mutations and exposes a retry path. Unit tests cover save/edit/delete/reload; a UI test verifies process termination and relaunch.
+Resolution on audit branch: the existing store API now commits through a versioned, atomic Application Support archive. Normal runtime seed data is an empty current day; sample meals live only in `PreviewDiaryFixtures`. The app applies file protection, omits transient photo bytes, rejects unknown future schemas, rolls back failed mutations and exposes a retry path. Unit tests cover save/edit/delete/reload and conservative cleanup of the exact untouched legacy preview archive; a UI test verifies process termination and relaunch.
 
 ### F-002 — Component quantities are not span-bound
 

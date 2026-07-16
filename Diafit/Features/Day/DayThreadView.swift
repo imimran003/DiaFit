@@ -27,7 +27,19 @@ struct DayThreadView: View {
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 18) {
                             DayHeader(day: day, openAtlas: openAtlas, logGlucose: { showsGlucoseEntry = true }, openGlucoseHistory: { showsGlucoseHistory = true })
-                                .padding(.bottom, 4)
+                                .padding(.bottom, day.meals.isEmpty ? 0 : 4)
+                                // Preserve a large accessibility presentation
+                                // without allowing editorial display type to
+                                // consume the entire viewport at AX5.
+                                .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+
+                            if day.meals.isEmpty {
+                                EmptyMealState(
+                                    addFood: { composerFocused = true },
+                                    openPhoto: { showsPhotoInput = true }
+                                )
+                                .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+                            }
 
                             ForEach(day.messages) { item in
                                 ThreadItemView(
@@ -88,6 +100,7 @@ struct DayThreadView: View {
                             openPhoto: { showsPhotoInput = true },
                             submit: submit
                         )
+                        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
                     }
                     .onChange(of: day.messages.count) { _, _ in
                         scrollToTail(proxy)
@@ -350,16 +363,17 @@ private struct DayHeader: View {
 
                 Spacer()
 
-                Button(action: openAtlas) {
-                    Image(systemName: "square.grid.2x2.fill")
-                        .font(.system(size: 16, weight: .semibold))
-                        .foregroundStyle(Color.ink)
-                        .frame(width: 44, height: 44)
-                        .background(.white.opacity(0.7), in: Circle())
-                        .overlay(Circle().stroke(.white.opacity(0.85), lineWidth: 1))
+                if !day.meals.isEmpty {
+                    Button(action: openAtlas) {
+                        Image(systemName: "square.grid.2x2.fill")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundStyle(Color.ink)
+                            .frame(width: 44, height: 44)
+                            .background(Color.mist.opacity(0.72), in: Circle())
+                    }
+                    .buttonStyle(PressableStyle(pressedScale: 0.9))
+                    .accessibilityLabel("Open meal atlas")
                 }
-                .buttonStyle(PressableStyle(pressedScale: 0.9))
-                .accessibilityLabel("Open meal atlas")
             }
 
             DailyRhythm(day: day)
@@ -377,53 +391,170 @@ private struct DayHeader: View {
 private struct DailyRhythm: View {
     let day: Day
 
-    private var caloriesProgress: CGFloat {
-        min(CGFloat(day.totalEnergy) / CGFloat(day.energyGoal), 1)
-    }
-
-    private var carbProgress: CGFloat {
-        min(CGFloat(day.totalCarbs) / CGFloat(day.carbohydrateGoal), 1)
-    }
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        HStack(spacing: 10) {
-            MetricTicket(value: "\(day.totalEnergy)", unit: "kcal", progress: caloriesProgress, accent: .ink)
-            MetricTicket(value: "\(day.totalCarbs)g", unit: "carbs", progress: carbProgress, accent: .coral)
-            Spacer(minLength: 0)
-            Text("Swipe for days")
-                .font(DiafitType.caption)
-                .foregroundStyle(Color.quietInk.opacity(0.72))
-                .fixedSize()
+        Group {
+            if dynamicTypeSize.isAccessibilitySize {
+                VStack(spacing: 0) {
+                    metricRows
+                }
+            } else {
+                HStack(alignment: .top, spacing: 0) {
+                    metricColumns
+                }
+            }
         }
+        .padding(.vertical, 4)
+    }
+
+    @ViewBuilder
+    private var metricColumns: some View {
+        NutritionMetric(
+            label: "Calories", value: day.totalEnergy, unit: "kcal",
+            spokenUnit: "kilocalories", identifier: "daily-summary-calories"
+        )
+        SummaryDivider()
+        NutritionMetric(
+            label: "Carbohydrates", value: day.totalCarbs, unit: "g",
+            spokenUnit: "grams", identifier: "daily-summary-carbohydrates"
+        )
+        SummaryDivider()
+        NutritionMetric(
+            label: "Protein", value: day.totalProtein, unit: "g",
+            spokenUnit: "grams", identifier: "daily-summary-protein",
+            isComplete: day.proteinTotalIsComplete
+        )
+    }
+
+    @ViewBuilder
+    private var metricRows: some View {
+        NutritionMetric(
+            label: "Calories", value: day.totalEnergy, unit: "kcal",
+            spokenUnit: "kilocalories", identifier: "daily-summary-calories", horizontal: true
+        )
+        Divider().overlay(Color.rule.opacity(0.65))
+        NutritionMetric(
+            label: "Carbohydrates", value: day.totalCarbs, unit: "g",
+            spokenUnit: "grams", identifier: "daily-summary-carbohydrates", horizontal: true
+        )
+        Divider().overlay(Color.rule.opacity(0.65))
+        NutritionMetric(
+            label: "Protein", value: day.totalProtein, unit: "g",
+            spokenUnit: "grams", identifier: "daily-summary-protein",
+            isComplete: day.proteinTotalIsComplete, horizontal: true
+        )
     }
 }
 
-private struct MetricTicket: View {
-    let value: String
+private struct NutritionMetric: View {
+    let label: String
+    let value: Int
     let unit: String
-    let progress: CGFloat
-    let accent: Color
+    let spokenUnit: String
+    let identifier: String
+    var isComplete = true
+    var horizontal = false
 
     var body: some View {
-        HStack(spacing: 8) {
-            ZStack {
-                Circle().stroke(Color.rule.opacity(0.68), lineWidth: 2)
-                Circle()
-                    .trim(from: 0, to: progress)
-                    .stroke(accent, style: StrokeStyle(lineWidth: 2.6, lineCap: .round))
-                    .rotationEffect(.degrees(-90))
-            }
-            .frame(width: 24, height: 24)
-
-            VStack(alignment: .leading, spacing: 0) {
-                Text(value).font(.system(size: 15, weight: .bold, design: .rounded))
-                Text(unit).font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.quietInk)
+        Group {
+            if horizontal {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(label)
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                    Spacer(minLength: 12)
+                    valueLabel
+                }
+                .padding(.vertical, 11)
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(label)
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.74)
+                    valueLabel
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 8)
-        .background(.white.opacity(0.56), in: Capsule())
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(label), \(value) \(spokenUnit)\(isComplete ? "" : ", known amount; some meal data is unavailable")")
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var valueLabel: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text("\(value)")
+                .font(DiafitType.metric)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+            Text(unit)
+                .font(DiafitType.caption)
+                .foregroundStyle(Color.quietInk)
+        }
+        .foregroundStyle(Color.ink)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+    }
+}
+
+private struct SummaryDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(Color.rule.opacity(0.72))
+            .frame(width: 1, height: 42)
+            .padding(.horizontal, 12)
+            .accessibilityHidden(true)
+    }
+}
+
+private struct EmptyMealState: View {
+    let addFood: () -> Void
+    let openPhoto: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 0) {
+                Text("No meals logged yet")
+                    .font(DiafitType.title)
+                    .foregroundStyle(Color.ink)
+                Text("Add what you ate when you’re ready.")
+                    .font(DiafitType.body)
+                    .foregroundStyle(Color.quietInk)
+                    .padding(.top, 5)
+            }
+
+            HStack(spacing: 12) {
+                Button(action: addFood) {
+                    Label("Add food", systemImage: "plus")
+                        .font(DiafitType.body.weight(.semibold))
+                        .foregroundStyle(Color.paper)
+                        .frame(minHeight: 48)
+                        .padding(.horizontal, 18)
+                        .background(Color.ink, in: Capsule())
+                }
+                .buttonStyle(PressableStyle(pressedScale: 0.96))
+
+                Button(action: openPhoto) {
+                    Image(systemName: "camera")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 48, height: 48)
+                        .background(Color.mist.opacity(0.76), in: Circle())
+                }
+                .buttonStyle(PressableStyle(pressedScale: 0.92))
+                .accessibilityLabel("Add meal photo")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 16)
+        .overlay(alignment: .bottom) {
+            Rectangle()
+                .fill(Color.rule.opacity(0.58))
+                .frame(height: 1)
+        }
     }
 }
 
@@ -476,29 +607,8 @@ private struct Composer: View {
     let openPhoto: () -> Void
     let submit: () -> Void
 
-    private let suggestions = ["My usual breakfast", "I had salmon & rice", "Pasta for dinner"]
-
     var body: some View {
-        VStack(spacing: 9) {
-            if !isFocused.wrappedValue && text.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 8) {
-                        ForEach(suggestions, id: \.self) { suggestion in
-                            Button(suggestion) { text = suggestion }
-                                .font(DiafitType.caption)
-                                .foregroundStyle(Color.ink)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 9)
-                                .background(.white.opacity(0.75), in: Capsule())
-                                .overlay(Capsule().stroke(Color.rule.opacity(0.55), lineWidth: 0.8))
-                                .buttonStyle(PressableStyle())
-                        }
-                    }
-                    .padding(.horizontal, 20)
-                }
-            }
-
-            HStack(spacing: 11) {
+        HStack(spacing: 11) {
                 Button(action: openPhoto) {
                     Image(systemName: "camera")
                         .font(.system(size: 15, weight: .semibold))
@@ -527,18 +637,16 @@ private struct Composer: View {
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isThinking)
                 .buttonStyle(PressableStyle(pressedScale: 0.86))
                 .accessibilityLabel("Send food note")
-            }
-            .padding(.leading, 18)
-            .padding(.trailing, 7)
-            .padding(.vertical, 7)
-            .background(.ultraThinMaterial, in: Capsule())
-            .overlay(Capsule().stroke(.white.opacity(0.8), lineWidth: 1))
-            .shadow(color: .black.opacity(0.09), radius: 20, y: 8)
-            .padding(.horizontal, 20)
         }
+        .padding(.leading, 18)
+        .padding(.trailing, 7)
+        .padding(.vertical, 7)
+        .background(Color.mist.opacity(0.82), in: Capsule())
+        .overlay(Capsule().stroke(Color.rule.opacity(0.58), lineWidth: 0.8))
+        .padding(.horizontal, 20)
         .padding(.top, 9)
         .padding(.bottom, 10)
-        .background(Color.paper.opacity(0.82))
+        .background(Color.paper)
     }
 }
 

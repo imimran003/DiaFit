@@ -9,8 +9,21 @@ final class DiafitUITests: XCTestCase {
         app.launch()
     }
 
+    func testFreshLaunchIsEmptyAndShowsThreeMetricSummary() throws {
+        XCTAssertTrue(app.staticTexts["No meals logged yet"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Add food"].exists)
+        XCTAssertFalse(app.staticTexts["Yogurt, berries & seeds"].exists)
+        XCTAssertFalse(app.staticTexts["Miso salmon plate"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["daily-summary-calories"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["daily-summary-carbohydrates"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["daily-summary-protein"].exists)
+    }
+
     func testMealAtlasOpensAndCloses() throws {
-        // The diary opens at the newest conversation moment; reveal its header.
+        submitFoodNote("Pasta for dinner")
+        XCTAssertTrue(app.staticTexts["Tomato basil pasta"].waitForExistence(timeout: 4))
+
+        // The diary follows the newest conversation moment; reveal its header.
         app.swipeDown()
         app.swipeDown()
 
@@ -27,17 +40,39 @@ final class DiafitUITests: XCTestCase {
     }
 
     func testQuickFoodNoteAddsAnAgentMeal() throws {
-        let quickNote = app.buttons["Pasta for dinner"]
-        XCTAssertTrue(quickNote.waitForExistence(timeout: 3))
-        quickNote.tap()
-
-        let send = app.buttons["Send food note"]
-        XCTAssertTrue(send.isEnabled)
-        send.tap()
+        submitFoodNote("Pasta for dinner")
 
         XCTAssertTrue(app.staticTexts["Tomato basil pasta"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["That sounds comforting. I’ve put it in as a generous pasta portion; you can fine-tune it any time."].waitForExistence(timeout: 3))
         attachScreenshot(named: "logged-pasta")
+    }
+
+    func testAddingAndDeletingMealUpdatesAllTotalsAndRestoresEmptyState() throws {
+        submitFoodNote("Pasta for dinner")
+
+        let savedMeal = app.buttons["Saved meal Tomato basil pasta"]
+        XCTAssertTrue(savedMeal.waitForExistence(timeout: 4))
+        app.swipeDown()
+        app.swipeDown()
+        XCTAssertTrue(metricLabel("daily-summary-calories").contains("682"))
+        XCTAssertTrue(metricLabel("daily-summary-carbohydrates").contains("79"))
+        XCTAssertTrue(metricLabel("daily-summary-protein").contains("25"))
+
+        app.swipeUp()
+        app.swipeUp()
+        XCTAssertTrue(savedMeal.waitForExistence(timeout: 2))
+        savedMeal.press(forDuration: 1.1)
+        let deleteMeal = app.buttons["Delete meal"]
+        XCTAssertTrue(deleteMeal.waitForExistence(timeout: 2))
+        deleteMeal.tap()
+        app.buttons["Delete"].tap()
+
+        app.swipeDown()
+        app.swipeDown()
+        XCTAssertTrue(app.staticTexts["No meals logged yet"].waitForExistence(timeout: 3))
+        XCTAssertTrue(metricLabel("daily-summary-calories").contains("0"))
+        XCTAssertTrue(metricLabel("daily-summary-carbohydrates").contains("0"))
+        XCTAssertTrue(metricLabel("daily-summary-protein").contains("0"))
     }
 
     func testUnrecognisedFoodCreatesReviewInsteadOfGuessing() throws {
