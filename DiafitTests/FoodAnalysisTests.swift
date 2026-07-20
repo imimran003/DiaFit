@@ -583,6 +583,24 @@ final class FoodAnalysisTests: XCTestCase {
         ]))
     }
 
+    func testDevelopmentBackendConfigurationSurvivesHomeScreenRelaunch() throws {
+        #if DEBUG
+        let service = "com.imranahmad.diafit.tests.\(UUID().uuidString)"
+        let store = DevelopmentBackendConfigurationStore(service: service)
+        defer { store.remove() }
+        let resolver = RuntimeBackendConfigurationResolver(store: store)
+        let configured = try XCTUnwrap(resolver.resolve(environment: [
+            "DIAFIT_BACKEND_URL": "https://temporary-tunnel.example.test",
+            "DIAFIT_BACKEND_ACCESS_TOKEN": "development-account-token"
+        ]))
+        XCTAssertEqual(configured.endpoint.absoluteString, "https://temporary-tunnel.example.test")
+
+        let relaunched = try XCTUnwrap(resolver.resolve(environment: [:]))
+        XCTAssertEqual(relaunched.endpoint, configured.endpoint)
+        XCTAssertEqual(relaunched.accessToken, configured.accessToken)
+        #endif
+    }
+
     func testPhotoCompletenessGateRejectsRecognisedNameWithoutNutrition() {
         let incomplete = LocalMealAnalysisEngine(catalog: catalog)
             .makeAnalysis(description: "mixed thali", imageType: .originalPhoto)
@@ -703,6 +721,8 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["banana"])
         XCTAssertFalse(result.mealTotals.isEmpty)
         XCTAssertTrue(result.assumptions.contains { $0.localizedCaseInsensitiveContains("on-device") })
+        XCTAssertEqual(result.overallConfidence, .low)
+        XCTAssertTrue(result.clarificationQuestions.contains { $0.question.contains("Live recognition is unavailable") })
     }
 
     func testLowConfidenceOnDeviceLabelEscalatesToStructuredPhotoInterpretation() async throws {

@@ -1,4 +1,5 @@
 import SwiftUI
+import Security
 
 /// Composition lives at the app edge. Production can inject an authenticated
 /// remote analysis service here; previews and offline builds remain local.
@@ -30,9 +31,18 @@ struct AppDependencies: Sendable {
         let normalisation = HybridFoodNormalisationService(catalog: catalog)
         let nutrition = HybridNutritionResolutionService(catalog: catalog, packaged: packaged)
         let localUnderstanding = LocalStructuredMealUnderstandingService(catalog: catalog)
-        let backendConfiguration = arguments.contains("UITestMode")
-            ? nil
-            : RuntimeBackendConfiguration(environment: environment)
+        let backendConfiguration: RuntimeBackendConfiguration?
+        if arguments.contains("UITestMode") {
+            backendConfiguration = nil
+        } else {
+            #if DEBUG
+            backendConfiguration = RuntimeBackendConfigurationResolver(
+                store: DevelopmentBackendConfigurationStore()
+            ).resolve(environment: environment)
+            #else
+            backendConfiguration = RuntimeBackendConfiguration(environment: environment)
+            #endif
+        }
         let backendUnderstanding: BackendFoodUnderstandingService? = backendConfiguration.map {
             BackendFoodUnderstandingService(
                 endpoint: $0.endpoint,
@@ -84,16 +94,97 @@ struct RuntimeBackendConfiguration: Sendable {
 
     init?(environment: [String: String]) {
         guard let rawURL = environment["DIAFIT_BACKEND_URL"],
-              let endpoint = URL(string: rawURL),
+              let token = environment["DIAFIT_BACKEND_ACCESS_TOKEN"]
+                ?? environment["DIAFIT_DEVELOPMENT_TOKEN"] else { return nil }
+        self.init(rawURL: rawURL, accessToken: token)
+    }
+
+    init?(rawURL: String, accessToken: String) {
+        guard let endpoint = URL(string: rawURL),
               let scheme = endpoint.scheme?.lowercased(),
               scheme == "https" || (scheme == "http" && ["127.0.0.1", "localhost"].contains(endpoint.host)),
-              let token = environment["DIAFIT_BACKEND_ACCESS_TOKEN"]
-                ?? environment["DIAFIT_DEVELOPMENT_TOKEN"],
-              token.count >= 8 else { return nil }
+              accessToken.count >= 8 else { return nil }
         self.endpoint = endpoint
-        self.accessToken = token
+        self.accessToken = accessToken
     }
 }
+
+#if DEBUG
+protocol RuntimeBackendConfigurationStoring: Sendable {
+    func load() -> RuntimeBackendConfiguration?
+    func save(_ configuration: RuntimeBackendConfiguration)
+}
+
+/// Debug device builds may be launched again from the Home Screen, where
+/// Xcode's process environment no longer exists. Persist only the temporary
+/// app-to-backend credential in Keychain; the Gemini provider key remains on
+/// the Mac backend and never enters the app.
+struct DevelopmentBackendConfigurationStore: RuntimeBackendConfigurationStoring, Sendable {
+    let service: String
+
+    init(service: String = "com.imranahmad.diafit.development-backend") {
+        self.service = service
+    }
+
+    func load() -> RuntimeBackendConfiguration? {
+        var query = baseQuery
+        query[kSecReturnData as String] = true
+        query[kSecMatchLimit as String] = kSecMatchLimitOne
+        var result: CFTypeRef?
+        guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
+              let data = result as? Data,
+              let credential = try? JSONDecoder().decode(Credential.self, from: data) else { return nil }
+        return RuntimeBackendConfiguration(rawURL: credential.url, accessToken: credential.token)
+    }
+
+    func save(_ configuration: RuntimeBackendConfiguration) {
+        let credential = Credential(url: configuration.endpoint.absoluteString, token: configuration.accessToken)
+        guard let data = try? JSONEncoder().encode(credential) else { return }
+        let attributes = [kSecValueData as String: data]
+        let status = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
+        if status == errSecItemNotFound {
+            var insertion = baseQuery
+            insertion[kSecValueData as String] = data
+            insertion[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+            SecItemAdd(insertion as CFDictionary, nil)
+        }
+    }
+
+    func remove() {
+        SecItemDelete(baseQuery as CFDictionary)
+    }
+
+    private var baseQuery: [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: service,
+            kSecAttrAccount as String: "runtime-backend"
+        ]
+    }
+
+    private struct Credential: Codable {
+        let url: String
+        let token: String
+    }
+}
+
+struct RuntimeBackendConfigurationResolver: Sendable {
+    let store: any RuntimeBackendConfigurationStoring
+
+    func resolve(environment: [String: String]) -> RuntimeBackendConfiguration? {
+        if let configured = RuntimeBackendConfiguration(environment: environment) {
+            store.save(configured)
+            FoodLoggingDiagnostics.record("backend.configuration", fields: ["source": "launch-environment"])
+            return configured
+        }
+        let stored = store.load()
+        FoodLoggingDiagnostics.record("backend.configuration", fields: [
+            "source": stored == nil ? "unavailable" : "keychain"
+        ])
+        return stored
+    }
+}
+#endif
 
 private struct AppDependenciesKey: EnvironmentKey {
     static let defaultValue = AppDependencies.local

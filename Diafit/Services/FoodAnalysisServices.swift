@@ -384,8 +384,21 @@ struct PhotoAnalysisOrchestrator: Sendable {
             )
         } else if localCompleteness.isComplete {
             if remoteFailed {
+                result.overallConfidence = .low
                 result.warnings.insert(
                     "Live recognition is unavailable, so this private on-device estimate needs your review.",
+                    at: 0
+                )
+                result.clarificationQuestions.insert(
+                    ClarificationQuestion(
+                        id: UUID(),
+                        relatedFoodItemId: nil,
+                        question: "Live recognition is unavailable. Do these food names match your photo?",
+                        answerType: .yesNo,
+                        options: ["Yes", "No — I’ll edit them"],
+                        impactLevel: .high,
+                        answer: nil
+                    ),
                     at: 0
                 )
             }
