@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { MEAL_PARSE_SCHEMA, MockMealParser, OpenAIMealParser, validateMealParseResult } from './meal-understanding.mjs';
+import { MEAL_PARSE_SCHEMA, MockMealParser, OpenAIMealParser, buildMealParseInput, validateMealParseResult } from './meal-understanding.mjs';
 
 const parsed = await new MockMealParser().parse({ text: 'one bowl moong sprouts with 3 boiled eggs and black coffee' });
 assert.equal(parsed.detectedItems.length, 3);
@@ -22,6 +22,16 @@ const arharChawal = await new MockMealParser().parse({ text: 'arhar daal with ch
 assert.deepEqual(arharChawal.detectedItems.map(item => item.canonicalSearchName), ['toor dal', 'cooked white rice']);
 const khichdi = await new MockMealParser().parse({ text: 'khichdi' });
 assert.equal(khichdi.detectedItems[0].canonicalSearchName, 'khichdi');
+const sabudana = await new MockMealParser().parse({ text: 'sabodana' });
+assert.equal(sabudana.detectedItems[0].canonicalSearchName, 'sabudana khichdi');
+
+const imageInput = buildMealParseInput({
+  text: 'Identify every visible food in this meal photo.',
+  imageBase64: 'aGVsbG8=',
+  mimeType: 'image/jpeg'
+});
+assert.equal(imageInput[1].content[1].type, 'input_image');
+assert.equal(imageInput[1].content[1].image_url, 'data:image/jpeg;base64,aGVsbG8=');
 
 let request;
 let requestOptions;

@@ -78,7 +78,7 @@ final class DiafitUITests: XCTestCase {
     func testUnrecognisedFoodCreatesReviewInsteadOfGuessing() throws {
         submitFoodNote("Chicken wrap and an apple")
 
-        XCTAssertTrue(app.staticTexts["Let’s identify the plate"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Identify this meal"].waitForExistence(timeout: 4))
         XCTAssertTrue(app.staticTexts["I don’t want to guess. Add the main dish and I’ll make an editable estimate."].waitForExistence(timeout: 3))
     }
 
@@ -238,7 +238,7 @@ final class DiafitUITests: XCTestCase {
         app.descendants(matching: .any)[identifier].label
     }
 
-    func testPhotoReviewFixtureWithUnsupportedComponentStaysUnconfirmed() throws {
+    func testPhotoReviewFixtureResolvesEveryComponentAfterRequiredAnswers() throws {
         app.terminate()
         app.launchArguments.append("UITestUseFixturePhoto")
         app.launch()
@@ -251,17 +251,20 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(fixture.waitForExistence(timeout: 2))
         fixture.tap()
 
-        XCTAssertTrue(app.staticTexts["A likely reading of this meal"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Review this meal"].waitForExistence(timeout: 4))
         XCTAssertFalse(app.buttons["Create a review"].exists, "Selecting a photo should begin analysis without another upload/description step")
         XCTAssertTrue(app.staticTexts["Dosa"].exists)
         XCTAssertTrue(app.staticTexts["Sambar"].exists)
+        XCTAssertTrue(app.staticTexts["How many dosa pieces did you have?"].exists)
+        XCTAssertEqual(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "displayName.lowercased")).count, 0)
 
         app.buttons["1"].tap()
         app.buttons["No / very little"].tap()
-        let confirm = app.buttons["Answer to confirm"]
+        let confirm = app.buttons["Confirm estimate"]
         XCTAssertTrue(confirm.exists)
-        XCTAssertFalse(confirm.isEnabled)
-        attachScreenshot(named: "unsupported-photo-review")
+        XCTAssertTrue(confirm.isEnabled)
+        XCTAssertFalse(metricLabel("meal-total-kcal").contains("—"))
+        attachScreenshot(named: "complete-photo-review")
     }
 
     func testPhotoCorrectionButtonResolvesCompoundFoodsAndEnablesConfirmation() throws {
@@ -276,18 +279,21 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(fixture.waitForExistence(timeout: 2))
         fixture.tap()
 
-        XCTAssertTrue(app.staticTexts["Automatic recognition needs a little help."].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Name the food to finish the estimate"].waitForExistence(timeout: 4))
         let correction = app.textFields["e.g. rajma with rice"]
         XCTAssertTrue(correction.exists)
         correction.tap()
-        correction.typeText("carrots with blue berries")
+        correction.typeText("sabodana")
         app.buttons["Add meal component"].tap()
 
-        XCTAssertTrue(app.staticTexts["Carrot"].waitForExistence(timeout: 3))
-        XCTAssertTrue(app.staticTexts["Blueberries"].exists)
+        XCTAssertTrue(app.staticTexts["Sabudana khichdi"].waitForExistence(timeout: 3))
+        XCTAssertFalse(metricLabel("meal-total-kcal").contains("—"))
+        XCTAssertFalse(metricLabel("meal-total-carbs").contains("—"))
+        XCTAssertFalse(metricLabel("meal-total-protein").contains("—"))
         let confirm = app.buttons["Confirm estimate"]
         XCTAssertTrue(confirm.waitForExistence(timeout: 2))
         XCTAssertTrue(confirm.isEnabled)
+        attachScreenshot(named: "sabudana-photo-correction")
     }
 
     private func attachScreenshot(named name: String) {

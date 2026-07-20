@@ -20,6 +20,7 @@ struct MealAnalysisReviewCard: View {
     private let catalog = IndianFoodCatalogService()
     private let portions = StandardPortionEstimationService()
     private let nutrition = CatalogNutritionLookupService()
+    private let fallback = CuratedNutritionFallbackService()
     private let glycaemic = CatalogGlycaemicDataService()
     private let validation = DefaultNutritionValidationService()
 
@@ -151,14 +152,13 @@ struct MealAnalysisReviewCard: View {
             }
         }
         .padding(16)
-        .background(Color.white.opacity(0.66), in: RoundedRectangle(cornerRadius: 28, style: .continuous))
-        .overlay(RoundedRectangle(cornerRadius: 28, style: .continuous).stroke(Color.rule.opacity(0.72), lineWidth: 0.8))
+        .background(Color.paper, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 26, style: .continuous).stroke(Color.rule, lineWidth: 1))
         .onChange(of: draft.result.visualRequest) { _, visualRequest in
             editableDraft.result.visualRequest = visualRequest
             editableDraft.result.generatedVisualAsset = draft.result.generatedVisualAsset
             editableDraft.result.imageType = draft.result.imageType
         }
-        .shadow(color: .black.opacity(0.055), radius: 17, y: 8)
         .accessibilityElement(children: .contain)
     }
 
@@ -174,7 +174,7 @@ struct MealAnalysisReviewCard: View {
                     .font(.system(size: 10, weight: .bold, design: .rounded))
                     .tracking(1.05)
                     .foregroundStyle(Color.quietInk)
-                Text(result.detectedItems.isEmpty ? "Let’s identify the plate" : "A likely reading of this meal")
+                Text(result.detectedItems.isEmpty ? "Identify this meal" : "Review this meal")
                     .font(DiafitType.title)
                     .foregroundStyle(Color.ink)
             }
@@ -216,7 +216,7 @@ struct MealAnalysisReviewCard: View {
                     }
                 }
                 .padding(11)
-                .background(Color.mist.opacity(0.34), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+                .background(Color.mist, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
             }
         }
     }
@@ -338,7 +338,28 @@ struct MealAnalysisReviewCard: View {
             let item = editableDraft.result.detectedItems[index]
             guard let definition = catalog.food(canonicalID: item.canonicalFoodId) else { continue }
             let weight = portions.estimatedWeight(quantity: item.quantity, unit: item.servingUnit, food: definition)
-            let lookup = nutrition.nutrition(for: definition, estimatedWeightGrams: weight)
+            let catalogLookup = nutrition.nutrition(for: definition, estimatedWeightGrams: weight)
+            let fallbackResolution = catalogLookup.values.isEmpty
+                ? fallback.resolve(
+                    item: ParsedFoodItem(
+                        originalText: item.matchedAlias ?? item.displayName,
+                        canonicalSearchName: definition.englishName,
+                        regionalName: item.regionalName,
+                        quantity: item.quantity,
+                        unit: item.servingUnit.rawValue,
+                        estimatedGrams: weight,
+                        preparationMethod: item.preparationMethod,
+                        confidence: item.confidenceScore
+                    ),
+                    canonical: CanonicalFoodMatch(
+                        food: definition,
+                        matchedAlias: item.matchedAlias ?? item.displayName,
+                        confidence: item.confidenceScore,
+                        source: "member-corrected-canonical"
+                    )
+                )
+                : nil
+            let lookup = fallbackResolution?.lookup ?? catalogLookup
             let resolvedValues = nutritionIncludingShakeBase(lookup.values, profile: item.supplementProfile)
             let report = validation.validate(
                 rawValues: resolvedValues,
@@ -352,6 +373,9 @@ struct MealAnalysisReviewCard: View {
             editableDraft.result.detectedItems[index].nutrition = report.safeValues ?? .unavailable
             editableDraft.result.detectedItems[index].nutritionValidation = report
             editableDraft.result.detectedItems[index].nutritionProvenance = lookup.provenance
+            if let fallbackResolution {
+                editableDraft.result.detectedItems[index].assumptions = fallbackResolution.assumptions
+            }
             editableDraft.result.detectedItems[index].glycaemicInformation = glycaemic.information(
                 for: definition,
                 availableCarbohydrateGrams: report.safeValues?.availableCarbohydrateGrams
@@ -518,7 +542,7 @@ private struct MealVisualRequestStatus: View {
             }
         }
         .padding(11)
-        .background(Color.mist.opacity(0.45), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.mist, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Meal image \(title.lowercased()): \(detail)")
     }
@@ -647,7 +671,11 @@ private struct DetectedItemEditor: View {
             }
         }
         .padding(12)
-        .background(Color.paper.opacity(0.62), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .background(Color.mist, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .stroke(Color.rule.opacity(0.7), lineWidth: 0.8)
+        }
     }
 
     private func commitQuantity() {
@@ -664,14 +692,18 @@ private struct EmptyAnalysisState: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("Automatic recognition needs a little help.")
-                .font(DiafitType.body)
+            Text("Name the food to finish the estimate")
+                .font(.system(.body, design: .rounded, weight: .semibold))
                 .foregroundStyle(Color.ink)
             HStack(spacing: 8) {
                 TextField("e.g. rajma with rice", text: $query)
                     .font(DiafitType.caption)
                     .padding(10)
                     .background(Color.paper, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .stroke(Color.rule, lineWidth: 1)
+                    }
                 Button(action: addComponent) {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .bold))
@@ -692,7 +724,7 @@ private struct EmptyAnalysisState: View {
             }
         }
         .padding(13)
-        .background(Color.mist.opacity(0.38), in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .background(Color.mist, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
     }
 }
 
@@ -713,7 +745,7 @@ private struct AnalysisEvidence: View {
             }
         }
         .padding(12)
-        .background(Color.mist.opacity(0.32), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(Color.mist, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -743,7 +775,7 @@ private struct ConfidenceMark: View {
             .foregroundStyle(confidence == .high ? Color.ink : Color.quietInk)
             .padding(.horizontal, 7)
             .padding(.vertical, 5)
-            .background(confidence == .high ? Color.lime.opacity(0.55) : Color.mist.opacity(0.75), in: Capsule())
+            .background(confidence == .high ? Color.lime.opacity(0.7) : Color.mist, in: Capsule())
     }
 }
 
@@ -755,14 +787,20 @@ private struct SummaryMetric: View {
         VStack(spacing: 2) {
             Text(value)
                 .font(.system(size: 14, weight: .bold, design: .rounded))
-                .foregroundStyle(tint)
+                .foregroundStyle(Color.ink)
             Text(label)
                 .font(.system(size: 9, weight: .bold, design: .rounded))
                 .foregroundStyle(Color.quietInk)
         }
         .frame(maxWidth: .infinity)
         .padding(.vertical, 9)
-        .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .background(Color.mist, in: RoundedRectangle(cornerRadius: 13, style: .continuous))
+        .overlay(alignment: .top) {
+            Capsule()
+                .fill(tint)
+                .frame(width: 16, height: 2)
+                .padding(.top, 5)
+        }
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("meal-total-\(label)")
         .accessibilityLabel("\(value) \(label)")

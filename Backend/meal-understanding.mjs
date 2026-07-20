@@ -57,6 +57,8 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'Split every component joined by with, and, plus, along with, served with, or together with.',
   'Preserve explicit quantities and preparation methods. For unspecified amounts, use a conservative quantity of 1 and mark requiresClarification when it materially affects nutrition.',
   'Recognise regional names, transliterations, spelling variations, branded products, supplements, and drinks.',
+  'For images, inspect the whole composition before naming the dish. Recognise common home-cooked and regional preparations from visible shape, grain, sauce, garnish, and cooking style; use a clarification when two dishes remain genuinely plausible.',
+  'Prefer a specific regional dish identity when the visual evidence supports it, including tapioca/sago pearl preparations, flattened-rice dishes, lentil dishes, rice dishes, breads, curries, snacks, fruit, vegetables, and beverages.',
   'Water is an addition/base with no meaningful calories; milk is a separate component only when explicitly stated.',
   'Do not invent brands, products, ingredients, or quantities that are not supported by the input/image.'
 ].join(' ');
@@ -164,7 +166,9 @@ function defaultMockMealParser({ text }) {
   if (eggMatch) detectedItems.push(food('eggs', numberWord(eggMatch[1] ?? eggMatch[2]) || 1, 'whole', 'chicken egg', 0.96, /boiled/.test(normalized) ? 'boiled' : null));
   if (/\b(?:kadhi|karhi|kadi)\b/.test(normalized)) detectedItems.push(food('kadhi', 1, 'medium bowl', 'Indian yogurt and gram flour curry', 0.84));
   if (/\b(?:arhar|toor|tur)\s+daa?l\b/.test(normalized)) detectedItems.push(food('arhar dal', 1, 'katori', 'toor dal', 0.88));
-  if (/\bkhich(?:di|uri)\b/.test(normalized)) detectedItems.push(food('khichdi', 1, 'medium bowl', 'khichdi', 0.88));
+  const sabudanaMentioned = /\b(?:sabudana|sabodana|sago)(?:\s+khichdi)?\b/.test(normalized);
+  if (sabudanaMentioned) detectedItems.push(food('sabudana khichdi', 1, 'medium bowl', 'sabudana khichdi', 0.9));
+  else if (/\bkhich(?:di|uri)\b/.test(normalized)) detectedItems.push(food('khichdi', 1, 'medium bowl', 'khichdi', 0.88));
   if (/\b(?:rice|chawal|chaawal)\b/.test(normalized)) detectedItems.push(food('rice', 1, 'cup', 'cooked white rice', 0.9));
   if (/\b(?:chai|tea)\b/.test(normalized) && !/black\s+coffee/.test(normalized)) detectedItems.push(food('chai', 1, 'cup', 'chai', 0.78, null, [], true));
   if (/\bparathas?\b/.test(normalized)) detectedItems.push(food('paratha', 1, 'piece', 'paratha', 0.8, null, [], true));

@@ -14,6 +14,13 @@ npm start
 
 Set `DIAFIT_MEAL_PARSER_MODE=mock` for deterministic offline parsing, or `openai` in a server environment with `OPENAI_API_KEY`. The OpenAI Responses API call uses strict Structured Outputs (`meal_parse_result`); the schema intentionally contains no nutrition fields. A nutrition service must canonicalise each item and resolve verified nutrition after parsing. `idempotencyKey` can be supplied to safely retry a parse without creating duplicate downstream meal work.
 
+For an Xcode-launched simulator build, pass the backend origin as
+`DIAFIT_BACKEND_URL` and the development/account bearer token as
+`DIAFIT_BACKEND_ACCESS_TOKEN`. `http://127.0.0.1` is accepted only for local
+development; physical devices and production deployments require HTTPS. These
+are app-to-backend credentials, never an OpenAI key. An installed phone build
+cannot use the Mac's loopback address.
+
 Run `npm run evaluate:food-resolution` for the checked-in 165-input development evaluation suite. It reports parser detection, compound decomposition, blank-result and fallback metrics; nutrition accuracy still requires the provider-backed integration suite.
 
 ## Required production work

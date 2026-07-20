@@ -155,6 +155,17 @@ protocol BackendAccessTokenProvider: Sendable {
     func accessToken() async throws -> String
 }
 
+/// Holds an already-issued account/development token in memory. It is supplied
+/// by authentication or an Xcode launch environment and is never a provider key.
+struct RuntimeBackendAccessTokenProvider: BackendAccessTokenProvider, Sendable {
+    let token: String
+
+    func accessToken() async throws -> String {
+        guard !token.isEmpty else { throw FoodAnalysisError.unauthenticatedBackend }
+        return token
+    }
+}
+
 /// The app supplies an account-scoped token from its authentication layer. This
 /// is deliberately not a provider key and is never persisted in app resources.
 struct HTTPFoodRecognitionService: FoodRecognitionService {
@@ -206,31 +217,95 @@ private struct RemoteAnalysisRequest: Encodable {
     let dishHint: String
 }
 
+/// Adapts the schema-constrained meal-understanding endpoint to the existing
+/// photo-review model. The backend identifies foods; canonical matching,
+/// nutrition lookup and validation still happen in the app's typed services.
+struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
+    let understanding: any FoodUnderstandingService
+    let coordinator: HybridMealAnalysisCoordinator
+
+    func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
+        let trimmedHint = dishHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let instruction = trimmedHint.isEmpty
+            ? "Identify every visible food and prepared dish in this meal photo. Preserve regional dish names and separate distinct components."
+            : trimmedHint
+        let parse = try await understanding.parse(text: instruction, image: image)
+        guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
+
+        var result = await coordinator.analyse(
+            parse: parse,
+            originalInput: instruction,
+            imageReference: image.imageReference,
+            imageType: .originalPhoto
+        )
+        result.recognitionModelVersion = "Backend structured vision interpretation"
+        result.assumptions.insert(
+            "AI interpreted the visible foods; nutrition was resolved separately from canonical records and remains editable.",
+            at: 0
+        )
+        return result
+    }
+}
+
+struct PhotoAnalysisCompletenessReport: Equatable, Sendable {
+    let isComplete: Bool
+    let missingRequirements: [String]
+}
+
+/// A photo result is only successful when it can actually support the review
+/// UI. A classifier label without serving conversion, nutrition provenance, or
+/// validated core nutrients must escalate to the structured backend.
+struct PhotoAnalysisCompletenessEvaluator: Sendable {
+    private let validation = DefaultNutritionValidationService()
+
+    func evaluate(_ result: MealAnalysisResult) -> PhotoAnalysisCompletenessReport {
+        var missing: [String] = []
+        if result.detectedItems.isEmpty { missing.append("food component") }
+        if result.overallConfidence == .low || result.overallConfidence == .unknown {
+            missing.append("recognition confidence")
+        }
+
+        for item in result.detectedItems {
+            if item.canonicalFoodId.isEmpty || item.displayName.isEmpty { missing.append("canonical identity") }
+            if !item.quantity.isFinite || item.quantity <= 0 { missing.append("quantity") }
+            if item.estimatedWeightGrams.map({ !$0.isFinite || $0 <= 0 }) ?? true { missing.append("serving conversion") }
+            if item.nutrition.caloriesKcal == nil
+                || item.nutrition.carbohydrateGrams == nil
+                || item.nutrition.proteinGrams == nil {
+                missing.append("nutrition")
+            }
+            if item.nutritionProvenance.kind == .unavailable { missing.append("nutrition source") }
+        }
+
+        let totalValidation = result.nutritionValidation
+            ?? validation.validate(rawValues: result.mealTotals)
+        if !totalValidation.isApproved { missing.append("nutrition validation") }
+        if result.nutritionProvenance.kind == .unavailable { missing.append("nutrition source") }
+
+        let unique = Array(NSOrderedSet(array: missing)) as? [String] ?? missing
+        return PhotoAnalysisCompletenessReport(isComplete: unique.isEmpty, missingRequirements: unique)
+    }
+}
+
 struct PhotoAnalysisOrchestrator: Sendable {
     let remote: (any FoodRecognitionService)?
     let onDevice: (any FoodImageClassificationService)?
     let local: LocalMealAnalysisEngine
+    let completeness: PhotoAnalysisCompletenessEvaluator
 
     init(
         remote: (any FoodRecognitionService)? = nil,
         onDevice: (any FoodImageClassificationService)? = AppleFoodImageClassificationService(),
-        local: LocalMealAnalysisEngine = LocalMealAnalysisEngine()
+        local: LocalMealAnalysisEngine = LocalMealAnalysisEngine(),
+        completeness: PhotoAnalysisCompletenessEvaluator = PhotoAnalysisCompletenessEvaluator()
     ) {
         self.remote = remote
         self.onDevice = onDevice
         self.local = local
+        self.completeness = completeness
     }
 
     func analyse(image: PreparedFoodImage, description: String) async -> MealAnalysisResult {
-        var remoteFailed = false
-        if let remote {
-            do {
-                return try await remote.analyse(image, dishHint: description)
-            } catch {
-                remoteFailed = true
-            }
-        }
-
         let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
         var candidates: [FoodImageCandidate] = []
         if let onDevice {
@@ -245,19 +320,27 @@ struct PhotoAnalysisOrchestrator: Sendable {
             .filter { !$0.isEmpty }
             .joined(separator: " with ")
 
-        FoodLoggingDiagnostics.record("photo.classification", fields: [
-            "route": candidateNames.isEmpty ? (trimmedDescription.isEmpty ? "unresolved" : "member-hint") : "on-device",
-            "canonicalIDs": candidates.map(\.canonicalFoodId).joined(separator: ","),
-            "candidateCount": String(candidates.count),
-            "remoteAttempted": String(remote != nil),
-            "remoteFailed": String(remoteFailed)
-        ])
-
         var result = local.makeAnalysis(
             description: combinedDescription,
             imageReference: image.imageReference,
             imageType: .originalPhoto
         )
+        if trimmedDescription.isEmpty, !candidates.isEmpty {
+            let confidenceByID = Dictionary(
+                uniqueKeysWithValues: candidates.map { ($0.canonicalFoodId, $0.confidence) }
+            )
+            result.detectedItems = result.detectedItems.map { item in
+                var updated = item
+                if let score = confidenceByID[item.canonicalFoodId] {
+                    updated.confidenceScore = score
+                    updated.confidence = confidenceLevel(for: score)
+                }
+                return updated
+            }
+            result.overallConfidence = confidenceLevel(
+                for: result.detectedItems.map(\.confidenceScore).min() ?? 0
+            )
+        }
         if !candidateNames.isEmpty {
             result.recognitionModelVersion = "Apple Vision on-device classification"
             result.assumptions.removeAll { $0.contains("description") || $0.contains("image was not sent") }
@@ -266,23 +349,73 @@ struct PhotoAnalysisOrchestrator: Sendable {
                 at: 0
             )
         }
-        if remoteFailed {
-            let warning: String
-            if !trimmedDescription.isEmpty {
-                warning = "Secure photo analysis was unavailable, so this editable estimate was matched from your description."
-            } else if !candidateNames.isEmpty {
-                warning = "Secure photo analysis was unavailable, so the private on-device recognizer created this editable estimate."
-            } else {
-                warning = "Secure photo analysis was unavailable. Add or correct the food names below without losing the photo."
+        let localCompleteness = completeness.evaluate(result)
+        if localCompleteness.isComplete {
+            FoodLoggingDiagnostics.record("photo.classification", fields: [
+                "route": candidateNames.isEmpty ? "member-hint" : "on-device",
+                "canonicalIDs": candidates.map(\.canonicalFoodId).joined(separator: ","),
+                "candidateCount": String(candidates.count),
+                "remoteAttempted": "false",
+                "complete": "true"
+            ])
+            return result
+        }
+
+        var remoteFailed = false
+        var remoteIncomplete: MealAnalysisResult?
+        if let remote {
+            do {
+                let remoteResult = try await remote.analyse(image, dishHint: description)
+                let report = completeness.evaluate(remoteResult)
+                if report.isComplete {
+                    FoodLoggingDiagnostics.record("photo.classification", fields: [
+                        "route": "structured-backend",
+                        "candidateCount": String(remoteResult.detectedItems.count),
+                        "remoteAttempted": "true",
+                        "complete": "true"
+                    ])
+                    return remoteResult
+                }
+                remoteIncomplete = remoteResult
+            } catch {
+                remoteFailed = true
             }
+        }
+
+        if let remoteIncomplete, result.detectedItems.isEmpty {
+            result = remoteIncomplete
+            result.warnings.insert(
+                "The image was interpreted, but nutrition still needs confirmation before it can be saved.",
+                at: 0
+            )
+        } else if remoteFailed {
+            let warning = result.detectedItems.isEmpty
+                ? "Secure AI recognition is unavailable. Add the food name below without losing your photo."
+                : "Secure AI recognition is unavailable, so this private on-device estimate needs your review."
             result.warnings.insert(warning, at: 0)
         } else if candidates.isEmpty && trimmedDescription.isEmpty {
             result.warnings.insert(
-                "Automatic recognition could not identify this plate confidently. Add the food names below and nutrition will recalculate.",
+                remote == nil
+                    ? "Secure AI recognition is not configured. Add the food name below and nutrition will recalculate."
+                    : "Automatic recognition could not identify this plate confidently. Add the food name below and nutrition will recalculate.",
                 at: 0
             )
         }
+        FoodLoggingDiagnostics.record("photo.classification", fields: [
+            "route": result.detectedItems.isEmpty ? "unresolved" : "incomplete-local",
+            "canonicalIDs": candidates.map(\.canonicalFoodId).joined(separator: ","),
+            "candidateCount": String(candidates.count),
+            "remoteAttempted": String(remote != nil),
+            "remoteFailed": String(remoteFailed),
+            "missing": completeness.evaluate(result).missingRequirements.joined(separator: ",")
+        ])
         return result
+    }
+
+    private func confidenceLevel(for score: Double) -> ConfidenceLevel {
+        if score >= 0.9 { return .high }
+        if score >= 0.8 { return .medium }
+        return .low
     }
 }
 
@@ -456,19 +589,22 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
     let nutritionService: CatalogNutritionLookupService
     let glycaemicService: CatalogGlycaemicDataService
     let validationService: DefaultNutritionValidationService
+    let fallbackService: CuratedNutritionFallbackService
 
     init(
         catalog: IndianFoodCatalogService = IndianFoodCatalogService(),
         portionService: StandardPortionEstimationService = StandardPortionEstimationService(),
         nutritionService: CatalogNutritionLookupService = CatalogNutritionLookupService(),
         glycaemicService: CatalogGlycaemicDataService = CatalogGlycaemicDataService(),
-        validationService: DefaultNutritionValidationService = DefaultNutritionValidationService()
+        validationService: DefaultNutritionValidationService = DefaultNutritionValidationService(),
+        fallbackService: CuratedNutritionFallbackService? = nil
     ) {
         self.catalog = catalog
         self.portionService = portionService
         self.nutritionService = nutritionService
         self.glycaemicService = glycaemicService
         self.validationService = validationService
+        self.fallbackService = fallbackService ?? CuratedNutritionFallbackService(catalog: catalog)
     }
 
     func draftFromDescription(_ description: String, imageReference: MealImageReference, imageType: MealImageType) async -> MealAnalysisResult {
@@ -540,7 +676,28 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
         let quantity = component.quantity
         let unit = component.servingUnit
         let weight = portionService.estimatedWeight(quantity: quantity, unit: unit, food: food)
-        let lookup = nutritionService.nutrition(for: food, estimatedWeightGrams: weight)
+        let catalogLookup = nutritionService.nutrition(for: food, estimatedWeightGrams: weight)
+        let fallback = catalogLookup.values.isEmpty
+            ? fallbackService.resolve(
+                item: ParsedFoodItem(
+                    originalText: component.matchedAlias,
+                    canonicalSearchName: food.englishName,
+                    regionalName: food.regionalNames.first,
+                    quantity: quantity,
+                    unit: unit.rawValue,
+                    estimatedGrams: weight,
+                    preparationMethod: component.preparationMethod,
+                    confidence: component.confidenceScore
+                ),
+                canonical: CanonicalFoodMatch(
+                    food: food,
+                    matchedAlias: component.matchedAlias,
+                    confidence: component.confidenceScore,
+                    source: "local-canonical-catalog"
+                )
+            )
+            : nil
+        let lookup = fallback?.lookup ?? catalogLookup
         let resolvedValues = nutritionIncludingShakeBase(
             lookup.values,
             supplement: component.supplementProfile
@@ -580,7 +737,7 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
             preparationMethod: component.preparationMethod,
             nutrition: safeNutrition,
             glycaemicInformation: glycaemic,
-            assumptions: assumptions(for: component),
+            assumptions: assumptions(for: component) + (fallback?.assumptions ?? []),
             warnings: itemWarnings(for: resolvedValues, validation: validation),
             boundingRegion: nil,
             nutritionProvenance: lookup.provenance,
@@ -719,7 +876,7 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
         if let bread = items.first(where: { $0.category == .bread && $0.canonicalFoodId != "paratha" }) {
             questions.append(ClarificationQuestion(
                 id: UUID(), relatedFoodItemId: bread.id,
-                question: "How many (bread.displayName.lowercased()) pieces did you have?",
+                question: "How many \(bread.displayName.lowercased()) pieces did you have?",
                 answerType: .quantity, options: ["1", "2", "3+"], impactLevel: .high, answer: nil
             ))
         }

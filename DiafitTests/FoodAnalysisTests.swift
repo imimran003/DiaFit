@@ -221,7 +221,8 @@ final class FoodAnalysisTests: XCTestCase {
         let analysis = engine.makeAnalysis(description: "Dosa with sambar and coconut chutney")
         XCTAssertEqual(Set(analysis.detectedItems.map(\.canonicalFoodId)), Set(["dosa", "sambar", "coconut-chutney"]))
         XCTAssertEqual(analysis.imageType, .noImage)
-        XCTAssertTrue(analysis.warnings.contains { $0.contains("incomplete") })
+        XCTAssertTrue(analysis.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
+        XCTAssertEqual(analysis.nutritionValidation?.isApproved, true)
     }
 
     /// Regression fixture captured from the free-text composer. This deliberately
@@ -489,7 +490,145 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(result.imageType, .originalPhoto)
     }
 
-    func testPhotoBackendFailureFallsBackToOnDeviceRecognition() async throws {
+    func testSabudanaPhotoNamesAndCommonMisspellingsResolveToUsableNutrition() throws {
+        for name in ["sabudana", "sabodana", "sago khichdi", "tapioca pearl khichdi"] {
+            let food = try XCTUnwrap(catalog.normalise(name), "Missing canonical alias for \(name)")
+            XCTAssertEqual(food.canonicalId, "sabudana-khichdi")
+            let result = LocalMealAnalysisEngine(catalog: catalog)
+                .makeAnalysis(description: name, imageType: .originalPhoto)
+            let item = try XCTUnwrap(result.detectedItems.first)
+            XCTAssertFalse(item.nutrition.isEmpty, "\(name) produced blank nutrition")
+            XCTAssertNotNil(item.estimatedWeightGrams)
+            XCTAssertNotEqual(item.nutritionProvenance.kind, .unavailable)
+            XCTAssertEqual(result.nutritionValidation?.isApproved, true)
+        }
+    }
+
+    func testEverySpecificCanonicalFoodHasDirectOrCuratedNutrition() {
+        let portions = StandardPortionEstimationService()
+        let direct = CatalogNutritionLookupService()
+        let fallback = CuratedNutritionFallbackService(catalog: catalog)
+
+        for food in catalog.foods where food.category != .unknown {
+            let quantity = food.standardServing?.quantity ?? 1
+            let unit = food.standardServing?.unit ?? .serving
+            let grams = portions.estimatedWeight(quantity: quantity, unit: unit, food: food)
+            let directLookup = direct.nutrition(for: food, estimatedWeightGrams: grams)
+            if !directLookup.values.isEmpty { continue }
+
+            let parsed = ParsedFoodItem(
+                originalText: food.canonicalName,
+                canonicalSearchName: food.englishName,
+                quantity: quantity,
+                unit: unit.rawValue,
+                estimatedGrams: grams,
+                confidence: 0.8
+            )
+            let match = CanonicalFoodMatch(
+                food: food,
+                matchedAlias: food.canonicalName,
+                confidence: 0.8,
+                source: "catalog-invariant-test"
+            )
+            let resolved = fallback.resolve(item: parsed, canonical: match)
+            XCTAssertFalse(resolved.lookup.values.isEmpty, "Blank nutrition for \(food.canonicalId)")
+            XCTAssertNotEqual(resolved.lookup.provenance.kind, .unavailable, "No source for \(food.canonicalId)")
+        }
+    }
+
+    func testCommonPhotoFoodLabelsMapToCanonicalRecords() {
+        let expected: [String: String] = [
+            "sandwich": "vegetable-sandwich",
+            "pizza": "pizza-slice",
+            "spaghetti": "cooked-pasta",
+            "noodles": "cooked-noodles",
+            "vegetable soup": "vegetable-soup",
+            "fruit bowl": "fruit-salad",
+            "fried rice": "fried-rice",
+            "mixed salad": "salad"
+        ]
+
+        for (label, canonicalID) in expected {
+            XCTAssertEqual(catalog.normalise(label)?.canonicalId, canonicalID, "Missing photo label \(label)")
+        }
+    }
+
+    func testRuntimeBackendConfigurationRequiresSafeURLAndToken() throws {
+        let valid = try XCTUnwrap(RuntimeBackendConfiguration(environment: [
+            "DIAFIT_BACKEND_URL": "https://api.example.test/diafit",
+            "DIAFIT_BACKEND_ACCESS_TOKEN": "account-token"
+        ]))
+        XCTAssertEqual(valid.endpoint.absoluteString, "https://api.example.test/diafit")
+        XCTAssertEqual(valid.accessToken, "account-token")
+        XCTAssertNil(RuntimeBackendConfiguration(environment: [
+            "DIAFIT_BACKEND_URL": "http://192.168.1.10:8787",
+            "DIAFIT_BACKEND_ACCESS_TOKEN": "account-token"
+        ]))
+        XCTAssertNil(RuntimeBackendConfiguration(environment: [
+            "DIAFIT_BACKEND_URL": "https://api.example.test/diafit"
+        ]))
+    }
+
+    func testPhotoCompletenessGateRejectsRecognisedNameWithoutNutrition() {
+        let incomplete = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "mixed thali", imageType: .originalPhoto)
+
+        let report = PhotoAnalysisCompletenessEvaluator().evaluate(incomplete)
+
+        XCTAssertFalse(report.isComplete)
+        XCTAssertTrue(report.missingRequirements.contains("nutrition"))
+        XCTAssertTrue(report.missingRequirements.contains("nutrition source"))
+    }
+
+    func testUnresolvedImageEscalatesToStructuredAIThenUsesCanonicalNutrition() async throws {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "sabudana khichdi",
+                    canonicalSearchName: "sabudana khichdi",
+                    regionalName: "sabudana",
+                    quantity: 1,
+                    unit: "mediumBowl",
+                    estimatedGrams: 180,
+                    preparationMethod: "sauteed",
+                    confidence: 0.93
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Sabudana khichdi",
+            clarificationQuestions: [],
+            confidence: 0.93
+        )
+        let counter = ParseCounter()
+        let understanding = CountingMealUnderstanding(result: parse, counter: counter)
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router)
+        )
+        let orchestrator = PhotoAnalysisOrchestrator(
+            remote: remote,
+            onDevice: StubFoodImageClassificationService(candidates: []),
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        )
+
+        let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
+
+        let parseCount = await counter.value
+        XCTAssertEqual(parseCount, 1)
+        XCTAssertEqual(result.detectedItems.map { $0.canonicalFoodId }, ["sabudana-khichdi"])
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertEqual(result.nutritionValidation?.isApproved, true)
+        XCTAssertEqual(result.imageType, MealImageType.originalPhoto)
+        XCTAssertTrue(result.recognitionModelVersion?.contains("structured") == true)
+    }
+
+    func testCompleteOnDeviceRecognitionDoesNotDependOnBackendAvailability() async throws {
         let classifier = StubFoodImageClassificationService(candidates: [
             FoodImageCandidate(canonicalFoodId: "banana", sourceLabel: "banana", confidence: 0.9)
         ])
@@ -503,7 +642,51 @@ final class FoodAnalysisTests: XCTestCase {
 
         XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["banana"])
         XCTAssertFalse(result.mealTotals.isEmpty)
-        XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("on-device") })
+        XCTAssertTrue(result.assumptions.contains { $0.localizedCaseInsensitiveContains("on-device") })
+    }
+
+    func testLowConfidenceOnDeviceLabelEscalatesToStructuredPhotoInterpretation() async throws {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "sabudana khichdi",
+                    canonicalSearchName: "sabudana khichdi",
+                    quantity: 1,
+                    unit: "mediumBowl",
+                    estimatedGrams: 180,
+                    confidence: 0.93
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Sabudana khichdi",
+            clarificationQuestions: [],
+            confidence: 0.93
+        )
+        let counter = ParseCounter()
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: CountingMealUnderstanding(result: parse, counter: counter),
+            coordinator: HybridMealAnalysisCoordinator(router: router)
+        )
+        let orchestrator = PhotoAnalysisOrchestrator(
+            remote: remote,
+            onDevice: StubFoodImageClassificationService(candidates: [
+                FoodImageCandidate(canonicalFoodId: "salad", sourceLabel: "salad", confidence: 0.42)
+            ]),
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        )
+
+        let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
+        let parseCount = await counter.value
+
+        XCTAssertEqual(parseCount, 1)
+        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["sabudana-khichdi"])
+        XCTAssertTrue(result.recognitionModelVersion?.contains("structured") == true)
     }
 
     func testCompoundPhotoCorrectionResolvesEverySupportedComponent() throws {
@@ -706,7 +889,8 @@ final class FoodAnalysisTests: XCTestCase {
         let prompt = MealVisualIdentityFactory().editorialPrompt(for: visual)
 
         XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["chai", "paratha"]))
-        XCTAssertFalse(result.nutritionValidation?.isApproved ?? true)
+        XCTAssertTrue(result.nutritionValidation?.isApproved == true)
+        XCTAssertFalse(result.mealTotals.isEmpty)
         XCTAssertEqual(result.clarificationQuestions.count, 2)
         XCTAssertTrue(result.clarificationQuestions.contains { $0.question.contains("chai sweetened") })
         XCTAssertTrue(result.clarificationQuestions.contains { $0.question.contains("paratha plain") })

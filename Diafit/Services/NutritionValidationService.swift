@@ -145,8 +145,12 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
             }
         }
 
+        let singleEggRecords: Set<String> = [
+            "whole-egg", "boiled-egg", "soft-boiled-egg", "poached-egg",
+            "fried-egg", "scrambled-egg", "egg-white", "egg-yolk"
+        ]
         if let canonicalFoodID,
-           canonicalFoodID.contains("egg"),
+           singleEggRecords.contains(canonicalFoodID),
            let calories = rawValues.caloriesKcal {
             let count = max(quantity ?? 1, 1)
             let perEgg = calories / count

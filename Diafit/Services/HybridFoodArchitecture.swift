@@ -436,6 +436,9 @@ struct CuratedNutritionFallbackService: Sendable {
         guard let canonical else {
             return unavailable(item: item, assumptions: ["No canonical food identity was available for the curated fallback."])
         }
+        guard canonical.food.category != .unknown else {
+            return unavailable(item: item, assumptions: ["The food category is too broad for a safe curated estimate."])
+        }
         let amount = item.quantity ?? 1
         let servingUnit = ServingUnit(rawValue: item.unit ?? "") ?? canonical.food.standardServing?.unit ?? .serving
         let grams = item.estimatedGrams
@@ -691,6 +694,7 @@ struct FoodResolutionResult: Sendable {
 
 protocol FoodResolutionRouter: Sendable {
     func resolve(text: String) async -> FoodResolutionResult
+    func resolve(parse: MealParseResult, originalInput: String) async -> FoodResolutionResult
 }
 
 /// Routes deterministic, user-confirmed and catalog matches before falling
@@ -705,13 +709,14 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
     let memory: (any UserFoodMemoryRepository)?
 
     init(catalog: IndianFoodCatalogService = IndianFoodCatalogService(),
+         normalisation: HybridFoodNormalisationService? = nil,
          understanding: (any FoodUnderstandingService)? = nil,
          nutrition: any NutritionResolutionService = HybridNutritionResolutionService(),
          clarification: any MealClarificationService = DefaultMealClarificationService(),
          memory: (any UserFoodMemoryRepository)? = nil,
          fallback: CuratedNutritionFallbackService? = nil) {
         self.catalog = catalog
-        self.normalisation = HybridFoodNormalisationService(catalog: catalog)
+        self.normalisation = normalisation ?? HybridFoodNormalisationService(catalog: catalog)
         self.understanding = understanding
         self.nutrition = nutrition
         self.clarification = clarification
@@ -721,6 +726,24 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
 
     let fallback: CuratedNutritionFallbackService
     let completeness = FoodResolutionCompletenessEvaluator()
+
+    func resolve(parse: MealParseResult, originalInput: String) async -> FoodResolutionResult {
+        let normalized = normalize(originalInput)
+        let resolved = await resolveAI(parse).map { completeWithCuratedFallback($0) }
+        let matches = resolved.compactMap(\.canonical)
+        let questions = clarification.questions(for: parse, matches: matches)
+            + localQuestions(for: resolved, input: normalized)
+        let unresolved = parse.unresolvedItems
+            + resolved.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
+        return result(
+            text: originalInput,
+            normalized: normalized,
+            items: resolved,
+            unresolved: Array(Set(unresolved)),
+            extraQuestions: questions,
+            attemptedAI: true
+        )
+    }
 
     func resolve(text: String) async -> FoodResolutionResult {
         let normalized = normalize(text)
@@ -946,6 +969,24 @@ struct HybridMealAnalysisCoordinator: Sendable {
 
     func analyse(text: String, imageReference: MealImageReference = .transient()) async -> MealAnalysisResult {
         let resolution = await router.resolve(text: text)
+        return makeAnalysis(from: resolution, imageReference: imageReference, imageType: .noImage)
+    }
+
+    func analyse(
+        parse: MealParseResult,
+        originalInput: String,
+        imageReference: MealImageReference,
+        imageType: MealImageType
+    ) async -> MealAnalysisResult {
+        let resolution = await router.resolve(parse: parse, originalInput: originalInput)
+        return makeAnalysis(from: resolution, imageReference: imageReference, imageType: imageType)
+    }
+
+    private func makeAnalysis(
+        from resolution: FoodResolutionResult,
+        imageReference: MealImageReference,
+        imageType: MealImageType
+    ) -> MealAnalysisResult {
         let items = resolution.items.compactMap(makeDetectedItem)
         let totals = NutritionValues.total(of: items.map(\.nutrition))
         let validation = DefaultNutritionValidationService().validate(rawValues: totals)
@@ -962,7 +1003,7 @@ struct HybridMealAnalysisCoordinator: Sendable {
         return MealAnalysisResult(
             analysisId: analysisID,
             imageReference: imageReference,
-            imageType: .noImage,
+            imageType: imageType,
             detectedItems: items,
             mealTotals: validation.safeValues ?? .unavailable,
             overallConfidence: items.map(\.confidence).min(by: confidenceOrder) ?? .low,
