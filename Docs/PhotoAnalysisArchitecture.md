@@ -11,7 +11,9 @@ The current iOS build supports a complete **image-first local review path**:
 5. The draft appears inside the day thread, exposes components, quantities and serving units, asks only applicable high-impact questions, and recalculates supported values after correction. A compound correction such as “carrots with blueberries” resolves every supported component instead of silently failing an exact-string lookup.
 6. Only an explicit confirmation replaces the draft with a logged meal. The resulting meal is immediately available to the existing meal atlas. A confirmed analysis can be reopened for refinement or deleted through an explicit destructive confirmation.
 
-No photo is uploaded by the default app configuration. The original photo is not kept after confirmation; the existing editorial food image remains a decorative timeline treatment, never evidence of the meal or portion.
+No photo is uploaded by the default app configuration. When an authenticated backend is explicitly configured, the backend may use the optional Gemini or OpenAI structured vision parser; provider keys never enter the iOS binary. The original photo is not kept after confirmation; the existing editorial food image remains a decorative timeline treatment, never evidence of the meal or portion.
+
+The photo picker states this escalation before selection: processing starts on device, and uncertain local results may send a metadata-stripped copy to the configured AI provider. Development use of Gemini's free tier remains subject to Google's quotas and data-use terms; it is not the shipping privacy posture for sensitive health data without a completed consent, retention, and disclosure review.
 
 If automatic recognition cannot clear the completeness gate, the review keeps the photo and presents one recoverable food-name field. Submitting that field now shows an explicit error when unresolved, or removes the blocking identification question and enables confirmation after nutrition validates. The review uses opaque semantic surfaces rather than translucent white overlays so labels, controls and nutrition remain legible in dark mode and under Reduce Transparency.
 

@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { OpenAIMealParser, MockMealParser, validateMealParseResult } from './meal-understanding.mjs';
+import { GeminiMealParser, OpenAIMealParser, MockMealParser, validateMealParseResult } from './meal-understanding.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const config = {
@@ -67,7 +67,7 @@ createServer(async (request, response) => {
         throw error;
       }
       validateMealParseResult(result);
-      const responseBody = { ...result, requestId, parserModel: config.mealParserMode === 'openai' ? process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini' : 'development-mock' };
+      const responseBody = { ...result, requestId, parserModel: parserModelName() };
       if (cacheKey) {
         // Keep retries safe without allowing an in-memory cache to grow without bound.
         if (mealParseCache.size >= 512) mealParseCache.delete(mealParseCache.keys().next().value);
@@ -277,10 +277,18 @@ const limiter = new RollingRateLimiter(config.rateLimit, 60_000);
 const provider = config.mode === 'fixture' ? new FixtureRecognitionProvider(fixtures) : new DisabledRecognitionProvider();
 const mealParser = config.mealParserMode === 'openai'
   ? new OpenAIMealParser()
+  : config.mealParserMode === 'gemini'
+    ? new GeminiMealParser()
   : config.mealParserMode === 'mock' || config.mealParserMode === 'fixture'
     ? new MockMealParser()
     : new DisabledMealParser();
 const mealParseCache = new Map();
+
+function parserModelName() {
+  if (config.mealParserMode === 'openai') return process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini';
+  if (config.mealParserMode === 'gemini') return process.env.GEMINI_MEAL_MODEL ?? 'gemini-3.1-flash-lite';
+  return 'development-mock';
+}
 
 class DisabledMealParser {
   async parse() { throw appError(503, 'provider_unavailable', 'Meal understanding is not configured.', true); }

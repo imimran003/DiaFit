@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
-import { MEAL_PARSE_SCHEMA, MockMealParser, OpenAIMealParser, buildMealParseInput, validateMealParseResult } from './meal-understanding.mjs';
+import {
+  GeminiMealParser,
+  MEAL_PARSE_SCHEMA,
+  MockMealParser,
+  OpenAIMealParser,
+  buildGeminiMealParseRequest,
+  buildMealParseInput,
+  validateMealParseResult
+} from './meal-understanding.mjs';
 
 const parsed = await new MockMealParser().parse({ text: 'one bowl moong sprouts with 3 boiled eggs and black coffee' });
 assert.equal(parsed.detectedItems.length, 3);
@@ -47,6 +55,52 @@ assert.equal(request.text.format.strict, true);
 assert.deepEqual(request.text.format.schema, MEAL_PARSE_SCHEMA);
 assert.equal(requestOptions.headers.authorization, 'Bearer server-only-test-key');
 assert.equal(JSON.stringify(request).includes('caloriesKcal'), false);
+
+const geminiImageRequest = buildGeminiMealParseRequest({
+  text: 'Identify the meal.',
+  imageBase64: 'aGVsbG8=',
+  mimeType: 'image/jpeg'
+});
+assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.mimeType, 'image/jpeg');
+assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.data, 'aGVsbG8=');
+assert.equal(geminiImageRequest.generationConfig.responseMimeType, 'application/json');
+assert.deepEqual(geminiImageRequest.generationConfig.responseJsonSchema, MEAL_PARSE_SCHEMA);
+assert.equal(JSON.stringify(geminiImageRequest).includes('caloriesKcal'), false);
+
+let geminiURL;
+let geminiOptions;
+const gemini = new GeminiMealParser({
+  apiKey: 'server-only-gemini-test-key',
+  model: 'gemini-3.1-flash-lite',
+  fetchImpl: async (url, options) => {
+    geminiURL = url;
+    geminiOptions = options;
+    return {
+      ok: true,
+      async json() {
+        return { candidates: [{ content: { parts: [{ text: JSON.stringify(parsed) }] } }] };
+      }
+    };
+  }
+});
+const geminiOutput = await gemini.parse({ text: 'sprouts with three boiled eggs' });
+assert.equal(geminiOutput.detectedItems[1].quantity, 3);
+assert.equal(geminiURL, 'https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent');
+assert.equal(geminiOptions.headers['x-goog-api-key'], 'server-only-gemini-test-key');
+assert.equal(Object.hasOwn(JSON.parse(geminiOptions.body), 'store'), true);
+
+await assert.rejects(
+  () => new GeminiMealParser({ apiKey: '' }).parse({ text: 'food' }),
+  error => error.code === 'provider_unavailable'
+);
+
+await assert.rejects(
+  () => new GeminiMealParser({
+    apiKey: 'test-key',
+    fetchImpl: async () => ({ ok: true, async json() { return { candidates: [] }; } })
+  }).parse({ text: 'food' }),
+  error => error.code === 'malformed_provider_response'
+);
 
 await assert.rejects(
   () => new MockMealParser(async () => ({ detectedItems: [], unresolvedItems: [], mealDescription: 'bad', clarificationQuestions: [], confidence: 2 })).parse({ text: 'bad' }),

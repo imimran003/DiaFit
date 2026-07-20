@@ -72,6 +72,25 @@ export function buildMealParseInput({ text, imageBase64, mimeType }) {
   ];
 }
 
+export function buildGeminiMealParseRequest({ text, imageBase64, mimeType }) {
+  const prompt = String(text ?? '').trim() || 'Identify every visible food and prepared dish in this meal photo.';
+  const parts = [{ text: prompt }];
+  if (imageBase64 && mimeType) {
+    parts.push({ inlineData: { mimeType, data: imageBase64 } });
+  }
+  return {
+    systemInstruction: { parts: [{ text: MEAL_PARSE_SYSTEM_PROMPT }] },
+    contents: [{ role: 'user', parts }],
+    generationConfig: {
+      responseMimeType: 'application/json',
+      responseJsonSchema: MEAL_PARSE_SCHEMA,
+      temperature: 0.1,
+      maxOutputTokens: 4096
+    },
+    store: false
+  };
+}
+
 export class OpenAIMealParser {
   constructor({ apiKey = process.env.OPENAI_API_KEY, model = process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini', fetchImpl = globalThis.fetch, endpoint = 'https://api.openai.com/v1/responses' } = {}) {
     this.apiKey = apiKey;
@@ -109,6 +128,61 @@ export class OpenAIMealParser {
     try { document = await response.json(); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned invalid JSON.', error); }
     const raw = document?.output_text ?? document?.output?.flatMap(part => part.content ?? []).find(content => content.type === 'output_text')?.text;
     if (typeof raw !== 'string') throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned no structured output.');
+    let result;
+    try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
+    validateMealParseResult(result);
+    return result;
+  }
+}
+
+/**
+ * Server-only Gemini implementation used by the free development tier.
+ * The provider receives a metadata-stripped image and returns identities and
+ * portions only. The same strict validator runs before any result reaches the
+ * app; nutrition is deliberately resolved elsewhere.
+ */
+export class GeminiMealParser {
+  constructor({
+    apiKey = process.env.GEMINI_API_KEY,
+    model = process.env.GEMINI_MEAL_MODEL ?? 'gemini-3.1-flash-lite',
+    fetchImpl = globalThis.fetch,
+    endpointBase = 'https://generativelanguage.googleapis.com/v1beta/models'
+  } = {}) {
+    this.apiKey = apiKey;
+    this.model = model;
+    this.fetch = fetchImpl;
+    this.endpoint = `${endpointBase}/${encodeURIComponent(model)}:generateContent`;
+  }
+
+  async parse(input, { signal } = {}) {
+    if (!this.apiKey) throw providerError(503, 'provider_unavailable', 'Meal understanding is not configured.');
+    if (typeof this.fetch !== 'function') throw providerError(503, 'provider_unavailable', 'No HTTP client is available.');
+    const payload = buildGeminiMealParseRequest(input);
+    let response;
+    try {
+      response = await this.fetch(this.endpoint, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': this.apiKey, 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal
+      });
+    } catch (error) {
+      throw providerError(503, 'provider_unavailable', 'Meal understanding provider could not be reached.', error);
+    }
+    if (!response?.ok) {
+      const detail = await safeResponseText(response);
+      const status = response?.status === 429 ? 429 : 502;
+      throw providerError(status, status === 429 ? 'provider_rate_limited' : 'provider_error', 'Meal understanding provider rejected the request.', detail);
+    }
+    let document;
+    try { document = await response.json(); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned invalid JSON.', error); }
+    const raw = document?.candidates?.[0]?.content?.parts
+      ?.filter(part => typeof part?.text === 'string')
+      .map(part => part.text)
+      .join('');
+    if (typeof raw !== 'string' || !raw.trim()) {
+      throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned no structured output.', document?.promptFeedback?.blockReason);
+    }
     let result;
     try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
     validateMealParseResult(result);

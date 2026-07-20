@@ -244,7 +244,7 @@ private struct PrivacyNote: View {
                 .foregroundStyle(Color.ink)
                 .frame(width: 28, height: 28)
                 .background(Color.lime.opacity(0.38), in: Circle())
-            Text("Analysis starts on this device. Location metadata is removed, and the original photo is kept only for this review. Nothing is saved until you confirm the estimate.")
+            Text("Analysis starts on this device. If local recognition is uncertain and Live Recognition is configured, a metadata-stripped copy is sent securely to the configured AI provider. The original stays in this review, and nothing is logged until you confirm.")
                 .font(DiafitType.caption)
                 .foregroundStyle(Color.quietInk)
                 .lineSpacing(2)
