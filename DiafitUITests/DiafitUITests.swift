@@ -243,7 +243,7 @@ final class DiafitUITests: XCTestCase {
         app.launchArguments.append("UITestUseFixturePhoto")
         app.launch()
 
-        let photoButton = app.buttons["Add meal photo"]
+        let photoButton = app.buttons["Add meal photo"].firstMatch
         XCTAssertTrue(photoButton.waitForExistence(timeout: 3))
         photoButton.tap()
 
@@ -251,11 +251,8 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(fixture.waitForExistence(timeout: 2))
         fixture.tap()
 
-        let review = app.buttons["Create a review"]
-        XCTAssertTrue(review.waitForExistence(timeout: 2))
-        review.tap()
-
         XCTAssertTrue(app.staticTexts["A likely reading of this meal"].waitForExistence(timeout: 4))
+        XCTAssertFalse(app.buttons["Create a review"].exists, "Selecting a photo should begin analysis without another upload/description step")
         XCTAssertTrue(app.staticTexts["Dosa"].exists)
         XCTAssertTrue(app.staticTexts["Sambar"].exists)
 
@@ -265,6 +262,32 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(confirm.exists)
         XCTAssertFalse(confirm.isEnabled)
         attachScreenshot(named: "unsupported-photo-review")
+    }
+
+    func testPhotoCorrectionButtonResolvesCompoundFoodsAndEnablesConfirmation() throws {
+        app.terminate()
+        app.launchArguments.append("UITestUseFixturePhoto")
+        app.launch()
+
+        let photoButton = app.buttons["Add meal photo"].firstMatch
+        XCTAssertTrue(photoButton.waitForExistence(timeout: 3))
+        photoButton.tap()
+        let fixture = app.buttons["Use correction fixture"]
+        XCTAssertTrue(fixture.waitForExistence(timeout: 2))
+        fixture.tap()
+
+        XCTAssertTrue(app.staticTexts["Automatic recognition needs a little help."].waitForExistence(timeout: 4))
+        let correction = app.textFields["e.g. rajma with rice"]
+        XCTAssertTrue(correction.exists)
+        correction.tap()
+        correction.typeText("carrots with blue berries")
+        app.buttons["Add meal component"].tap()
+
+        XCTAssertTrue(app.staticTexts["Carrot"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Blueberries"].exists)
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.waitForExistence(timeout: 2))
+        XCTAssertTrue(confirm.isEnabled)
     }
 
     private func attachScreenshot(named name: String) {

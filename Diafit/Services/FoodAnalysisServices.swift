@@ -1,9 +1,24 @@
 import Foundation
+import ImageIO
+import Vision
 
 // MARK: - Provider seams
 
 protocol FoodRecognitionService: Sendable {
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult
+}
+
+struct FoodImageCandidate: Hashable, Sendable {
+    let canonicalFoodId: String
+    let sourceLabel: String
+    let confidence: Double
+}
+
+/// Produces food identity candidates only. Nutrition is deliberately resolved
+/// afterwards from canonical records; an image classifier is never treated as
+/// a nutrition database.
+protocol FoodImageClassificationService: Sendable {
+    func candidates(in image: PreparedFoodImage) async throws -> [FoodImageCandidate]
 }
 
 protocol FoodNormalisationService: Sendable {
@@ -58,6 +73,58 @@ struct PreparedFoodImage: Sendable {
 struct NutritionLookup: Sendable {
     let values: NutritionValues
     let provenance: NutritionProvenance
+}
+
+/// Private, offline fast path for ordinary food photos. Vision suggestions are
+/// admitted only when they map to the canonical catalog and clear a conservative
+/// confidence threshold. A configured backend remains the preferred provider
+/// for mixed meals and portion-aware interpretation.
+struct AppleFoodImageClassificationService: FoodImageClassificationService, Sendable {
+    let catalog: IndianFoodCatalogService
+    let minimumConfidence: Float
+
+    init(catalog: IndianFoodCatalogService = IndianFoodCatalogService(), minimumConfidence: Float = 0.20) {
+        self.catalog = catalog
+        self.minimumConfidence = minimumConfidence
+    }
+
+    func candidates(in image: PreparedFoodImage) async throws -> [FoodImageCandidate] {
+        let observations = try await classify(image.data)
+        var bestByCanonicalID: [String: FoodImageCandidate] = [:]
+
+        for observation in observations where observation.confidence >= minimumConfidence {
+            for food in catalog.matches(in: observation.identifier) {
+                let candidate = FoodImageCandidate(
+                    canonicalFoodId: food.canonicalId,
+                    sourceLabel: observation.identifier,
+                    confidence: Double(observation.confidence)
+                )
+                if candidate.confidence > (bestByCanonicalID[food.canonicalId]?.confidence ?? 0) {
+                    bestByCanonicalID[food.canonicalId] = candidate
+                }
+            }
+        }
+
+        return bestByCanonicalID.values
+            .sorted { lhs, rhs in
+                if lhs.confidence == rhs.confidence { return lhs.canonicalFoodId < rhs.canonicalFoodId }
+                return lhs.confidence > rhs.confidence
+            }
+            .prefix(5)
+            .map { $0 }
+    }
+
+    private func classify(_ data: Data) async throws -> [VNClassificationObservation] {
+        try await Task.detached(priority: .userInitiated) {
+            guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+                  let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
+                throw FoodAnalysisError.unsupportedImage
+            }
+            let request = VNClassifyImageRequest()
+            try VNImageRequestHandler(cgImage: image, options: [:]).perform([request])
+            return Array((request.results ?? []).prefix(30))
+        }.value
+    }
 }
 
 struct GeneratedMealImageKey: Hashable, Sendable {
@@ -141,32 +208,81 @@ private struct RemoteAnalysisRequest: Encodable {
 
 struct PhotoAnalysisOrchestrator: Sendable {
     let remote: (any FoodRecognitionService)?
+    let onDevice: (any FoodImageClassificationService)?
     let local: LocalMealAnalysisEngine
 
-    init(remote: (any FoodRecognitionService)? = nil, local: LocalMealAnalysisEngine = LocalMealAnalysisEngine()) {
+    init(
+        remote: (any FoodRecognitionService)? = nil,
+        onDevice: (any FoodImageClassificationService)? = AppleFoodImageClassificationService(),
+        local: LocalMealAnalysisEngine = LocalMealAnalysisEngine()
+    ) {
         self.remote = remote
+        self.onDevice = onDevice
         self.local = local
     }
 
     func analyse(image: PreparedFoodImage, description: String) async -> MealAnalysisResult {
+        var remoteFailed = false
         if let remote {
             do {
                 return try await remote.analyse(image, dishHint: description)
             } catch {
-                var fallback = local.makeAnalysis(
-                    description: description,
-                    imageReference: image.imageReference,
-                    imageType: .originalPhoto
-                )
-                fallback.warnings.insert("Secure photo analysis was unavailable, so this draft was matched from your description only.", at: 0)
-                return fallback
+                remoteFailed = true
             }
         }
-        return local.makeAnalysis(
-            description: description,
+
+        let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        var candidates: [FoodImageCandidate] = []
+        if let onDevice {
+            candidates = (try? await onDevice.candidates(in: image)) ?? []
+        }
+        // A member-supplied hint is more specific than a whole-image label and
+        // prevents a broad classifier label from adding an unrelated component.
+        let candidateNames = trimmedDescription.isEmpty
+            ? candidates.compactMap { local.catalog.food(canonicalID: $0.canonicalFoodId)?.canonicalName }
+            : []
+        let combinedDescription = ([trimmedDescription] + candidateNames)
+            .filter { !$0.isEmpty }
+            .joined(separator: " with ")
+
+        FoodLoggingDiagnostics.record("photo.classification", fields: [
+            "route": candidateNames.isEmpty ? (trimmedDescription.isEmpty ? "unresolved" : "member-hint") : "on-device",
+            "canonicalIDs": candidates.map(\.canonicalFoodId).joined(separator: ","),
+            "candidateCount": String(candidates.count),
+            "remoteAttempted": String(remote != nil),
+            "remoteFailed": String(remoteFailed)
+        ])
+
+        var result = local.makeAnalysis(
+            description: combinedDescription,
             imageReference: image.imageReference,
             imageType: .originalPhoto
         )
+        if !candidateNames.isEmpty {
+            result.recognitionModelVersion = "Apple Vision on-device classification"
+            result.assumptions.removeAll { $0.contains("description") || $0.contains("image was not sent") }
+            result.assumptions.insert(
+                "On-device image recognition suggested the visible foods. Serving sizes remain editable estimates.",
+                at: 0
+            )
+        }
+        if remoteFailed {
+            let warning: String
+            if !trimmedDescription.isEmpty {
+                warning = "Secure photo analysis was unavailable, so this editable estimate was matched from your description."
+            } else if !candidateNames.isEmpty {
+                warning = "Secure photo analysis was unavailable, so the private on-device recognizer created this editable estimate."
+            } else {
+                warning = "Secure photo analysis was unavailable. Add or correct the food names below without losing the photo."
+            }
+            result.warnings.insert(warning, at: 0)
+        } else if candidates.isEmpty && trimmedDescription.isEmpty {
+            result.warnings.insert(
+                "Automatic recognition could not identify this plate confidently. Add the food names below and nutrition will recalculate.",
+                at: 0
+            )
+        }
+        return result
     }
 }
 

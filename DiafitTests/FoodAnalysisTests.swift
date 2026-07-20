@@ -465,6 +465,57 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertNotNil(result.visualRequest?.cacheKey)
     }
 
+    func testImageOnlyPhotoAnalysisProducesEditableComponentsAndNutrition() async throws {
+        let classifier = StubFoodImageClassificationService(candidates: [
+            FoodImageCandidate(canonicalFoodId: "carrot", sourceLabel: "carrot", confidence: 0.91),
+            FoodImageCandidate(canonicalFoodId: "blueberry", sourceLabel: "blueberry", confidence: 0.88)
+        ])
+        let orchestrator = PhotoAnalysisOrchestrator(
+            remote: nil,
+            onDevice: classifier,
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        )
+
+        let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
+
+        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["carrot", "blueberry"]))
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertNotNil(result.mealTotals.caloriesKcal)
+        XCTAssertNotNil(result.mealTotals.carbohydrateGrams)
+        XCTAssertNotNil(result.mealTotals.fibreGrams)
+        XCTAssertNotNil(result.mealTotals.proteinGrams)
+        XCTAssertEqual(result.nutritionValidation?.isApproved, true)
+        XCTAssertTrue(result.clarificationQuestions.allSatisfy { $0.answerType != .freeText })
+        XCTAssertEqual(result.imageType, .originalPhoto)
+    }
+
+    func testPhotoBackendFailureFallsBackToOnDeviceRecognition() async throws {
+        let classifier = StubFoodImageClassificationService(candidates: [
+            FoodImageCandidate(canonicalFoodId: "banana", sourceLabel: "banana", confidence: 0.9)
+        ])
+        let orchestrator = PhotoAnalysisOrchestrator(
+            remote: FailingFoodRecognitionService(),
+            onDevice: classifier,
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        )
+
+        let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
+
+        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["banana"])
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("on-device") })
+    }
+
+    func testCompoundPhotoCorrectionResolvesEverySupportedComponent() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "carrots with blue berries", imageType: .originalPhoto)
+
+        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["carrot", "blueberry"]))
+        XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
+        XCTAssertEqual(result.nutritionValidation?.isApproved, true)
+        XCTAssertTrue(result.clarificationQuestions.allSatisfy { $0.answerType != .freeText })
+    }
+
     func testServingConversionAndNutritionScaling() {
         let roti = try! XCTUnwrap(catalog.normalise("roti"))
         let portions = StandardPortionEstimationService()
@@ -1177,6 +1228,16 @@ final class FoodAnalysisTests: XCTestCase {
         store.retryPersistence()
         XCTAssertNotNil(store.persistenceIssue)
     }
+
+    private func fixtureFoodImage() -> PreparedFoodImage {
+        PreparedFoodImage(
+            data: Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5WQAAAABJRU5ErkJggg==")!,
+            mimeType: "image/png",
+            pixelWidth: 1,
+            pixelHeight: 1,
+            imageReference: .transient()
+        )
+    }
 }
 
 private struct StubMealUnderstanding: FoodUnderstandingService {
@@ -1199,6 +1260,20 @@ private struct CountingMealUnderstanding: FoodUnderstandingService {
     func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult {
         await counter.increment()
         return result
+    }
+}
+
+private struct StubFoodImageClassificationService: FoodImageClassificationService {
+    let candidates: [FoodImageCandidate]
+
+    func candidates(in image: PreparedFoodImage) async throws -> [FoodImageCandidate] {
+        candidates
+    }
+}
+
+private struct FailingFoodRecognitionService: FoodRecognitionService {
+    func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
+        throw FoodAnalysisError.endpointUnavailable
     }
 }
 

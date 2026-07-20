@@ -15,6 +15,7 @@ struct MealAnalysisReviewCard: View {
     @State private var editableDraft: MealAnalysisDraft
     @State private var showsDetail = false
     @State private var componentQuery = ""
+    @State private var componentError: String?
 
     private let catalog = IndianFoodCatalogService()
     private let portions = StandardPortionEstimationService()
@@ -43,8 +44,15 @@ struct MealAnalysisReviewCard: View {
 
     private var highImpactQuestionsAnswered: Bool {
         result.clarificationQuestions
-            .filter { $0.impactLevel == .high }
+            .filter {
+                $0.impactLevel == .high
+                    && !($0.answerType == .freeText && !result.detectedItems.isEmpty)
+            }
             .allSatisfy { $0.answer != nil }
+    }
+
+    private var visibleClarificationQuestions: [ClarificationQuestion] {
+        result.clarificationQuestions.filter { $0.answerType != .freeText }
     }
 
     private var nutritionIsSafeToConfirm: Bool {
@@ -62,7 +70,7 @@ struct MealAnalysisReviewCard: View {
                     .frame(height: 178)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .overlay(alignment: .bottomLeading) {
-                        Text("ORIGINAL · REVIEW ONLY")
+                        Text("YOUR PHOTO · NOT SAVED YET")
                             .font(.system(size: 9, weight: .bold, design: .rounded))
                             .tracking(0.8)
                             .foregroundStyle(.white)
@@ -83,7 +91,11 @@ struct MealAnalysisReviewCard: View {
             }
 
             if result.detectedItems.isEmpty {
-                EmptyAnalysisState(query: $componentQuery, addComponent: addComponent)
+                EmptyAnalysisState(
+                    query: $componentQuery,
+                    errorMessage: componentError,
+                    addComponent: addComponent
+                )
             } else {
                 VStack(spacing: 8) {
                     ForEach(result.detectedItems) { item in
@@ -101,7 +113,7 @@ struct MealAnalysisReviewCard: View {
 
             summary
 
-            if !result.clarificationQuestions.isEmpty {
+            if !visibleClarificationQuestions.isEmpty {
                 questions
             }
 
@@ -186,7 +198,7 @@ struct MealAnalysisReviewCard: View {
                 .font(.system(size: 10, weight: .bold, design: .rounded))
                 .tracking(1)
                 .foregroundStyle(Color.quietInk)
-            ForEach(result.clarificationQuestions) { question in
+            ForEach(visibleClarificationQuestions) { question in
                 VStack(alignment: .leading, spacing: 7) {
                     Text(question.question)
                         .font(DiafitType.caption)
@@ -239,19 +251,32 @@ struct MealAnalysisReviewCard: View {
     }
 
     private func addComponent() {
-        guard let definition = catalog.normalise(componentQuery) else { return }
-        let original = DetectedFoodItem(
-            id: UUID(), canonicalFoodId: definition.canonicalId, displayName: definition.canonicalName,
-            regionalName: definition.regionalNames.first, category: definition.category, confidence: .low,
-            alternatives: [], quantity: definition.standardServing?.quantity ?? 1,
-            servingUnit: definition.standardServing?.unit ?? .serving, estimatedWeightGrams: nil,
-            visibleIngredients: [], inferredIngredients: definition.commonIngredients, possibleIngredients: [],
-            preparationMethod: definition.commonPreparationMethods.first, nutrition: .unavailable,
-            glycaemicInformation: .unavailable, assumptions: ["Added by you; recipe may vary."], warnings: [], boundingRegion: nil,
-            nutritionProvenance: .unavailable
+        let correction = componentQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !correction.isEmpty else {
+            componentError = "Enter one or more foods, such as “carrots with blueberries.”"
+            return
+        }
+        let corrected = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(
+            description: correction,
+            imageReference: editableDraft.result.imageReference,
+            imageType: editableDraft.result.imageType
         )
-        editableDraft.result.detectedItems.append(item(from: definition, preserving: original))
+        guard !corrected.detectedItems.isEmpty else {
+            componentError = "I couldn’t match that yet. Try the common food names or add them separately."
+            return
+        }
+
+        let existingIDs = Set(editableDraft.result.detectedItems.map(\.canonicalFoodId))
+        editableDraft.result.detectedItems.append(
+            contentsOf: corrected.detectedItems.filter { !existingIDs.contains($0.canonicalFoodId) }
+        )
+        editableDraft.result.clarificationQuestions.removeAll {
+            $0.answerType == .freeText && $0.relatedFoodItemId == nil
+        }
+        editableDraft.result.clarificationQuestions.append(contentsOf: corrected.clarificationQuestions)
+        editableDraft.result.assumptions.append("Food names were corrected by you; servings remain editable estimates.")
         componentQuery = ""
+        componentError = nil
         recalculate()
     }
 
@@ -634,11 +659,12 @@ private struct DetectedItemEditor: View {
 
 private struct EmptyAnalysisState: View {
     @Binding var query: String
+    let errorMessage: String?
     let addComponent: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 9) {
-            Text("I don’t want to guess from the photo alone.")
+            Text("Automatic recognition needs a little help.")
                 .font(DiafitType.body)
                 .foregroundStyle(Color.ink)
             HStack(spacing: 8) {
@@ -653,7 +679,16 @@ private struct EmptyAnalysisState: View {
                         .frame(width: 34, height: 34)
                         .background(Color.ink, in: Circle())
                 }
+                .disabled(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                .opacity(query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.45 : 1)
                 .accessibilityLabel("Add meal component")
+            }
+            .onSubmit(addComponent)
+            if let errorMessage {
+                Text(errorMessage)
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.coral)
+                    .accessibilityLabel("Food correction error: \(errorMessage)")
             }
         }
         .padding(13)

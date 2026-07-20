@@ -4,19 +4,17 @@ import UIKit
 import ImageIO
 import UniformTypeIdentifiers
 
-/// A privacy-first intake surface. The selected image is normalized and
-/// metadata-stripped before it leaves this view; this local build keeps it in
-/// memory for the draft only and does not upload it.
+/// A privacy-first, single-action intake surface. Choosing or taking a photo
+/// immediately prepares it and starts analysis; a description is never a
+/// prerequisite for the normal path.
 struct PhotoMealInput: View {
     @Environment(\.dismiss) private var dismiss
     let onContinue: (PreparedFoodImage, String) -> Void
 
     @State private var selectedPhoto: PhotosPickerItem?
-    @State private var preparedImage: PreparedFoodImage?
-    @State private var previewImage: UIImage?
-    @State private var dishDescription = ""
     @State private var errorMessage: String?
     @State private var showsCamera = false
+    @State private var isPreparing = false
 
     private let preparation = AppleImagePreparationService()
 
@@ -29,41 +27,24 @@ struct PhotoMealInput: View {
                             .font(.system(size: 10, weight: .bold, design: .rounded))
                             .tracking(1.3)
                             .foregroundStyle(Color.quietInk)
-                        Text("Start with what’s on your plate.")
+                        Text("Choose a meal photo.")
                             .font(DiafitType.display)
                             .foregroundStyle(Color.ink)
-                        Text("You’ll review every food, serving, and estimate before anything is added to today.")
+                        Text("Diafit will identify visible foods, calculate an editable nutrition estimate, and take you straight to review.")
                             .font(DiafitType.body)
                             .foregroundStyle(Color.quietInk)
                             .lineSpacing(3)
                     }
 
-                    if let previewImage {
-                        Image(uiImage: previewImage)
-                            .resizable()
-                            .scaledToFill()
-                            .frame(height: 248)
-                            .clipShape(RoundedRectangle(cornerRadius: 30, style: .continuous))
-                            .overlay(alignment: .bottomLeading) {
-                                Text("ORIGINAL PHOTO · DRAFT ONLY")
-                                    .font(.system(size: 9, weight: .bold, design: .rounded))
-                                    .tracking(0.9)
-                                    .foregroundStyle(.white)
-                                    .padding(.horizontal, 10)
-                                    .padding(.vertical, 7)
-                                    .background(.black.opacity(0.4), in: Capsule())
-                                    .padding(13)
-                            }
-                    } else {
-                        PhotoDropTarget()
-                    }
+                    PhotoDropTarget()
 
                     HStack(spacing: 10) {
                         PhotosPicker(selection: $selectedPhoto, matching: .images, photoLibrary: .shared()) {
-                            Label("Choose photo", systemImage: "photo.on.rectangle")
+                            Label("Choose & analyse", systemImage: "photo.on.rectangle")
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(QuietActionStyle())
+                        .disabled(isPreparing)
                         .accessibilityLabel("Choose meal photo")
 
                         Button { showsCamera = true } label: {
@@ -71,38 +52,36 @@ struct PhotoMealInput: View {
                                 .frame(maxWidth: .infinity)
                         }
                         .buttonStyle(QuietActionStyle())
-                        .disabled(!UIImagePickerController.isSourceTypeAvailable(.camera))
+                        .disabled(isPreparing || !UIImagePickerController.isSourceTypeAvailable(.camera))
                         .accessibilityLabel("Take meal photo")
+                    }
+
+                    if isPreparing {
+                        HStack(spacing: 10) {
+                            ProgressView()
+                                .tint(Color.ink)
+                            Text("Preparing your private photo…")
+                                .font(DiafitType.caption)
+                                .foregroundStyle(Color.quietInk)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .accessibilityElement(children: .combine)
+                        .accessibilityLabel("Preparing meal photo for analysis")
                     }
 
                     #if DEBUG
                     if ProcessInfo.processInfo.arguments.contains("UITestUseFixturePhoto") {
-                        Button("Use review fixture") { loadReviewFixture() }
-                            .font(DiafitType.caption)
-                            .foregroundStyle(Color.quietInk)
-                            .frame(maxWidth: .infinity, alignment: .center)
-                            .padding(.vertical, 5)
-                            .accessibilityHint("Development-only test fixture")
+                        VStack(spacing: 7) {
+                            Button("Use review fixture") { loadReviewFixture() }
+                            Button("Use correction fixture") { loadCorrectionFixture() }
+                        }
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                        .frame(maxWidth: .infinity, alignment: .center)
+                        .padding(.vertical, 5)
+                        .accessibilityHint("Development-only test fixtures")
                     }
                     #endif
-
-                    if preparedImage != nil {
-                        VStack(alignment: .leading, spacing: 9) {
-                            Text("What’s the main dish?")
-                                .font(DiafitType.title)
-                                .foregroundStyle(Color.ink)
-                            Text("A short description helps when photo recognition is unavailable. Try “dosa with sambar and coconut chutney.”")
-                                .font(DiafitType.caption)
-                                .foregroundStyle(Color.quietInk)
-                                .lineSpacing(2)
-                            TextField("Describe what you see", text: $dishDescription, axis: .vertical)
-                                .font(DiafitType.body)
-                                .lineLimit(2...4)
-                                .padding(14)
-                                .background(.white.opacity(0.72), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
-                                .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).stroke(Color.rule.opacity(0.7), lineWidth: 0.8))
-                        }
-                    }
 
                     PrivacyNote()
 
@@ -112,21 +91,6 @@ struct PhotoMealInput: View {
                             .foregroundStyle(Color.coral)
                     }
 
-                    Button(action: continueToReview) {
-                        HStack {
-                            Text("Create a review")
-                            Spacer()
-                            Image(systemName: "arrow.right")
-                        }
-                        .font(.system(size: 16, weight: .bold, design: .rounded))
-                        .foregroundStyle(Color.paper)
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 16)
-                        .background(Color.ink, in: RoundedRectangle(cornerRadius: 19, style: .continuous))
-                    }
-                    .buttonStyle(PressableStyle(pressedScale: 0.98))
-                    .disabled(preparedImage == nil || dishDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
-                    .opacity(preparedImage == nil || dishDescription.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.42 : 1)
                 }
                 .padding(20)
                 .padding(.bottom, 24)
@@ -154,36 +118,36 @@ struct PhotoMealInput: View {
     }
 
     private func load(_ item: PhotosPickerItem) async {
+        isPreparing = true
         do {
             guard let data = try await item.loadTransferable(type: Data.self) else {
                 errorMessage = "That photo could not be read. Choose another image."
+                isPreparing = false
                 return
             }
             prepare(data)
         } catch {
             errorMessage = "That photo could not be read. Choose another image."
+            isPreparing = false
         }
     }
 
-    private func prepare(_ data: Data?) {
+    private func prepare(_ data: Data?, hint: String = "") {
+        isPreparing = true
         guard let data else {
             errorMessage = "That photo could not be prepared."
+            isPreparing = false
             return
         }
         do {
             let image = try preparation.prepare(imageData: data)
-            preparedImage = image
-            previewImage = UIImage(data: image.data)
             errorMessage = nil
+            onContinue(image, hint)
+            dismiss()
         } catch {
             errorMessage = error.localizedDescription
+            isPreparing = false
         }
-    }
-
-    private func continueToReview() {
-        guard let preparedImage else { return }
-        onContinue(preparedImage, dishDescription.trimmingCharacters(in: .whitespacesAndNewlines))
-        dismiss()
     }
 
     #if DEBUG
@@ -193,8 +157,16 @@ struct PhotoMealInput: View {
             errorMessage = "The review fixture is unavailable."
             return
         }
-        dishDescription = "Dosa with sambar and coconut chutney"
-        prepare(data)
+        prepare(data, hint: "Dosa with sambar and coconut chutney")
+    }
+
+    private func loadCorrectionFixture() {
+        guard let url = Bundle.main.url(forResource: "bowl", withExtension: "png"),
+              let data = try? Data(contentsOf: url) else {
+            errorMessage = "The correction fixture is unavailable."
+            return
+        }
+        prepare(data, hint: "unrecognised plate fixture")
     }
     #endif
 }
@@ -250,7 +222,7 @@ private struct PhotoDropTarget: View {
             Text("One plate, many components")
                 .font(DiafitType.title)
                 .foregroundStyle(Color.ink)
-            Text("Rice, dal, roti, sabzi, and sides stay separate so you can correct each one.")
+            Text("Choose one photo. Visible foods stay separate so you can correct servings before saving.")
                 .font(DiafitType.caption)
                 .foregroundStyle(Color.quietInk)
                 .multilineTextAlignment(.center)
@@ -272,7 +244,7 @@ private struct PrivacyNote: View {
                 .foregroundStyle(Color.ink)
                 .frame(width: 28, height: 28)
                 .background(Color.lime.opacity(0.38), in: Circle())
-            Text("This build keeps the prepared photo on this device for this review only. It removes location metadata and does not upload or retain the original. A production analysis service will ask before secure processing and explain retention.")
+            Text("Analysis starts on this device. Location metadata is removed, and the original photo is kept only for this review. Nothing is saved until you confirm the estimate.")
                 .font(DiafitType.caption)
                 .foregroundStyle(Color.quietInk)
                 .lineSpacing(2)
