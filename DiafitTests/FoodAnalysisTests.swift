@@ -189,6 +189,20 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(normaliser.normalise("chapati")?.canonicalId, "roti")
     }
 
+    func testAIItemsNormaliseAcrossCanonicalRegionalAndOriginalNames() {
+        let normaliser = HybridFoodNormalisationService(catalog: catalog)
+        let fixtures: [(ParsedFoodItem, String)] = [
+            (ParsedFoodItem(originalText: "Bhindi Fry", canonicalSearchName: "okra stir fry", regionalName: "bhindi fry"), "bhindi-masala"),
+            (ParsedFoodItem(originalText: "Dal", canonicalSearchName: "lentil soup", regionalName: "dal"), "dal"),
+            (ParsedFoodItem(originalText: "Steamed Rice", canonicalSearchName: "steamed white rice", regionalName: "chawal"), "steamed-rice"),
+            (ParsedFoodItem(originalText: "Roti", canonicalSearchName: "whole wheat flatbread", regionalName: "roti"), "roti")
+        ]
+
+        for (item, expectedID) in fixtures {
+            XCTAssertEqual(normaliser.match(item)?.food.canonicalId, expectedID, item.originalText)
+        }
+    }
+
     func testMealParseContractContainsNoTrustedNutrition() {
         let item = ParsedFoodItem(originalText: "3 boiled eggs", canonicalSearchName: "chicken egg", quantity: 3, unit: "whole")
         let parse = MealParseResult(detectedItems: [item], unresolvedItems: [], mealDescription: "eggs", clarificationQuestions: [], confidence: 0.95)
@@ -625,6 +639,52 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(result.mealTotals.isEmpty)
         XCTAssertEqual(result.nutritionValidation?.isApproved, true)
         XCTAssertEqual(result.imageType, MealImageType.originalPhoto)
+        XCTAssertTrue(result.recognitionModelVersion?.contains("structured") == true)
+    }
+
+    func testStructuredVisionOutranksCompleteButWrongOnDeviceLabelsForCompoundPlate() async throws {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Bhindi Fry", canonicalSearchName: "okra stir fry", regionalName: "bhindi fry", quantity: 1, unit: "serving", preparationMethod: "stir-fried", confidence: 0.95),
+                ParsedFoodItem(originalText: "Dal", canonicalSearchName: "lentil soup", regionalName: "dal", quantity: 1, unit: "bowl", preparationMethod: "tempered", confidence: 0.94),
+                ParsedFoodItem(originalText: "Steamed Rice", canonicalSearchName: "steamed white rice", regionalName: "chawal", quantity: 1, unit: "serving", preparationMethod: "steamed", confidence: 0.96),
+                ParsedFoodItem(originalText: "Roti", canonicalSearchName: "whole wheat flatbread", regionalName: "roti", quantity: 2, unit: "pieces", preparationMethod: "pan-cooked", confidence: 0.97)
+            ],
+            unresolvedItems: [],
+            mealDescription: "Indian thali",
+            clarificationQuestions: [],
+            confidence: 0.95
+        )
+        let counter = ParseCounter()
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: CountingMealUnderstanding(result: parse, counter: counter),
+            coordinator: HybridMealAnalysisCoordinator(router: router)
+        )
+        let orchestrator = PhotoAnalysisOrchestrator(
+            remote: remote,
+            onDevice: StubFoodImageClassificationService(candidates: [
+                FoodImageCandidate(canonicalFoodId: "dahi", sourceLabel: "yogurt", confidence: 0.96),
+                FoodImageCandidate(canonicalFoodId: "fried-rice", sourceLabel: "fried rice", confidence: 0.95),
+                FoodImageCandidate(canonicalFoodId: "steamed-rice", sourceLabel: "rice", confidence: 0.94)
+            ]),
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        )
+
+        let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
+        let parseCount = await counter.value
+
+        XCTAssertEqual(parseCount, 1)
+        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["bhindi-masala", "dal", "steamed-rice", "roti"]))
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 2)
+        XCTAssertEqual(result.detectedItems.filter { $0.category == .rice }.count, 1)
+        XCTAssertFalse(result.detectedItems.contains { $0.canonicalFoodId == "dahi" || $0.canonicalFoodId == "fried-rice" })
+        XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
         XCTAssertTrue(result.recognitionModelVersion?.contains("structured") == true)
     }
 

@@ -57,7 +57,9 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'Split every component joined by with, and, plus, along with, served with, or together with.',
   'Preserve explicit quantities and preparation methods. For unspecified amounts, use a conservative quantity of 1 and mark requiresClarification when it materially affects nutrition.',
   'Recognise regional names, transliterations, spelling variations, branded products, supplements, and drinks.',
-  'For images, inspect the whole composition before naming the dish. Recognise common home-cooked and regional preparations from visible shape, grain, sauce, garnish, and cooking style; use a clarification when two dishes remain genuinely plausible.',
+  'For images, inspect the whole composition systematically before naming the dish: scan the plate and every separate bowl, then return each distinct physical food serving exactly once.',
+  'Never emit alternative guesses as separate detected items. In particular, one visible rice portion must not become both fried rice and steamed rice; choose the best-supported identity and lower confidence or ask one clarification when uncertain.',
+  'Recognise common home-cooked and regional preparations from visible shape, grain, sauce, garnish, and cooking style. Look explicitly for Indian flatbreads such as roti or chapati, dry sabji, dal, rice, curries, sides, and beverages rather than collapsing or omitting them.',
   'Prefer a specific regional dish identity when the visual evidence supports it, including tapioca/sago pearl preparations, flattened-rice dishes, lentil dishes, rice dishes, breads, curries, snacks, fruit, vegetables, and beverages.',
   'Water is an addition/base with no meaningful calories; milk is a separate component only when explicitly stated.',
   'Do not invent brands, products, ingredients, or quantities that are not supported by the input/image.'
@@ -130,8 +132,9 @@ export class OpenAIMealParser {
     if (typeof raw !== 'string') throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned no structured output.');
     let result;
     try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
-    validateMealParseResult(result);
-    return result;
+    const sanitized = sanitizeMealParseResult(result);
+    validateMealParseResult(sanitized);
+    return sanitized;
   }
 }
 
@@ -185,8 +188,9 @@ export class GeminiMealParser {
     }
     let result;
     try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
-    validateMealParseResult(result);
-    return result;
+    const sanitized = sanitizeMealParseResult(result);
+    validateMealParseResult(sanitized);
+    return sanitized;
   }
 }
 
@@ -195,9 +199,39 @@ export class MockMealParser {
   constructor(handler = defaultMockMealParser) { this.handler = handler; }
   async parse(input) {
     const result = await this.handler(input);
-    validateMealParseResult(result);
-    return result;
+    const sanitized = sanitizeMealParseResult(result);
+    validateMealParseResult(sanitized);
+    return sanitized;
   }
+}
+
+/// Provider output is a hypothesis. Collapse duplicate alternative labels into
+/// one editable component before validation so they can never be aggregated as
+/// two servings. A preparation disagreement is surfaced for confirmation.
+export function sanitizeMealParseResult(result) {
+  if (!result || !Array.isArray(result.detectedItems)) return result;
+  const byIdentity = new Map();
+  const clarificationQuestions = [...(Array.isArray(result.clarificationQuestions) ? result.clarificationQuestions : [])];
+  for (const item of result.detectedItems) {
+    const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
+    if (!identity || !byIdentity.has(identity)) {
+      byIdentity.set(identity || `unresolved-${byIdentity.size}`, item);
+      continue;
+    }
+    const existing = byIdentity.get(identity);
+    const preferred = (item?.confidence ?? 0) > (existing?.confidence ?? 0) ? item : existing;
+    const preparationConflict = Boolean(existing?.preparationMethod && item?.preparationMethod
+      && existing.preparationMethod.toLowerCase() !== item.preparationMethod.toLowerCase());
+    byIdentity.set(identity, {
+      ...preferred,
+      preparationMethod: preparationConflict ? null : preferred.preparationMethod,
+      confidence: Math.min(preferred.confidence, 0.65),
+      requiresClarification: true
+    });
+    const question = `Please confirm the preparation for ${identity}.`;
+    if (!clarificationQuestions.includes(question)) clarificationQuestions.push(question);
+  }
+  return { ...result, detectedItems: [...byIdentity.values()], clarificationQuestions };
 }
 
 export function validateMealParseResult(result) {
@@ -207,7 +241,32 @@ export function validateMealParseResult(result) {
   if (!Array.isArray(result.detectedItems) || !Array.isArray(result.unresolvedItems) || !Array.isArray(result.clarificationQuestions) || result.unresolvedItems.some(value => typeof value !== 'string') || result.clarificationQuestions.some(value => typeof value !== 'string')) throw providerError(502, 'malformed_provider_response', 'Meal parse arrays are invalid.');
   if (typeof result.mealDescription !== 'string' || !finiteConfidence(result.confidence)) throw providerError(502, 'malformed_provider_response', 'Meal parse metadata is invalid.');
   for (const item of result.detectedItems) validateParsedFoodItem(item);
+  const duplicateIdentities = duplicateFoodIdentities(result.detectedItems);
+  if (duplicateIdentities.length) {
+    throw providerError(502, 'duplicate_food_components', 'Meal understanding returned the same food component more than once.', duplicateIdentities.join(','));
+  }
   return result;
+}
+
+function duplicateFoodIdentities(items) {
+  const seen = new Set();
+  const duplicates = new Set();
+  for (const item of items) {
+    const identity = normalizeIdentity(item.canonicalSearchName || item.regionalName || item.originalText);
+    if (!identity) continue;
+    if (seen.has(identity)) duplicates.add(identity);
+    seen.add(identity);
+  }
+  return [...duplicates];
+}
+
+function normalizeIdentity(value) {
+  return String(value ?? '')
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/\b(?:plain|cooked|boiled|steamed|stir[ -]?fried|fried|grilled|roasted)\b/g, ' ')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
 }
 
 export function validateParsedFoodItem(item) {

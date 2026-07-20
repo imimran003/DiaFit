@@ -154,9 +154,16 @@ struct CanonicalFoodMatch: Hashable, Sendable {
 
 extension FoodNormalisationService {
     func match(_ item: ParsedFoodItem) -> CanonicalFoodMatch? {
-        guard let food = normalise(item.canonicalSearchName) else { return nil }
-        return CanonicalFoodMatch(food: food, matchedAlias: item.canonicalSearchName,
-                                  confidence: item.confidence, source: "local-canonical-catalog")
+        let candidates = [item.canonicalSearchName, item.regionalName, item.originalText, item.productName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        for candidate in candidates {
+            if let food = normalise(candidate) {
+                return CanonicalFoodMatch(food: food, matchedAlias: candidate,
+                                          confidence: item.confidence, source: "local-canonical-catalog")
+            }
+        }
+        return nil
     }
 }
 
@@ -182,9 +189,16 @@ struct HybridFoodNormalisationService: FoodNormalisationService, Sendable {
     /// Confirmed member aliases outrank fuzzy catalog matches while retaining
     /// the catalog as the source of canonical metadata.
     func match(_ item: ParsedFoodItem, memory: UserFoodMemoryRepository?) async -> CanonicalFoodMatch? {
-        if let memory, let remembered = await memory.rankedMatches(for: item.canonicalSearchName).first,
-           let food = catalog.food(canonicalID: remembered.canonicalFoodID) {
-            return CanonicalFoodMatch(food: food, matchedAlias: remembered.alias, confidence: 0.99, source: "user-confirmed-memory")
+        let candidates = [item.canonicalSearchName, item.regionalName, item.originalText]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if let memory {
+            for candidate in candidates {
+                if let remembered = await memory.rankedMatches(for: candidate).first,
+                   let food = catalog.food(canonicalID: remembered.canonicalFoodID) {
+                    return CanonicalFoodMatch(food: food, matchedAlias: remembered.alias, confidence: 0.99, source: "user-confirmed-memory")
+                }
+            }
         }
         return match(item)
     }

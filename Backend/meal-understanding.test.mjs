@@ -6,6 +6,7 @@ import {
   OpenAIMealParser,
   buildGeminiMealParseRequest,
   buildMealParseInput,
+  sanitizeMealParseResult,
   validateMealParseResult
 } from './meal-understanding.mjs';
 
@@ -66,6 +67,22 @@ assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.data, 'aGVsbG8='
 assert.equal(geminiImageRequest.generationConfig.responseMimeType, 'application/json');
 assert.deepEqual(geminiImageRequest.generationConfig.responseJsonSchema, MEAL_PARSE_SCHEMA);
 assert.equal(JSON.stringify(geminiImageRequest).includes('caloriesKcal'), false);
+
+const duplicateRiceResult = {
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'fried rice', canonicalSearchName: 'fried rice', preparationMethod: 'fried', confidence: 0.91 },
+    { ...parsed.detectedItems[0], originalText: 'steamed rice', canonicalSearchName: 'steamed rice', preparationMethod: 'steamed', confidence: 0.94 }
+  ],
+  clarificationQuestions: []
+};
+assert.throws(() => validateMealParseResult(duplicateRiceResult), error => error.code === 'duplicate_food_components');
+const sanitizedRice = sanitizeMealParseResult(duplicateRiceResult);
+assert.equal(sanitizedRice.detectedItems.length, 1);
+assert.equal(sanitizedRice.detectedItems[0].requiresClarification, true);
+assert.equal(sanitizedRice.detectedItems[0].preparationMethod, null);
+assert.equal(sanitizedRice.clarificationQuestions.length, 1);
+validateMealParseResult(sanitizedRice);
 
 let geminiURL;
 let geminiOptions;

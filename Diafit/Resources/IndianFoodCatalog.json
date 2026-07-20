@@ -88,7 +88,7 @@
         {"id":"aloo-gobi","name":"Aloo gobi","aliases":["aloo gobi","aloo gobhi"],"ingredients":["potato","cauliflower"],"serving":{"quantity":1,"unit":"katori","grams":160}},
         {"id":"aloo-matar","name":"Aloo matar","aliases":["aloo matar","potato peas"],"ingredients":["potato","peas"],"serving":{"quantity":1,"unit":"katori","grams":160}},
         {"id":"baingan-bharta","name":"Baingan bharta","aliases":["baingan bharta","eggplant bharta"],"ingredients":["eggplant","tomato"],"serving":{"quantity":1,"unit":"katori","grams":160}},
-        {"id":"bhindi-masala","name":"Bhindi masala","aliases":["bhindi masala","okra masala"],"ingredients":["okra","spices"],"serving":{"quantity":1,"unit":"katori","grams":150}},
+        {"id":"bhindi-masala","name":"Bhindi masala","englishName":"okra stir fry","aliases":["bhindi masala","bhindi fry","bhindi sabji","bhindi ki sabji","okra masala","okra stir fry","okra sabji"],"regionalNames":["bhindi fry","bhindi sabji"],"ingredients":["okra","spices"],"serving":{"quantity":1,"unit":"katori","grams":150}},
         {"id":"malai-kofta","name":"Malai kofta","aliases":["malai kofta"],"ingredients":["paneer","cream"],"serving":{"quantity":1,"unit":"katori","grams":180}},
         {"id":"vegetable-korma","name":"Vegetable korma","aliases":["vegetable korma","veg korma"],"ingredients":["vegetables","coconut","cashew"],"serving":{"quantity":1,"unit":"katori","grams":180}},
         {"id":"pav-bhaji","name":"Pav bhaji","aliases":["pav bhaji"],"ingredients":["vegetables","butter","bread"],"serving":{"quantity":1,"unit":"plate","grams":300}},

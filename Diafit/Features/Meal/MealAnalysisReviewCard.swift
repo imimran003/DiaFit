@@ -82,10 +82,11 @@ struct MealAnalysisReviewCard: View {
                     }
             }
 
-            if let request = result.visualRequest {
+            if let request = result.visualRequest, editableDraft.transientImageData == nil {
                 MealVisualRequestStatus(
                     request: request,
                     items: result.detectedItems,
+                    questions: result.clarificationQuestions,
                     hasOriginalPhoto: editableDraft.transientImageData != nil,
                     retry: retryVisualRequest
                 )
@@ -512,6 +513,7 @@ struct MealAnalysisReviewCard: View {
 private struct MealVisualRequestStatus: View {
     let request: MealVisualRequest
     let items: [DetectedFoodItem]
+    let questions: [ClarificationQuestion]
     let hasOriginalPhoto: Bool
     let retry: () -> Void
 
@@ -560,7 +562,11 @@ private struct MealVisualRequestStatus: View {
     private var detail: String {
         switch request.state {
         case .queued: return "Building a quantity-aware food composition."
-        case .waitingForClarification: return "Confirm the shake base and scoop count to make the visual accurate."
+        case .waitingForClarification:
+            if let question = questions.first(where: { $0.impactLevel == .high && $0.answer == nil }) {
+                return "Answer “\(question.question)” before creating the meal visual."
+            }
+            return "Review the highlighted meal details before creating the visual."
         case .deterministicFallback:
             return "A verified component composition is shown while image generation is unavailable."
         case .ready:

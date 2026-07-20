@@ -227,7 +227,7 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         let trimmedHint = dishHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let instruction = trimmedHint.isEmpty
-            ? "Identify every visible food and prepared dish in this meal photo. Preserve regional dish names and separate distinct components."
+            ? "Inspect the entire meal photo and identify every distinct physical food serving exactly once. Preserve regional Indian names, include breads, rice, dal, sabji, curries and sides when visible, and never list alternative guesses as separate foods."
             : trimmedHint
         let parse = try await understanding.parse(text: instruction, image: image)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
@@ -350,16 +350,6 @@ struct PhotoAnalysisOrchestrator: Sendable {
             )
         }
         let localCompleteness = completeness.evaluate(result)
-        if localCompleteness.isComplete {
-            FoodLoggingDiagnostics.record("photo.classification", fields: [
-                "route": candidateNames.isEmpty ? "member-hint" : "on-device",
-                "canonicalIDs": candidates.map(\.canonicalFoodId).joined(separator: ","),
-                "candidateCount": String(candidates.count),
-                "remoteAttempted": "false",
-                "complete": "true"
-            ])
-            return result
-        }
 
         var remoteFailed = false
         var remoteIncomplete: MealAnalysisResult?
@@ -382,12 +372,32 @@ struct PhotoAnalysisOrchestrator: Sendable {
             }
         }
 
-        if let remoteIncomplete, result.detectedItems.isEmpty {
+        // A generic whole-image classifier can produce a nutritionally complete
+        // but visually wrong list. When structured vision is configured, its
+        // component-aware interpretation owns food identity; on-device labels
+        // are a private resilience fallback only when the backend fails.
+        if let remoteIncomplete, !remoteIncomplete.detectedItems.isEmpty {
             result = remoteIncomplete
             result.warnings.insert(
                 "The image was interpreted, but nutrition still needs confirmation before it can be saved.",
                 at: 0
             )
+        } else if localCompleteness.isComplete {
+            if remoteFailed {
+                result.warnings.insert(
+                    "Live recognition is unavailable, so this private on-device estimate needs your review.",
+                    at: 0
+                )
+            }
+            FoodLoggingDiagnostics.record("photo.classification", fields: [
+                "route": candidateNames.isEmpty ? "member-hint" : "on-device-fallback",
+                "canonicalIDs": candidates.map(\.canonicalFoodId).joined(separator: ","),
+                "candidateCount": String(candidates.count),
+                "remoteAttempted": String(remote != nil),
+                "remoteFailed": String(remoteFailed),
+                "complete": "true"
+            ])
+            return result
         } else if remoteFailed {
             let warning = result.detectedItems.isEmpty
                 ? "Secure AI recognition is unavailable. Add the food name below without losing your photo."
