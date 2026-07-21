@@ -257,6 +257,25 @@ struct NutritionValues: Codable, Hashable, Sendable {
         )
     }
 
+    /// Non-nil values from `preferred` win. This is used to layer visible package
+    /// evidence over an editable fallback without fabricating missing label
+    /// fields or erasing useful estimates.
+    func fillingMissingValues(from preferred: NutritionValues) -> NutritionValues {
+        NutritionValues(
+            caloriesKcal: preferred.caloriesKcal ?? caloriesKcal,
+            proteinGrams: preferred.proteinGrams ?? proteinGrams,
+            carbohydrateGrams: preferred.carbohydrateGrams ?? carbohydrateGrams,
+            availableCarbohydrateGrams: preferred.availableCarbohydrateGrams ?? availableCarbohydrateGrams,
+            fatGrams: preferred.fatGrams ?? fatGrams,
+            saturatedFatGrams: preferred.saturatedFatGrams ?? saturatedFatGrams,
+            fibreGrams: preferred.fibreGrams ?? fibreGrams,
+            totalSugarGrams: preferred.totalSugarGrams ?? totalSugarGrams,
+            addedSugarGrams: preferred.addedSugarGrams ?? addedSugarGrams,
+            sodiumMilligrams: preferred.sodiumMilligrams ?? sodiumMilligrams,
+            cholesterolMilligrams: preferred.cholesterolMilligrams ?? cholesterolMilligrams
+        )
+    }
+
     static func total(of values: [NutritionValues]) -> NutritionValues {
         func total(_ keyPath: KeyPath<NutritionValues, Double?>) -> Double? {
             let known = values.compactMap { $0[keyPath: keyPath] }

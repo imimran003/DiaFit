@@ -21,7 +21,9 @@ provider hierarchy -> recipe calculation (when needed) -> validation -> review
   `BackendFoodUnderstandingService` sends an account token to the backend;
   OpenAI credentials never ship in the iOS target. The parse contract carries
   quantities, preparation, additions, products and confidence, but no trusted
-  nutrition numbers.
+  nutrition estimates. For photographed packages it may also transcribe
+  clearly visible printed label evidence into `PackagedLabelEvidence`; missing
+  fields stay nil and the model is forbidden from calculating them.
 * `FoodNormalisationService` remains the local catalog seam. The hybrid
   implementation first uses exact canonical aliases, then tolerant token
   matching over aliases, regional names and transliterations. The bundled
@@ -85,3 +87,21 @@ kadhi records. `kadhi chaawal` therefore remains two components, while
 `500 ml water` remains one hydration component with a 500 mL serving and zero
 calories. Confirming a draft writes canonical identity, serving, preparation,
 and product information to the injected user-food memory repository.
+
+## Photographed packaged foods
+
+A package photo is not treated as an ordinary plated recipe. Structured vision
+returns product identity, brand/flavour when legible, a count such as one
+package, and optional printed-label evidence with a declared basis (per package,
+per serving, per 100 grams, or front-of-pack claim). Backend validation rejects
+negative, non-finite, malformed, or unsupported evidence before it reaches the
+app.
+
+User-confirmed saved products still have priority. For an unknown package, a
+valid printed value overrides only that same nutrient in an editable category
+fallback. For example, a visible `24.6 g protein` claim preserves 24.6 g protein
+but does not cause the model to invent calories or carbohydrate. The review
+explains which values came from the visible package, which remain estimated,
+and asks for a nutrition-panel photo when complete values are needed. Package,
+pot, tub, and container units normalize to one editable serving rather than
+causing the recognized product to disappear.

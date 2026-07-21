@@ -43,6 +43,11 @@ console.log(JSON.stringify({
     unit: item.unit,
     quantityEvidence: item.quantityEvidence,
     preparationMethod: item.preparationMethod,
+    brand: item.brand,
+    productName: item.productName,
+    flavour: item.flavour,
+    isPackagedProduct: item.isPackagedProduct,
+    packagedLabelEvidence: item.packagedLabelEvidence,
     confidence: item.confidence,
     requiresClarification: item.requiresClarification
   })),

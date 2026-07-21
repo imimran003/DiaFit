@@ -749,6 +749,95 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.clarificationQuestions.contains { $0.question.contains("dry or gravy") })
     }
 
+    func testStructuredVisionPreservesPackagedProductAndVisibleFrontLabelEvidence() async throws {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "High Protein Serek",
+                    canonicalSearchName: "high protein quark",
+                    regionalName: "Serek wysokobiałkowy",
+                    category: .dairyOrSide,
+                    quantity: 1,
+                    unit: "package",
+                    quantityEvidence: "one visible package",
+                    preparationMethod: "packaged",
+                    brand: "Piątnica",
+                    productName: "High Protein Serek",
+                    flavour: "peach and passion fruit",
+                    confidence: 0.95,
+                    requiresClarification: false,
+                    packagedLabelEvidence: PackagedLabelEvidence(
+                        basis: .frontOfPackClaim,
+                        proteinGrams: 24.6,
+                        evidenceText: "24.6 g BIAŁKA",
+                        confidence: 0.99
+                    )
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "High-protein quark dessert",
+            clarificationQuestions: [],
+            confidence: 0.95
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+
+        let result = await HybridMealAnalysisCoordinator(router: router).analyse(
+            parse: parse,
+            originalInput: "Identify this packaged food",
+            imageReference: .transient(),
+            imageType: .originalPhoto
+        )
+
+        let product = try XCTUnwrap(result.detectedItems.first)
+        XCTAssertEqual(product.displayName, "Serek wysokobiałkowy")
+        XCTAssertEqual(product.servingUnit, .serving)
+        XCTAssertEqual(product.quantity, 1)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.proteinGrams), 24.6, accuracy: 0.001)
+        XCTAssertNotNil(product.nutrition.caloriesKcal)
+        XCTAssertNotNil(product.nutrition.carbohydrateGrams)
+        XCTAssertEqual(product.nutritionProvenance.kind, .packagedLabel)
+        XCTAssertTrue(product.assumptions.contains { $0.contains("24.6 g") })
+        XCTAssertTrue(product.assumptions.contains { $0.localizedCaseInsensitiveContains("nutrition panel") })
+    }
+
+    func testInvalidPackagedLabelEvidenceDoesNotOverrideSafeFallback() async throws {
+        let item = ParsedFoodItem(
+            originalText: "Protein dessert",
+            canonicalSearchName: "high protein dairy dessert",
+            category: .dairyOrSide,
+            quantity: 1,
+            unit: "package",
+            quantityEvidence: "one package",
+            preparationMethod: "packaged",
+            confidence: 0.9,
+            packagedLabelEvidence: PackagedLabelEvidence(
+                basis: .frontOfPackClaim,
+                proteinGrams: -24.6,
+                evidenceText: "unclear protein claim",
+                confidence: 0.4
+            )
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await router.resolve(
+            parse: MealParseResult(detectedItems: [item], unresolvedItems: [], mealDescription: "dessert", clarificationQuestions: [], confidence: 0.9),
+            originalInput: "Identify packaged dessert"
+        )
+
+        let resolved = try XCTUnwrap(result.items.first)
+        XCTAssertNotEqual(resolved.nutrition.lookup.values.proteinGrams, -24.6)
+        XCTAssertTrue(resolved.nutrition.assumptions.contains { $0.localizedCaseInsensitiveContains("ignored") })
+    }
+
     func testPhotoCountAuditRequiresEvidenceInsteadOfDefaultingEggsToOne() {
         let parse = MealParseResult(
             detectedItems: [

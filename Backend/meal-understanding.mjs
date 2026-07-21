@@ -26,7 +26,8 @@ function parsedFoodItemSchema() {
     required: [
       'originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit',
       'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand',
-      'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification'
+      'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification',
+      'isPackagedProduct', 'packagedLabelEvidence'
     ],
     properties: {
       originalText: { type: 'string' },
@@ -45,7 +46,36 @@ function parsedFoodItemSchema() {
       flavour: nullable('string'),
       servingSize: nullable('string'),
       confidence: { type: 'number' },
-      requiresClarification: { type: 'boolean' }
+      requiresClarification: { type: 'boolean' },
+      isPackagedProduct: { type: 'boolean' },
+      packagedLabelEvidence: {
+        anyOf: [packagedLabelEvidenceSchema(), { type: 'null' }]
+      }
+    }
+  };
+}
+
+function packagedLabelEvidenceSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'basis', 'packageGrams', 'servingGrams', 'caloriesKcal', 'proteinGrams',
+      'carbohydrateGrams', 'fatGrams', 'fibreGrams', 'totalSugarGrams',
+      'evidenceText', 'confidence'
+    ],
+    properties: {
+      basis: { type: 'string', enum: ['perPackage', 'perServing', 'per100Grams', 'frontOfPackClaim'] },
+      packageGrams: nullable('number'),
+      servingGrams: nullable('number'),
+      caloriesKcal: nullable('number'),
+      proteinGrams: nullable('number'),
+      carbohydrateGrams: nullable('number'),
+      fatGrams: nullable('number'),
+      fibreGrams: nullable('number'),
+      totalSugarGrams: nullable('number'),
+      evidenceText: { type: 'string' },
+      confidence: { type: 'number' }
     }
   };
 }
@@ -55,10 +85,12 @@ function nullable(type) { return { anyOf: [{ type }, { type: 'null' }] }; }
 export const MEAL_PARSE_SYSTEM_PROMPT = [
   'You are Diafit Meal Understanding, a careful food-language parser.',
   'Interpret the user text and optional food image into meal components.',
-  'Return only the schema-constrained JSON object. Never return calories, macros, or other nutrition values.',
+  'Return only the schema-constrained JSON object. Never estimate calories, macros, or other nutrition values.',
   'Split every component joined by with, and, plus, along with, served with, or together with.',
   'Preserve explicit quantities and preparation methods. For unspecified amounts, use a conservative quantity of 1 and mark requiresClarification when it materially affects nutrition.',
   'Recognise regional names, transliterations, spelling variations, branded products, supplements, and drinks.',
+  'For a packaged food, set isPackagedProduct true, identify the most specific product supported by visible text, use unit "package" for one visible package, and preserve brand, product, and flavour when legible.',
+  'For packagedLabelEvidence, transcribe only nutrition numbers clearly printed on the visible package. Never calculate or infer a missing label value. Use frontOfPackClaim for a prominent claim such as "24.6 g protein" when the full nutrition panel is not visible; all unprinted nutrient fields must be null. Preserve a short exact evidenceText and lower confidence if the print is unclear.',
   'For images, inspect the whole composition systematically before naming the dish: scan the plate and every separate bowl, then return each distinct physical food serving exactly once.',
   'For countable foods such as eggs, rotis, chapatis, bread slices, idlis, fruit, and packaged items, count every visible unit instead of defaulting to one. For cut eggs, count halves or quarters and convert them back to whole eggs. For stacked breads, inspect visible edges and layers. Put the concise count reasoning in quantityEvidence, such as "six halves = three whole eggs" or "three visible roti layers".',
   'If a count is partly occluded or cannot be determined reliably, lower confidence, set requiresClarification true, set quantityEvidence to the visible lower bound, and add one concise count clarification question.',
@@ -220,7 +252,9 @@ export function sanitizeMealParseResult(result) {
     const item = {
       ...rawItem,
       category: rawItem?.category ?? inferFoodCategory(rawItem),
-      quantityEvidence: rawItem?.quantityEvidence ?? null
+      quantityEvidence: rawItem?.quantityEvidence ?? null,
+      isPackagedProduct: rawItem?.isPackagedProduct ?? inferPackagedProduct(rawItem),
+      packagedLabelEvidence: rawItem?.packagedLabelEvidence ?? null
     };
     const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
     if (!identity || !byIdentity.has(identity)) {
@@ -280,17 +314,35 @@ function normalizeIdentity(value) {
 
 export function validateParsedFoodItem(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) throw providerError(502, 'malformed_provider_response', 'Parsed food item must be an object.');
-  const required = ['originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit', 'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand', 'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification'];
+  const required = ['originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit', 'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand', 'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification', 'isPackagedProduct', 'packagedLabelEvidence'];
   const allowed = new Set(required);
   if (Object.keys(item).some(key => !allowed.has(key))) throw providerError(502, 'malformed_provider_response', 'Parsed food item contains an unexpected field.');
   if (required.some(key => !(key in item))) throw providerError(502, 'malformed_provider_response', 'Parsed food item is missing a required field.');
   if (typeof item.originalText !== 'string' || typeof item.canonicalSearchName !== 'string' || typeof item.unit !== 'string') throw providerError(502, 'malformed_provider_response', 'Parsed food identity is invalid.');
   if (!['hydration', 'bread', 'rice', 'lentilOrLegume', 'vegetarianCurry', 'nonVegetarian', 'breakfastOrSnack', 'dairyOrSide', 'dessertOrDrink', 'fruitOrVegetable', 'egg', 'sprouts', 'supplement', 'unknown'].includes(item.category)) throw providerError(502, 'malformed_provider_response', 'Parsed food category is invalid.');
   if (!Number.isFinite(item.quantity) || item.quantity < 0 || !finiteConfidence(item.confidence) || typeof item.requiresClarification !== 'boolean') throw providerError(502, 'malformed_provider_response', 'Parsed food quantity or confidence is invalid.');
+  if (typeof item.isPackagedProduct !== 'boolean') throw providerError(502, 'malformed_provider_response', 'Packaged-food metadata is invalid.');
   if (item.estimatedGrams !== null && (!Number.isFinite(item.estimatedGrams) || item.estimatedGrams < 0)) throw providerError(502, 'malformed_provider_response', 'Parsed food grams are invalid.');
   for (const field of ['additions', 'exclusions']) if (!Array.isArray(item[field]) || item[field].some(value => typeof value !== 'string')) throw providerError(502, 'malformed_provider_response', 'Parsed food modifiers are invalid.');
   for (const field of ['regionalName', 'quantityEvidence', 'preparationMethod', 'brand', 'productName', 'flavour', 'servingSize']) if (item[field] !== null && typeof item[field] !== 'string') throw providerError(502, 'malformed_provider_response', 'Parsed food metadata is invalid.');
+  validatePackagedLabelEvidence(item.packagedLabelEvidence);
   return item;
+}
+
+function validatePackagedLabelEvidence(evidence) {
+  if (evidence === null) return;
+  if (!evidence || typeof evidence !== 'object' || Array.isArray(evidence)) throw providerError(502, 'malformed_provider_response', 'Package-label evidence is invalid.');
+  const required = ['basis', 'packageGrams', 'servingGrams', 'caloriesKcal', 'proteinGrams', 'carbohydrateGrams', 'fatGrams', 'fibreGrams', 'totalSugarGrams', 'evidenceText', 'confidence'];
+  const allowed = new Set(required);
+  if (Object.keys(evidence).some(key => !allowed.has(key)) || required.some(key => !(key in evidence))) throw providerError(502, 'malformed_provider_response', 'Package-label evidence has an invalid shape.');
+  if (!['perPackage', 'perServing', 'per100Grams', 'frontOfPackClaim'].includes(evidence.basis)
+      || typeof evidence.evidenceText !== 'string' || !evidence.evidenceText.trim()
+      || !finiteConfidence(evidence.confidence)) throw providerError(502, 'malformed_provider_response', 'Package-label evidence metadata is invalid.');
+  for (const field of ['packageGrams', 'servingGrams', 'caloriesKcal', 'proteinGrams', 'carbohydrateGrams', 'fatGrams', 'fibreGrams', 'totalSugarGrams']) {
+    const value = evidence[field];
+    if (value !== null && (!Number.isFinite(value) || value < 0)) throw providerError(502, 'malformed_provider_response', 'Package-label nutrition must be a non-negative printed value.');
+  }
+  for (const field of ['packageGrams', 'servingGrams']) if (evidence[field] !== null && evidence[field] <= 0) throw providerError(502, 'malformed_provider_response', 'Package-label serving weights must be positive.');
 }
 
 function finiteConfidence(value) { return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1; }
@@ -354,8 +406,13 @@ function inferFoodCategory(item) {
   if (/\b(?:chicken|fish|mutton|meat|prawn)\b/.test(value)) return 'nonVegetarian';
   if (/\b(?:sabji|sabzi|vegetable curry|potato curry|paneer curry)\b/.test(value)) return 'vegetarianCurry';
   if (/\b(?:fruit|vegetable|salad|apple|banana)\b/.test(value)) return 'fruitOrVegetable';
-  if (/\b(?:yogurt|curd|dahi|raita|milk)\b/.test(value)) return 'dairyOrSide';
+  if (/\b(?:yogurt|curd|dahi|raita|milk|quark|skyr|serek)\b/.test(value)) return 'dairyOrSide';
   return 'unknown';
+}
+
+function inferPackagedProduct(item) {
+  const value = [item?.unit, item?.preparationMethod, item?.brand, item?.productName].filter(Boolean).join(' ').toLowerCase();
+  return /\b(?:package|packaged|container|pot|tub)\b/.test(value);
 }
 
 function numberWord(value) { return ({ one: 1, two: 2, three: 3, four: 4 }[value] ?? Number(value)); }

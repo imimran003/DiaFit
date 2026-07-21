@@ -57,7 +57,7 @@ assert.equal(request.text.format.type, 'json_schema');
 assert.equal(request.text.format.strict, true);
 assert.deepEqual(request.text.format.schema, MEAL_PARSE_SCHEMA);
 assert.equal(requestOptions.headers.authorization, 'Bearer server-only-test-key');
-assert.equal(JSON.stringify(request).includes('caloriesKcal'), false);
+assert.equal(request.input[0].content[0].text.includes('Never estimate calories'), true);
 
 const geminiImageRequest = buildGeminiMealParseRequest({
   text: 'Identify the meal.',
@@ -68,8 +68,48 @@ assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.mimeType, 'image
 assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.data, 'aGVsbG8=');
 assert.equal(geminiImageRequest.generationConfig.responseMimeType, 'application/json');
 assert.deepEqual(geminiImageRequest.generationConfig.responseJsonSchema, MEAL_PARSE_SCHEMA);
-assert.equal(JSON.stringify(geminiImageRequest).includes('caloriesKcal'), false);
+assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('Never estimate calories'), true);
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('quantityEvidence'), true);
+assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('packagedLabelEvidence'), true);
+
+const packagedProduct = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [{
+    ...parsed.detectedItems[0],
+    originalText: 'High Protein Serek',
+    canonicalSearchName: 'high protein quark',
+    regionalName: 'Serek wysokobiałkowy',
+    category: 'dairyOrSide',
+    quantity: 1,
+    unit: 'package',
+    quantityEvidence: 'one visible package',
+    preparationMethod: 'packaged',
+    brand: 'Piątnica',
+    productName: 'High Protein Serek',
+    flavour: 'peach and passion fruit',
+    isPackagedProduct: true,
+    packagedLabelEvidence: {
+      basis: 'frontOfPackClaim',
+      packageGrams: null,
+      servingGrams: null,
+      caloriesKcal: null,
+      proteinGrams: 24.6,
+      carbohydrateGrams: null,
+      fatGrams: null,
+      fibreGrams: null,
+      totalSugarGrams: null,
+      evidenceText: '24.6 g BIAŁKA',
+      confidence: 0.99
+    }
+  }]
+});
+validateMealParseResult(packagedProduct);
+assert.equal(packagedProduct.detectedItems[0].packagedLabelEvidence.proteinGrams, 24.6);
+assert.equal(packagedProduct.detectedItems[0].isPackagedProduct, true);
+
+const invalidPackagedEvidence = structuredClone(packagedProduct);
+invalidPackagedEvidence.detectedItems[0].packagedLabelEvidence.proteinGrams = -1;
+assert.throws(() => validateMealParseResult(invalidPackagedEvidence), error => error.code === 'malformed_provider_response');
 
 const uncataloguedCurry = sanitizeMealParseResult({
   ...parsed,

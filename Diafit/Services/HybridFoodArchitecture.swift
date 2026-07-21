@@ -12,6 +12,47 @@ struct MealParseResult: Codable, Hashable, Sendable {
     var confidence: Double
 }
 
+/// Text transcribed from a photographed package is evidence, not a model
+/// nutrition estimate. Missing values remain nil and are resolved separately.
+struct PackagedLabelEvidence: Codable, Hashable, Sendable {
+    enum Basis: String, Codable, Hashable, Sendable {
+        case perPackage
+        case perServing
+        case per100Grams
+        case frontOfPackClaim
+    }
+
+    var basis: Basis
+    var packageGrams: Double?
+    var servingGrams: Double?
+    var caloriesKcal: Double?
+    var proteinGrams: Double?
+    var carbohydrateGrams: Double?
+    var fatGrams: Double?
+    var fibreGrams: Double?
+    var totalSugarGrams: Double?
+    var evidenceText: String
+    var confidence: Double
+
+    init(basis: Basis, packageGrams: Double? = nil, servingGrams: Double? = nil,
+         caloriesKcal: Double? = nil, proteinGrams: Double? = nil,
+         carbohydrateGrams: Double? = nil, fatGrams: Double? = nil,
+         fibreGrams: Double? = nil, totalSugarGrams: Double? = nil,
+         evidenceText: String, confidence: Double) {
+        self.basis = basis
+        self.packageGrams = packageGrams
+        self.servingGrams = servingGrams
+        self.caloriesKcal = caloriesKcal
+        self.proteinGrams = proteinGrams
+        self.carbohydrateGrams = carbohydrateGrams
+        self.fatGrams = fatGrams
+        self.fibreGrams = fibreGrams
+        self.totalSugarGrams = totalSugarGrams
+        self.evidenceText = evidenceText
+        self.confidence = confidence
+    }
+}
+
 struct ParsedFoodItem: Codable, Hashable, Sendable {
     var originalText: String
     var canonicalSearchName: String
@@ -35,13 +76,16 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
     var servingSize: String?
     var confidence: Double
     var requiresClarification: Bool
+    var isPackagedProduct: Bool?
+    var packagedLabelEvidence: PackagedLabelEvidence?
 
     init(originalText: String, canonicalSearchName: String, regionalName: String? = nil,
          category: FoodCategory? = nil, quantity: Double? = nil, unit: String? = nil,
          quantityEvidence: String? = nil, estimatedGrams: Double? = nil,
          preparationMethod: String? = nil, additions: [String] = [], exclusions: [String] = [],
          brand: String? = nil, productName: String? = nil, flavour: String? = nil,
-         servingSize: String? = nil, confidence: Double = 0, requiresClarification: Bool = false) {
+         servingSize: String? = nil, confidence: Double = 0, requiresClarification: Bool = false,
+         isPackagedProduct: Bool? = nil, packagedLabelEvidence: PackagedLabelEvidence? = nil) {
         self.originalText = originalText
         self.canonicalSearchName = canonicalSearchName
         self.regionalName = regionalName
@@ -59,6 +103,8 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
         self.servingSize = servingSize
         self.confidence = confidence
         self.requiresClarification = requiresClarification
+        self.isPackagedProduct = isPackagedProduct
+        self.packagedLabelEvidence = packagedLabelEvidence
     }
 }
 
@@ -141,7 +187,7 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
     /// Kept beside the client so the backend contract can be generated and
     /// reviewed without placing an untyped prompt or schema in a view.
     static let strictJSONSchema = """
-    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","category","quantityEvidence","additions","exclusions","confidence","requiresClarification"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"category":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"quantityEvidence":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"}}}
+    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","category","quantityEvidence","additions","exclusions","confidence","requiresClarification","isPackagedProduct","packagedLabelEvidence"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"category":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"quantityEvidence":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"},"isPackagedProduct":{"type":["boolean","null"]},"packagedLabelEvidence":{"type":["object","null"]}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"}}}
     """
 
     private struct UnderstandingRequest: Encodable {
@@ -296,7 +342,7 @@ struct AIInterpretedCanonicalFoodFactory: Sendable {
         if ["chicken", "fish", "mutton", "meat", "prawn"].contains(where: value.contains) { return .nonVegetarian }
         if ["sabji", "sabzi", "vegetable curry", "potato curry", "paneer curry"].contains(where: value.contains) { return .vegetarianCurry }
         if ["fruit", "vegetable", "salad", "apple", "banana"].contains(where: value.contains) { return .fruitOrVegetable }
-        if ["yogurt", "curd", "dahi", "raita", "milk"].contains(where: value.contains) { return .dairyOrSide }
+        if ["yogurt", "curd", "dahi", "raita", "milk", "quark", "skyr", "serek"].contains(where: value.contains) { return .dairyOrSide }
         return .unknown
     }
 
@@ -309,6 +355,7 @@ struct AIInterpretedCanonicalFoodFactory: Sendable {
         case "piece", "pieces": return .piece
         case "cup", "cups": return .cup
         case "roti", "chapati": return .roti
+        case "package", "pack", "container", "pot", "tub": return .serving
         default: return nil
         }
     }
@@ -457,6 +504,19 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
             )
         }
 
+        // A photographed front label is useful evidence even when this exact
+        // product is not in the member's saved package repository. Resolve it
+        // through the curated service so printed values are preserved while
+        // missing macros remain explicitly estimated rather than invented by
+        // the vision model.
+        if item.packagedLabelEvidence != nil, let canonical {
+            return CuratedNutritionFallbackService(
+                catalog: catalog,
+                portions: portions,
+                validation: validation
+            ).resolve(item: item, canonical: canonical)
+        }
+
         if let verifiedProvider {
             if let lookup = try? await verifiedProvider.lookup(canonicalSearchName: item.canonicalSearchName, estimatedGrams: item.estimatedGrams) {
                 return validatedResolution(values: lookup.values, provenance: lookup.provenance,
@@ -555,18 +615,26 @@ struct CuratedNutritionFallbackService: Sendable {
         }
         let amount = item.quantity ?? 1
         let servingUnit = ServingUnit(rawValue: item.unit ?? "") ?? canonical.food.standardServing?.unit ?? .serving
+        let labelAssessment = assessLabelEvidence(item.packagedLabelEvidence)
+        let label = labelAssessment.evidence
+        let labelGrams = label.flatMap { evidence -> Double? in
+            if let packageGrams = evidence.packageGrams { return packageGrams * amount }
+            if let servingGrams = evidence.servingGrams { return servingGrams * amount }
+            return nil
+        }
         let grams = item.estimatedGrams
+            ?? labelGrams
             ?? portions.estimatedWeight(quantity: amount, unit: servingUnit, food: canonical.food)
             ?? canonical.food.standardServing?.grams
             ?? 200
 
-        let values: NutritionValues
-        let assumptions: [String]
+        let fallbackValues: NutritionValues
+        var assumptions: [String]
         let ingredientFoods = canonical.food.commonIngredients.compactMap(ingredientFood)
             .filter { $0.nutritionPer100Grams != nil }
         if !ingredientFoods.isEmpty {
             let gramsPerIngredient = grams / Double(ingredientFoods.count)
-            values = NutritionValues.total(of: ingredientFoods.map { food in
+            fallbackValues = NutritionValues.total(of: ingredientFoods.map { food in
                 food.nutritionPer100Grams?.scaled(by: gramsPerIngredient / 100) ?? .unavailable
             })
             assumptions = [
@@ -574,11 +642,35 @@ struct CuratedNutritionFallbackService: Sendable {
                 "Ingredient weights are distributed evenly because the recipe ratio was not provided."
             ]
         } else {
-            values = genericValues(for: canonical.food.category, grams: grams)
+            fallbackValues = genericValues(for: canonical.food.category, grams: grams)
             assumptions = [
                 "Using a curated generic \(canonical.food.category.rawValue) estimate because no complete food record was available.",
                 "Serving size is editable before confirmation."
             ]
+        }
+
+        let values: NutritionValues
+        let provenance: NutritionProvenance
+        if let label {
+            let printed = labelValues(label, amount: amount, estimatedGrams: grams)
+            values = fallbackValues.fillingMissingValues(from: printed)
+            assumptions.append("Visible package text reports \(label.evidenceText); printed values take priority over the editable fallback.")
+            if printed.caloriesKcal == nil || printed.carbohydrateGrams == nil || printed.proteinGrams == nil {
+                assumptions.append("Photograph the nutrition panel for complete package values; unprinted nutrients are currently estimated.")
+            }
+            let completeCore = printed.caloriesKcal != nil && printed.carbohydrateGrams != nil && printed.proteinGrams != nil
+            provenance = NutritionProvenance(
+                kind: .packagedLabel,
+                dataSource: completeCore ? "Visible package nutrition label" : "Visible package claim + Diafit curated fallback",
+                dataVersion: nil,
+                confidence: completeCore ? .medium : .low
+            )
+        } else {
+            values = fallbackValues
+            if labelAssessment.wasRejected {
+                assumptions.append("Unclear or invalid package-label text was ignored; review the editable estimate or photograph the nutrition panel.")
+            }
+            provenance = NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Diafit curated fallback", dataVersion: catalog.version, confidence: .low)
         }
 
         let report = validation.validate(rawValues: values, canonicalFoodID: canonical.food.canonicalId,
@@ -588,7 +680,7 @@ struct CuratedNutritionFallbackService: Sendable {
             lookup: NutritionLookup(
                 values: safe,
                 provenance: report.isApproved
-                    ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Diafit curated fallback", dataVersion: catalog.version, confidence: .low)
+                    ? provenance
                     : .unavailable
             ),
             sourceRecordID: report.isApproved ? canonical.food.canonicalId : nil,
@@ -631,6 +723,36 @@ struct CuratedNutritionFallbackService: Sendable {
         default: per100 = NutritionValues(caloriesKcal: 140, proteinGrams: 5, carbohydrateGrams: 18, fatGrams: 5, fibreGrams: 3)
         }
         return per100.scaled(by: grams / 100)
+    }
+
+    private func assessLabelEvidence(_ evidence: PackagedLabelEvidence?) -> (evidence: PackagedLabelEvidence?, wasRejected: Bool) {
+        guard let evidence else { return (nil, false) }
+        let values = [
+            evidence.packageGrams, evidence.servingGrams, evidence.caloriesKcal,
+            evidence.proteinGrams, evidence.carbohydrateGrams, evidence.fatGrams,
+            evidence.fibreGrams, evidence.totalSugarGrams
+        ].compactMap { $0 }
+        let valid = evidence.confidence.isFinite && evidence.confidence >= 0.5 && evidence.confidence <= 1
+            && !evidence.evidenceText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            && !values.isEmpty && values.allSatisfy { $0.isFinite && $0 >= 0 }
+            && [evidence.packageGrams, evidence.servingGrams].compactMap { $0 }.allSatisfy { $0 > 0 }
+        return valid ? (evidence, false) : (nil, true)
+    }
+
+    private func labelValues(_ evidence: PackagedLabelEvidence, amount: Double, estimatedGrams: Double) -> NutritionValues {
+        let multiplier: Double
+        switch evidence.basis {
+        case .per100Grams: multiplier = estimatedGrams / 100
+        case .perPackage, .perServing, .frontOfPackClaim: multiplier = amount
+        }
+        return NutritionValues(
+            caloriesKcal: evidence.caloriesKcal.map { $0 * multiplier },
+            proteinGrams: evidence.proteinGrams.map { $0 * multiplier },
+            carbohydrateGrams: evidence.carbohydrateGrams.map { $0 * multiplier },
+            fatGrams: evidence.fatGrams.map { $0 * multiplier },
+            fibreGrams: evidence.fibreGrams.map { $0 * multiplier },
+            totalSugarGrams: evidence.totalSugarGrams.map { $0 * multiplier }
+        )
     }
 }
 
@@ -1177,6 +1299,7 @@ struct HybridMealAnalysisCoordinator: Sendable {
         case "glass", "glasses": return .glass
         case "piece", "pieces": return .piece
         case "scoop", "scoops": return .scoop
+        case "package", "pack", "container", "pot", "tub": return .serving
         default: return food?.standardServing?.unit ?? .serving
         }
     }
