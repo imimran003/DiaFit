@@ -48,6 +48,7 @@ console.log(JSON.stringify({
     flavour: item.flavour,
     isPackagedProduct: item.isPackagedProduct,
     packagedLabelEvidence: item.packagedLabelEvidence,
+    aiNutritionEstimate: item.aiNutritionEstimate,
     confidence: item.confidence,
     requiresClarification: item.requiresClarification
   })),

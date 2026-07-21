@@ -57,7 +57,7 @@ assert.equal(request.text.format.type, 'json_schema');
 assert.equal(request.text.format.strict, true);
 assert.deepEqual(request.text.format.schema, MEAL_PARSE_SCHEMA);
 assert.equal(requestOptions.headers.authorization, 'Bearer server-only-test-key');
-assert.equal(request.input[0].content[0].text.includes('Never estimate calories'), true);
+assert.equal(request.input[0].content[0].text.includes('AI nutrition estimates must include'), true);
 
 const geminiImageRequest = buildGeminiMealParseRequest({
   text: 'Identify the meal.',
@@ -68,7 +68,7 @@ assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.mimeType, 'image
 assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.data, 'aGVsbG8=');
 assert.equal(geminiImageRequest.generationConfig.responseMimeType, 'application/json');
 assert.deepEqual(geminiImageRequest.generationConfig.responseJsonSchema, MEAL_PARSE_SCHEMA);
-assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('Never estimate calories'), true);
+assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('AI nutrition estimates must include'), true);
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('quantityEvidence'), true);
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('packagedLabelEvidence'), true);
 
@@ -100,16 +100,36 @@ const packagedProduct = sanitizeMealParseResult({
       totalSugarGrams: null,
       evidenceText: '24.6 g BIAŁKA',
       confidence: 0.99
+    },
+    aiNutritionEstimate: {
+      basis: 'perPackage',
+      packageGrams: 200,
+      servingGrams: 200,
+      caloriesKcal: 190,
+      proteinGrams: 25,
+      carbohydrateGrams: 14,
+      fatGrams: 4,
+      saturatedFatGrams: 2.5,
+      fibreGrams: 1,
+      totalSugarGrams: 12,
+      sodiumMilligrams: 130,
+      assumptions: ['Estimated for one 200 g high-protein quark dessert.'],
+      confidence: 0.72
     }
   }]
 });
 validateMealParseResult(packagedProduct);
 assert.equal(packagedProduct.detectedItems[0].packagedLabelEvidence.proteinGrams, 24.6);
 assert.equal(packagedProduct.detectedItems[0].isPackagedProduct, true);
+assert.equal(packagedProduct.detectedItems[0].aiNutritionEstimate.caloriesKcal, 190);
 
 const invalidPackagedEvidence = structuredClone(packagedProduct);
 invalidPackagedEvidence.detectedItems[0].packagedLabelEvidence.proteinGrams = -1;
 assert.throws(() => validateMealParseResult(invalidPackagedEvidence), error => error.code === 'malformed_provider_response');
+
+const implausibleAIEstimate = structuredClone(packagedProduct);
+implausibleAIEstimate.detectedItems[0].aiNutritionEstimate.caloriesKcal = 900;
+assert.throws(() => validateMealParseResult(implausibleAIEstimate), error => error.code === 'malformed_provider_response');
 
 const uncataloguedCurry = sanitizeMealParseResult({
   ...parsed,

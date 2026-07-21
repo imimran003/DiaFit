@@ -53,6 +53,31 @@ struct PackagedLabelEvidence: Codable, Hashable, Sendable {
     }
 }
 
+/// A conservative estimate for nutrients that are not visible on a packaged
+/// food photo. This is never label evidence and is always shown as editable,
+/// model-estimated data before the member confirms the meal.
+struct AINutritionEstimate: Codable, Hashable, Sendable {
+    enum Basis: String, Codable, Hashable, Sendable {
+        case perPackage
+        case perServing
+        case per100Grams
+    }
+
+    var basis: Basis
+    var packageGrams: Double?
+    var servingGrams: Double?
+    var caloriesKcal: Double?
+    var proteinGrams: Double?
+    var carbohydrateGrams: Double?
+    var fatGrams: Double?
+    var saturatedFatGrams: Double?
+    var fibreGrams: Double?
+    var totalSugarGrams: Double?
+    var sodiumMilligrams: Double?
+    var assumptions: [String]
+    var confidence: Double
+}
+
 struct ParsedFoodItem: Codable, Hashable, Sendable {
     var originalText: String
     var canonicalSearchName: String
@@ -78,6 +103,7 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
     var requiresClarification: Bool
     var isPackagedProduct: Bool?
     var packagedLabelEvidence: PackagedLabelEvidence?
+    var aiNutritionEstimate: AINutritionEstimate?
 
     init(originalText: String, canonicalSearchName: String, regionalName: String? = nil,
          category: FoodCategory? = nil, quantity: Double? = nil, unit: String? = nil,
@@ -85,7 +111,8 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
          preparationMethod: String? = nil, additions: [String] = [], exclusions: [String] = [],
          brand: String? = nil, productName: String? = nil, flavour: String? = nil,
          servingSize: String? = nil, confidence: Double = 0, requiresClarification: Bool = false,
-         isPackagedProduct: Bool? = nil, packagedLabelEvidence: PackagedLabelEvidence? = nil) {
+         isPackagedProduct: Bool? = nil, packagedLabelEvidence: PackagedLabelEvidence? = nil,
+         aiNutritionEstimate: AINutritionEstimate? = nil) {
         self.originalText = originalText
         self.canonicalSearchName = canonicalSearchName
         self.regionalName = regionalName
@@ -105,6 +132,7 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
         self.requiresClarification = requiresClarification
         self.isPackagedProduct = isPackagedProduct
         self.packagedLabelEvidence = packagedLabelEvidence
+        self.aiNutritionEstimate = aiNutritionEstimate
     }
 }
 
@@ -187,7 +215,7 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
     /// Kept beside the client so the backend contract can be generated and
     /// reviewed without placing an untyped prompt or schema in a view.
     static let strictJSONSchema = """
-    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","category","quantityEvidence","additions","exclusions","confidence","requiresClarification","isPackagedProduct","packagedLabelEvidence"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"category":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"quantityEvidence":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"},"isPackagedProduct":{"type":["boolean","null"]},"packagedLabelEvidence":{"type":["object","null"]}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"}}}
+    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","category","quantityEvidence","additions","exclusions","confidence","requiresClarification","isPackagedProduct","packagedLabelEvidence","aiNutritionEstimate"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"category":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"quantityEvidence":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"},"isPackagedProduct":{"type":["boolean","null"]},"packagedLabelEvidence":{"type":["object","null"]},"aiNutritionEstimate":{"type":["object","null"]}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"}}}
     """
 
     private struct UnderstandingRequest: Encodable {
@@ -509,7 +537,7 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
         // through the curated service so printed values are preserved while
         // missing macros remain explicitly estimated rather than invented by
         // the vision model.
-        if item.packagedLabelEvidence != nil, let canonical {
+        if item.packagedLabelEvidence != nil || item.aiNutritionEstimate != nil, let canonical {
             return CuratedNutritionFallbackService(
                 catalog: catalog,
                 portions: portions,
@@ -617,13 +645,21 @@ struct CuratedNutritionFallbackService: Sendable {
         let servingUnit = ServingUnit(rawValue: item.unit ?? "") ?? canonical.food.standardServing?.unit ?? .serving
         let labelAssessment = assessLabelEvidence(item.packagedLabelEvidence)
         let label = labelAssessment.evidence
+        let estimateAssessment = assessAIEstimate(item.aiNutritionEstimate)
+        let aiEstimate = estimateAssessment.estimate
         let labelGrams = label.flatMap { evidence -> Double? in
             if let packageGrams = evidence.packageGrams { return packageGrams * amount }
             if let servingGrams = evidence.servingGrams { return servingGrams * amount }
             return nil
         }
+        let estimateGrams = aiEstimate.flatMap { estimate -> Double? in
+            if let packageGrams = estimate.packageGrams { return packageGrams * amount }
+            if let servingGrams = estimate.servingGrams { return servingGrams * amount }
+            return nil
+        }
         let grams = item.estimatedGrams
             ?? labelGrams
+            ?? estimateGrams
             ?? portions.estimatedWeight(quantity: amount, unit: servingUnit, food: canonical.food)
             ?? canonical.food.standardServing?.grams
             ?? 200
@@ -649,28 +685,38 @@ struct CuratedNutritionFallbackService: Sendable {
             ]
         }
 
-        let values: NutritionValues
+        var values = fallbackValues
         let provenance: NutritionProvenance
+        if let aiEstimate {
+            values = values.fillingMissingValues(from: aiValues(aiEstimate, amount: amount, estimatedGrams: grams))
+            assumptions.append(contentsOf: aiEstimate.assumptions)
+            assumptions.append("AI estimated nutrients that were not visible on the package. These values are editable and are not verified label data.")
+        } else if estimateAssessment.wasRejected {
+            assumptions.append("The AI nutrition estimate failed plausibility checks and was ignored; a conservative curated estimate is shown instead.")
+        }
         if let label {
             let printed = labelValues(label, amount: amount, estimatedGrams: grams)
-            values = fallbackValues.fillingMissingValues(from: printed)
+            values = values.fillingMissingValues(from: printed)
             assumptions.append("Visible package text reports \(label.evidenceText); printed values take priority over the editable fallback.")
             if printed.caloriesKcal == nil || printed.carbohydrateGrams == nil || printed.proteinGrams == nil {
                 assumptions.append("Photograph the nutrition panel for complete package values; unprinted nutrients are currently estimated.")
             }
             let completeCore = printed.caloriesKcal != nil && printed.carbohydrateGrams != nil && printed.proteinGrams != nil
             provenance = NutritionProvenance(
-                kind: .packagedLabel,
-                dataSource: completeCore ? "Visible package nutrition label" : "Visible package claim + Diafit curated fallback",
+                kind: aiEstimate == nil ? .packagedLabel : .modelFallback,
+                dataSource: completeCore
+                    ? "Visible package nutrition label"
+                    : (aiEstimate == nil ? "Visible package claim + Diafit curated fallback" : "Visible package claim + AI nutrition estimate"),
                 dataVersion: nil,
                 confidence: completeCore ? .medium : .low
             )
         } else {
-            values = fallbackValues
             if labelAssessment.wasRejected {
                 assumptions.append("Unclear or invalid package-label text was ignored; review the editable estimate or photograph the nutrition panel.")
             }
-            provenance = NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Diafit curated fallback", dataVersion: catalog.version, confidence: .low)
+            provenance = aiEstimate == nil
+                ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Diafit curated fallback", dataVersion: catalog.version, confidence: .low)
+                : NutritionProvenance(kind: .modelFallback, dataSource: "Backend AI package estimate", dataVersion: nil, confidence: .low)
         }
 
         let report = validation.validate(rawValues: values, canonicalFoodID: canonical.food.canonicalId,
@@ -737,6 +783,48 @@ struct CuratedNutritionFallbackService: Sendable {
             && !values.isEmpty && values.allSatisfy { $0.isFinite && $0 >= 0 }
             && [evidence.packageGrams, evidence.servingGrams].compactMap { $0 }.allSatisfy { $0 > 0 }
         return valid ? (evidence, false) : (nil, true)
+    }
+
+    private func assessAIEstimate(_ estimate: AINutritionEstimate?) -> (estimate: AINutritionEstimate?, wasRejected: Bool) {
+        guard let estimate else { return (nil, false) }
+        let values = [
+            estimate.packageGrams, estimate.servingGrams, estimate.caloriesKcal,
+            estimate.proteinGrams, estimate.carbohydrateGrams, estimate.fatGrams,
+            estimate.saturatedFatGrams, estimate.fibreGrams, estimate.totalSugarGrams,
+            estimate.sodiumMilligrams
+        ].compactMap { $0 }
+        let hasCoreValues = estimate.caloriesKcal != nil && estimate.proteinGrams != nil
+            && estimate.carbohydrateGrams != nil && estimate.fatGrams != nil
+        let expectedEnergy = (estimate.proteinGrams ?? 0) * 4
+            + (estimate.carbohydrateGrams ?? 0) * 4
+            + (estimate.fatGrams ?? 0) * 9
+        let energyVariance = abs((estimate.caloriesKcal ?? 0) - expectedEnergy)
+        let energyIsPlausible = energyVariance <= max(25, expectedEnergy * 0.35)
+        let valid = estimate.confidence.isFinite && estimate.confidence >= 0.5 && estimate.confidence <= 1
+            && hasCoreValues && energyIsPlausible
+            && !estimate.assumptions.isEmpty
+            && estimate.assumptions.allSatisfy { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            && values.allSatisfy { $0.isFinite && $0 >= 0 }
+            && [estimate.packageGrams, estimate.servingGrams].compactMap { $0 }.allSatisfy { $0 > 0 }
+        return valid ? (estimate, false) : (nil, true)
+    }
+
+    private func aiValues(_ estimate: AINutritionEstimate, amount: Double, estimatedGrams: Double) -> NutritionValues {
+        let multiplier: Double
+        switch estimate.basis {
+        case .per100Grams: multiplier = estimatedGrams / 100
+        case .perPackage, .perServing: multiplier = amount
+        }
+        return NutritionValues(
+            caloriesKcal: estimate.caloriesKcal.map { $0 * multiplier },
+            proteinGrams: estimate.proteinGrams.map { $0 * multiplier },
+            carbohydrateGrams: estimate.carbohydrateGrams.map { $0 * multiplier },
+            fatGrams: estimate.fatGrams.map { $0 * multiplier },
+            saturatedFatGrams: estimate.saturatedFatGrams.map { $0 * multiplier },
+            fibreGrams: estimate.fibreGrams.map { $0 * multiplier },
+            totalSugarGrams: estimate.totalSugarGrams.map { $0 * multiplier },
+            sodiumMilligrams: estimate.sodiumMilligrams.map { $0 * multiplier }
+        )
     }
 
     private func labelValues(_ evidence: PackagedLabelEvidence, amount: Double, estimatedGrams: Double) -> NutritionValues {

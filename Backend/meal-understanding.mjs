@@ -1,9 +1,9 @@
 /**
  * Provider-independent meal understanding boundary.
  *
- * The model is used to interpret language/images only.  Nutrition is
- * intentionally absent from the schema and must be resolved by the nutrition
- * services after this result has been canonicalised.
+ * The model interprets language/images. Any nutrition it estimates is
+ * non-authoritative: visible label evidence and the explicitly marked AI
+ * estimate remain separate and are validated by the app after normalisation.
  */
 
 export const MEAL_PARSE_SCHEMA = {
@@ -27,7 +27,7 @@ function parsedFoodItemSchema() {
       'originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit',
       'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand',
       'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification',
-      'isPackagedProduct', 'packagedLabelEvidence'
+      'isPackagedProduct', 'packagedLabelEvidence', 'aiNutritionEstimate'
     ],
     properties: {
       originalText: { type: 'string' },
@@ -50,7 +50,37 @@ function parsedFoodItemSchema() {
       isPackagedProduct: { type: 'boolean' },
       packagedLabelEvidence: {
         anyOf: [packagedLabelEvidenceSchema(), { type: 'null' }]
+      },
+      aiNutritionEstimate: {
+        anyOf: [aiNutritionEstimateSchema(), { type: 'null' }]
       }
+    }
+  };
+}
+
+function aiNutritionEstimateSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'basis', 'packageGrams', 'servingGrams', 'caloriesKcal', 'proteinGrams',
+      'carbohydrateGrams', 'fatGrams', 'saturatedFatGrams', 'fibreGrams',
+      'totalSugarGrams', 'sodiumMilligrams', 'assumptions', 'confidence'
+    ],
+    properties: {
+      basis: { type: 'string', enum: ['perPackage', 'perServing', 'per100Grams'] },
+      packageGrams: nullable('number'),
+      servingGrams: nullable('number'),
+      caloriesKcal: nullable('number'),
+      proteinGrams: nullable('number'),
+      carbohydrateGrams: nullable('number'),
+      fatGrams: nullable('number'),
+      saturatedFatGrams: nullable('number'),
+      fibreGrams: nullable('number'),
+      totalSugarGrams: nullable('number'),
+      sodiumMilligrams: nullable('number'),
+      assumptions: { type: 'array', items: { type: 'string' } },
+      confidence: { type: 'number' }
     }
   };
 }
@@ -85,12 +115,14 @@ function nullable(type) { return { anyOf: [{ type }, { type: 'null' }] }; }
 export const MEAL_PARSE_SYSTEM_PROMPT = [
   'You are Diafit Meal Understanding, a careful food-language parser.',
   'Interpret the user text and optional food image into meal components.',
-  'Return only the schema-constrained JSON object. Never estimate calories, macros, or other nutrition values.',
+  'Return only the schema-constrained JSON object. Food identity and visible package text must be grounded in the image.',
   'Split every component joined by with, and, plus, along with, served with, or together with.',
   'Preserve explicit quantities and preparation methods. For unspecified amounts, use a conservative quantity of 1 and mark requiresClarification when it materially affects nutrition.',
   'Recognise regional names, transliterations, spelling variations, branded products, supplements, and drinks.',
   'For a packaged food, set isPackagedProduct true, identify the most specific product supported by visible text, use unit "package" for one visible package, and preserve brand, product, and flavour when legible.',
   'For packagedLabelEvidence, transcribe only nutrition numbers clearly printed on the visible package. Never calculate or infer a missing label value. Use frontOfPackClaim for a prominent claim such as "24.6 g protein" when the full nutrition panel is not visible; all unprinted nutrient fields must be null. Preserve a short exact evidenceText and lower confidence if the print is unclear.',
+  'For an identified packaged food whose nutrition panel is incomplete or not visible, provide aiNutritionEstimate as a conservative estimate of calories, protein, carbohydrate, fat, saturated fat, fibre, total sugar, and sodium for the visible package or serving. Keep it separate from packagedLabelEvidence, state package-size and product-category assumptions, and set confidence below 0.85. A printed value may also appear in the complete estimate, but packagedLabelEvidence remains authoritative and the estimate must not alter it. If product identity is too uncertain for a useful estimate, return aiNutritionEstimate null.',
+  'AI nutrition estimates must include calories, protein, carbohydrate, and fat, use non-negative finite values, and have energy reasonably consistent with 4 kcal/g protein, 4 kcal/g carbohydrate, and 9 kcal/g fat.',
   'For images, inspect the whole composition systematically before naming the dish: scan the plate and every separate bowl, then return each distinct physical food serving exactly once.',
   'For countable foods such as eggs, rotis, chapatis, bread slices, idlis, fruit, and packaged items, count every visible unit instead of defaulting to one. For cut eggs, count halves or quarters and convert them back to whole eggs. For stacked breads, inspect visible edges and layers. Put the concise count reasoning in quantityEvidence, such as "six halves = three whole eggs" or "three visible roti layers".',
   'If a count is partly occluded or cannot be determined reliably, lower confidence, set requiresClarification true, set quantityEvidence to the visible lower bound, and add one concise count clarification question.',
@@ -176,9 +208,11 @@ export class OpenAIMealParser {
 
 /**
  * Server-only Gemini implementation used by the free development tier.
- * The provider receives a metadata-stripped image and returns identities and
- * portions only. The same strict validator runs before any result reaches the
- * app; nutrition is deliberately resolved elsewhere.
+ * The provider receives a metadata-stripped image and returns identities,
+ * portions, printed label evidence, and—only for incomplete packaged-food
+ * labels—an explicitly non-authoritative estimate. The same strict validator
+ * runs before any result reaches the app; trusted nutrition is still resolved
+ * and validated by the iOS nutrition layer.
  */
 export class GeminiMealParser {
   constructor({
@@ -254,7 +288,8 @@ export function sanitizeMealParseResult(result) {
       category: rawItem?.category ?? inferFoodCategory(rawItem),
       quantityEvidence: rawItem?.quantityEvidence ?? null,
       isPackagedProduct: rawItem?.isPackagedProduct ?? inferPackagedProduct(rawItem),
-      packagedLabelEvidence: rawItem?.packagedLabelEvidence ?? null
+      packagedLabelEvidence: rawItem?.packagedLabelEvidence ?? null,
+      aiNutritionEstimate: rawItem?.aiNutritionEstimate ?? null
     };
     const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
     if (!identity || !byIdentity.has(identity)) {
@@ -314,7 +349,7 @@ function normalizeIdentity(value) {
 
 export function validateParsedFoodItem(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) throw providerError(502, 'malformed_provider_response', 'Parsed food item must be an object.');
-  const required = ['originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit', 'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand', 'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification', 'isPackagedProduct', 'packagedLabelEvidence'];
+  const required = ['originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit', 'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand', 'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification', 'isPackagedProduct', 'packagedLabelEvidence', 'aiNutritionEstimate'];
   const allowed = new Set(required);
   if (Object.keys(item).some(key => !allowed.has(key))) throw providerError(502, 'malformed_provider_response', 'Parsed food item contains an unexpected field.');
   if (required.some(key => !(key in item))) throw providerError(502, 'malformed_provider_response', 'Parsed food item is missing a required field.');
@@ -326,7 +361,30 @@ export function validateParsedFoodItem(item) {
   for (const field of ['additions', 'exclusions']) if (!Array.isArray(item[field]) || item[field].some(value => typeof value !== 'string')) throw providerError(502, 'malformed_provider_response', 'Parsed food modifiers are invalid.');
   for (const field of ['regionalName', 'quantityEvidence', 'preparationMethod', 'brand', 'productName', 'flavour', 'servingSize']) if (item[field] !== null && typeof item[field] !== 'string') throw providerError(502, 'malformed_provider_response', 'Parsed food metadata is invalid.');
   validatePackagedLabelEvidence(item.packagedLabelEvidence);
+  validateAINutritionEstimate(item.aiNutritionEstimate);
   return item;
+}
+
+function validateAINutritionEstimate(estimate) {
+  if (estimate === null) return;
+  if (!estimate || typeof estimate !== 'object' || Array.isArray(estimate)) throw providerError(502, 'malformed_provider_response', 'AI nutrition estimate is invalid.');
+  const required = ['basis', 'packageGrams', 'servingGrams', 'caloriesKcal', 'proteinGrams', 'carbohydrateGrams', 'fatGrams', 'saturatedFatGrams', 'fibreGrams', 'totalSugarGrams', 'sodiumMilligrams', 'assumptions', 'confidence'];
+  const allowed = new Set(required);
+  if (Object.keys(estimate).some(key => !allowed.has(key)) || required.some(key => !(key in estimate))) throw providerError(502, 'malformed_provider_response', 'AI nutrition estimate has an invalid shape.');
+  if (!['perPackage', 'perServing', 'per100Grams'].includes(estimate.basis)
+      || !finiteConfidence(estimate.confidence)
+      || !Array.isArray(estimate.assumptions)
+      || estimate.assumptions.length === 0
+      || estimate.assumptions.some(value => typeof value !== 'string' || !value.trim())) throw providerError(502, 'malformed_provider_response', 'AI nutrition estimate metadata is invalid.');
+  const nutrientFields = ['caloriesKcal', 'proteinGrams', 'carbohydrateGrams', 'fatGrams', 'saturatedFatGrams', 'fibreGrams', 'totalSugarGrams', 'sodiumMilligrams'];
+  for (const field of ['packageGrams', 'servingGrams', ...nutrientFields]) {
+    const value = estimate[field];
+    if (value !== null && (!Number.isFinite(value) || value < 0)) throw providerError(502, 'malformed_provider_response', 'AI nutrition values must be finite and non-negative.');
+  }
+  for (const field of ['packageGrams', 'servingGrams']) if (estimate[field] !== null && estimate[field] <= 0) throw providerError(502, 'malformed_provider_response', 'AI serving weights must be positive.');
+  if (['caloriesKcal', 'proteinGrams', 'carbohydrateGrams', 'fatGrams'].some(field => estimate[field] === null)) throw providerError(502, 'malformed_provider_response', 'AI nutrition estimate must include core energy and macros.');
+  const expectedEnergy = estimate.proteinGrams * 4 + estimate.carbohydrateGrams * 4 + estimate.fatGrams * 9;
+  if (Math.abs(estimate.caloriesKcal - expectedEnergy) > Math.max(25, expectedEnergy * 0.35)) throw providerError(502, 'malformed_provider_response', 'AI nutrition estimate failed the energy plausibility check.');
 }
 
 function validatePackagedLabelEvidence(evidence) {

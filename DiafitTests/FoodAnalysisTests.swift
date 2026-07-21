@@ -771,6 +771,21 @@ final class FoodAnalysisTests: XCTestCase {
                         proteinGrams: 24.6,
                         evidenceText: "24.6 g BIAŁKA",
                         confidence: 0.99
+                    ),
+                    aiNutritionEstimate: AINutritionEstimate(
+                        basis: .perPackage,
+                        packageGrams: 200,
+                        servingGrams: 200,
+                        caloriesKcal: 190,
+                        proteinGrams: 25,
+                        carbohydrateGrams: 14,
+                        fatGrams: 4,
+                        saturatedFatGrams: 2.5,
+                        fibreGrams: 1,
+                        totalSugarGrams: 12,
+                        sodiumMilligrams: 130,
+                        assumptions: ["Estimated for one 200 g high-protein quark dessert."],
+                        confidence: 0.72
                     )
                 )
             ],
@@ -798,11 +813,14 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(product.servingUnit, .serving)
         XCTAssertEqual(product.quantity, 1)
         XCTAssertEqual(try XCTUnwrap(product.nutrition.proteinGrams), 24.6, accuracy: 0.001)
-        XCTAssertNotNil(product.nutrition.caloriesKcal)
-        XCTAssertNotNil(product.nutrition.carbohydrateGrams)
-        XCTAssertEqual(product.nutritionProvenance.kind, .packagedLabel)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.caloriesKcal), 190, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.carbohydrateGrams), 14, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.fatGrams), 4, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.totalSugarGrams), 12, accuracy: 0.001)
+        XCTAssertEqual(product.nutritionProvenance.kind, .modelFallback)
+        XCTAssertEqual(product.nutritionProvenance.dataSource, "Visible package claim + AI nutrition estimate")
         XCTAssertTrue(product.assumptions.contains { $0.contains("24.6 g") })
-        XCTAssertTrue(product.assumptions.contains { $0.localizedCaseInsensitiveContains("nutrition panel") })
+        XCTAssertTrue(product.assumptions.contains { $0.localizedCaseInsensitiveContains("not verified label data") })
     }
 
     func testInvalidPackagedLabelEvidenceDoesNotOverrideSafeFallback() async throws {
@@ -836,6 +854,49 @@ final class FoodAnalysisTests: XCTestCase {
         let resolved = try XCTUnwrap(result.items.first)
         XCTAssertNotEqual(resolved.nutrition.lookup.values.proteinGrams, -24.6)
         XCTAssertTrue(resolved.nutrition.assumptions.contains { $0.localizedCaseInsensitiveContains("ignored") })
+    }
+
+    func testImplausibleAIPackageEstimateIsRejectedBeforeDisplay() async throws {
+        let item = ParsedFoodItem(
+            originalText: "High protein dessert",
+            canonicalSearchName: "high protein dairy dessert",
+            category: .dairyOrSide,
+            quantity: 1,
+            unit: "package",
+            preparationMethod: "packaged",
+            confidence: 0.9,
+            isPackagedProduct: true,
+            aiNutritionEstimate: AINutritionEstimate(
+                basis: .perPackage,
+                packageGrams: 200,
+                servingGrams: 200,
+                caloriesKcal: 900,
+                proteinGrams: 25,
+                carbohydrateGrams: 14,
+                fatGrams: 4,
+                saturatedFatGrams: 2,
+                fibreGrams: 1,
+                totalSugarGrams: 12,
+                sodiumMilligrams: 130,
+                assumptions: ["One package."],
+                confidence: 0.7
+            )
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await router.resolve(
+            parse: MealParseResult(detectedItems: [item], unresolvedItems: [], mealDescription: "dessert", clarificationQuestions: [], confidence: 0.9),
+            originalInput: "Identify packaged dessert"
+        )
+
+        let resolved = try XCTUnwrap(result.items.first)
+        XCTAssertNotEqual(resolved.nutrition.lookup.values.caloriesKcal, 900)
+        XCTAssertTrue(resolved.nutrition.assumptions.contains { $0.localizedCaseInsensitiveContains("failed plausibility") })
+        XCTAssertNotEqual(resolved.nutrition.lookup.provenance.kind, .modelFallback)
     }
 
     func testPhotoCountAuditRequiresEvidenceInsteadOfDefaultingEggsToOne() {

@@ -21,9 +21,15 @@ provider hierarchy -> recipe calculation (when needed) -> validation -> review
   `BackendFoodUnderstandingService` sends an account token to the backend;
   OpenAI credentials never ship in the iOS target. The parse contract carries
   quantities, preparation, additions, products and confidence, but no trusted
-  nutrition estimates. For photographed packages it may also transcribe
-  clearly visible printed label evidence into `PackagedLabelEvidence`; missing
-  fields stay nil and the model is forbidden from calculating them.
+  nutrition values. For photographed packages, `PackagedLabelEvidence`
+  contains only clearly visible printed values. A separate
+  `AINutritionEstimate` may fill otherwise missing package nutrients when the
+  product identity is sufficiently clear. It remains editable, explicitly
+  model-derived, and can never override printed evidence or masquerade as a
+  verified label.
+* AI package estimates must include core energy and macros, state their serving
+  assumptions, use finite non-negative values, and pass backend and iOS
+  energy-plausibility validation before display.
 * `FoodNormalisationService` remains the local catalog seam. The hybrid
   implementation first uses exact canonical aliases, then tolerant token
   matching over aliases, regional names and transliterations. The bundled
