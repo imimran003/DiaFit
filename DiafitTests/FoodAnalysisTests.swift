@@ -706,6 +706,138 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.recognitionModelVersion?.contains("structured") == true)
     }
 
+    func testStructuredVisionPreservesUncataloguedRecognisedCurryWithEditableFallback() async throws {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Aloo sabji",
+                    canonicalSearchName: "potato curry",
+                    regionalName: "aloo sabji",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "bowl",
+                    estimatedGrams: 200,
+                    preparationMethod: "stewed",
+                    confidence: 0.9,
+                    requiresClarification: true
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Aloo sabji",
+            clarificationQuestions: ["Was the sabji dry or gravy-based?"],
+            confidence: 0.9
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await HybridMealAnalysisCoordinator(router: router).analyse(
+            parse: parse,
+            originalInput: "Identify the entire plate",
+            imageReference: .transient(),
+            imageType: .originalPhoto
+        )
+
+        let curry = try XCTUnwrap(result.detectedItems.first)
+        XCTAssertEqual(curry.displayName.lowercased(), "aloo sabji")
+        XCTAssertEqual(curry.category, .vegetarianCurry)
+        XCTAssertTrue(curry.canonicalFoodId.hasPrefix("interpreted."))
+        XCTAssertFalse(curry.nutrition.isEmpty)
+        XCTAssertEqual(curry.nutritionProvenance.kind, .curatedRecipeEstimate)
+        XCTAssertTrue(result.clarificationQuestions.contains { $0.question.contains("dry or gravy") })
+    }
+
+    func testPhotoCountAuditRequiresEvidenceInsteadOfDefaultingEggsToOne() {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Hard-boiled egg",
+                    canonicalSearchName: "hard-boiled egg",
+                    category: .egg,
+                    quantity: 1,
+                    unit: "whole egg",
+                    quantityEvidence: nil,
+                    confidence: 1
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Egg plate",
+            clarificationQuestions: [],
+            confidence: 1
+        )
+
+        let audited = PhotoParseIntegrityService().audit(parse)
+
+        XCTAssertEqual(audited.detectedItems[0].confidence, 0.74)
+        XCTAssertTrue(audited.detectedItems[0].requiresClarification)
+        XCTAssertTrue(audited.clarificationQuestions.contains { $0.contains("How many") })
+    }
+
+    func testPhotoCountAuditAcceptsExplicitWholeEggEvidence() {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Three hard-boiled eggs",
+                    canonicalSearchName: "hard-boiled egg",
+                    category: .egg,
+                    quantity: 3,
+                    unit: "whole egg",
+                    quantityEvidence: "six halves = three whole eggs",
+                    confidence: 0.96
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Egg plate",
+            clarificationQuestions: [],
+            confidence: 0.96
+        )
+
+        let audited = PhotoParseIntegrityService().audit(parse)
+
+        XCTAssertEqual(audited.detectedItems[0].quantity, 3)
+        XCTAssertEqual(audited.detectedItems[0].confidence, 0.96)
+        XCTAssertTrue(audited.clarificationQuestions.isEmpty)
+    }
+
+    func testStructuredVisionKeepsRotiThreeEggsAndUncataloguedSabjiTogether() async throws {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "two rotis", canonicalSearchName: "roti", regionalName: "roti", category: .bread, quantity: 2, unit: "piece", quantityEvidence: "two visible roti layers", preparationMethod: "pan-cooked", confidence: 1),
+                ParsedFoodItem(originalText: "hard-boiled eggs", canonicalSearchName: "hard-boiled egg", regionalName: "anda", category: .egg, quantity: 3, unit: "whole egg", quantityEvidence: "six visible halves = three whole eggs", preparationMethod: "hard-boiled", confidence: 1),
+                ParsedFoodItem(originalText: "sabji", canonicalSearchName: "mixed vegetable curry", regionalName: "aloo gobhi sabji", category: .vegetarianCurry, quantity: 1, unit: "bowl", quantityEvidence: "one visible bowl", preparationMethod: "stewed", confidence: 0.8, requiresClarification: true)
+            ],
+            unresolvedItems: [],
+            mealDescription: "Roti, eggs and sabji",
+            clarificationQuestions: ["Please confirm the main vegetables in the sabji."],
+            confidence: 0.9
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: StubMealUnderstanding(result: parse),
+            coordinator: HybridMealAnalysisCoordinator(router: router)
+        )
+        let result = await PhotoAnalysisOrchestrator(
+            remote: remote,
+            onDevice: StubFoodImageClassificationService(candidates: []),
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        ).analyse(image: fixtureFoodImage(), description: "")
+
+        XCTAssertEqual(result.detectedItems.count, 3)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.category == .egg })?.quantity, 3)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.category == .bread })?.quantity, 2)
+        let sabji = try XCTUnwrap(result.detectedItems.first(where: { $0.category == .vegetarianCurry }))
+        XCTAssertFalse(sabji.canonicalFoodId.isEmpty)
+        XCTAssertFalse(sabji.nutrition.isEmpty)
+        XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
+    }
+
     func testCompleteOnDeviceRecognitionDoesNotDependOnBackendAvailability() async throws {
         let classifier = StubFoodImageClassificationService(candidates: [
             FoodImageCandidate(canonicalFoodId: "banana", sourceLabel: "banana", confidence: 0.9)

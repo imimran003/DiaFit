@@ -24,16 +24,18 @@ function parsedFoodItemSchema() {
     type: 'object',
     additionalProperties: false,
     required: [
-      'originalText', 'canonicalSearchName', 'regionalName', 'quantity', 'unit',
-      'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand',
+      'originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit',
+      'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand',
       'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification'
     ],
     properties: {
       originalText: { type: 'string' },
       canonicalSearchName: { type: 'string' },
       regionalName: nullable('string'),
+      category: { type: 'string', enum: ['hydration', 'bread', 'rice', 'lentilOrLegume', 'vegetarianCurry', 'nonVegetarian', 'breakfastOrSnack', 'dairyOrSide', 'dessertOrDrink', 'fruitOrVegetable', 'egg', 'sprouts', 'supplement', 'unknown'] },
       quantity: { type: 'number' },
       unit: { type: 'string' },
+      quantityEvidence: nullable('string'),
       estimatedGrams: nullable('number'),
       preparationMethod: nullable('string'),
       additions: { type: 'array', items: { type: 'string' } },
@@ -58,6 +60,8 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'Preserve explicit quantities and preparation methods. For unspecified amounts, use a conservative quantity of 1 and mark requiresClarification when it materially affects nutrition.',
   'Recognise regional names, transliterations, spelling variations, branded products, supplements, and drinks.',
   'For images, inspect the whole composition systematically before naming the dish: scan the plate and every separate bowl, then return each distinct physical food serving exactly once.',
+  'For countable foods such as eggs, rotis, chapatis, bread slices, idlis, fruit, and packaged items, count every visible unit instead of defaulting to one. For cut eggs, count halves or quarters and convert them back to whole eggs. For stacked breads, inspect visible edges and layers. Put the concise count reasoning in quantityEvidence, such as "six halves = three whole eggs" or "three visible roti layers".',
+  'If a count is partly occluded or cannot be determined reliably, lower confidence, set requiresClarification true, set quantityEvidence to the visible lower bound, and add one concise count clarification question.',
   'Never emit alternative guesses as separate detected items. In particular, one visible rice portion must not become both fried rice and steamed rice; choose the best-supported identity and lower confidence or ask one clarification when uncertain.',
   'Recognise common home-cooked and regional preparations from visible shape, grain, sauce, garnish, and cooking style. Look explicitly for Indian flatbreads such as roti or chapati, dry sabji, dal, rice, curries, sides, and beverages rather than collapsing or omitting them.',
   'Prefer a specific regional dish identity when the visual evidence supports it, including tapioca/sago pearl preparations, flattened-rice dishes, lentil dishes, rice dishes, breads, curries, snacks, fruit, vegetables, and beverages.',
@@ -212,7 +216,12 @@ export function sanitizeMealParseResult(result) {
   if (!result || !Array.isArray(result.detectedItems)) return result;
   const byIdentity = new Map();
   const clarificationQuestions = [...(Array.isArray(result.clarificationQuestions) ? result.clarificationQuestions : [])];
-  for (const item of result.detectedItems) {
+  for (const rawItem of result.detectedItems) {
+    const item = {
+      ...rawItem,
+      category: rawItem?.category ?? inferFoodCategory(rawItem),
+      quantityEvidence: rawItem?.quantityEvidence ?? null
+    };
     const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
     if (!identity || !byIdentity.has(identity)) {
       byIdentity.set(identity || `unresolved-${byIdentity.size}`, item);
@@ -271,15 +280,16 @@ function normalizeIdentity(value) {
 
 export function validateParsedFoodItem(item) {
   if (!item || typeof item !== 'object' || Array.isArray(item)) throw providerError(502, 'malformed_provider_response', 'Parsed food item must be an object.');
-  const required = ['originalText', 'canonicalSearchName', 'regionalName', 'quantity', 'unit', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand', 'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification'];
+  const required = ['originalText', 'canonicalSearchName', 'regionalName', 'category', 'quantity', 'unit', 'quantityEvidence', 'estimatedGrams', 'preparationMethod', 'additions', 'exclusions', 'brand', 'productName', 'flavour', 'servingSize', 'confidence', 'requiresClarification'];
   const allowed = new Set(required);
   if (Object.keys(item).some(key => !allowed.has(key))) throw providerError(502, 'malformed_provider_response', 'Parsed food item contains an unexpected field.');
   if (required.some(key => !(key in item))) throw providerError(502, 'malformed_provider_response', 'Parsed food item is missing a required field.');
   if (typeof item.originalText !== 'string' || typeof item.canonicalSearchName !== 'string' || typeof item.unit !== 'string') throw providerError(502, 'malformed_provider_response', 'Parsed food identity is invalid.');
+  if (!['hydration', 'bread', 'rice', 'lentilOrLegume', 'vegetarianCurry', 'nonVegetarian', 'breakfastOrSnack', 'dairyOrSide', 'dessertOrDrink', 'fruitOrVegetable', 'egg', 'sprouts', 'supplement', 'unknown'].includes(item.category)) throw providerError(502, 'malformed_provider_response', 'Parsed food category is invalid.');
   if (!Number.isFinite(item.quantity) || item.quantity < 0 || !finiteConfidence(item.confidence) || typeof item.requiresClarification !== 'boolean') throw providerError(502, 'malformed_provider_response', 'Parsed food quantity or confidence is invalid.');
   if (item.estimatedGrams !== null && (!Number.isFinite(item.estimatedGrams) || item.estimatedGrams < 0)) throw providerError(502, 'malformed_provider_response', 'Parsed food grams are invalid.');
   for (const field of ['additions', 'exclusions']) if (!Array.isArray(item[field]) || item[field].some(value => typeof value !== 'string')) throw providerError(502, 'malformed_provider_response', 'Parsed food modifiers are invalid.');
-  for (const field of ['regionalName', 'preparationMethod', 'brand', 'productName', 'flavour', 'servingSize']) if (item[field] !== null && typeof item[field] !== 'string') throw providerError(502, 'malformed_provider_response', 'Parsed food metadata is invalid.');
+  for (const field of ['regionalName', 'quantityEvidence', 'preparationMethod', 'brand', 'productName', 'flavour', 'servingSize']) if (item[field] !== null && typeof item[field] !== 'string') throw providerError(502, 'malformed_provider_response', 'Parsed food metadata is invalid.');
   return item;
 }
 
@@ -327,7 +337,25 @@ function defaultMockMealParser({ text }) {
 }
 
 function food(originalText, quantity, unit, canonicalSearchName, confidence, preparationMethod = null, exclusions = [], requiresClarification = false) {
-  return { originalText, canonicalSearchName, regionalName: null, quantity, unit, estimatedGrams: null, preparationMethod, additions: [], exclusions, brand: null, productName: null, flavour: null, servingSize: null, confidence, requiresClarification };
+  const item = { originalText, canonicalSearchName, regionalName: null, category: 'unknown', quantity, unit, quantityEvidence: null, estimatedGrams: null, preparationMethod, additions: [], exclusions, brand: null, productName: null, flavour: null, servingSize: null, confidence, requiresClarification };
+  item.category = inferFoodCategory(item);
+  return item;
+}
+
+function inferFoodCategory(item) {
+  const value = [item?.canonicalSearchName, item?.regionalName, item?.originalText].filter(Boolean).join(' ').toLowerCase();
+  if (/\b(?:water|paani|pani)\b/.test(value)) return 'hydration';
+  if (/\b(?:egg|eggs|anda|ande)\b/.test(value)) return 'egg';
+  if (/\b(?:roti|chapati|flatbread|naan|paratha|bread)\b/.test(value)) return 'bread';
+  if (/\b(?:rice|chawal|chaawal)\b/.test(value)) return 'rice';
+  if (/\b(?:dal|daal|lentil|bean|chickpea|chana|rajma)\b/.test(value)) return 'lentilOrLegume';
+  if (/\bsprouts?\b/.test(value)) return 'sprouts';
+  if (/\b(?:whey|protein powder|supplement)\b/.test(value)) return 'supplement';
+  if (/\b(?:chicken|fish|mutton|meat|prawn)\b/.test(value)) return 'nonVegetarian';
+  if (/\b(?:sabji|sabzi|vegetable curry|potato curry|paneer curry)\b/.test(value)) return 'vegetarianCurry';
+  if (/\b(?:fruit|vegetable|salad|apple|banana)\b/.test(value)) return 'fruitOrVegetable';
+  if (/\b(?:yogurt|curd|dahi|raita|milk)\b/.test(value)) return 'dairyOrSide';
+  return 'unknown';
 }
 
 function numberWord(value) { return ({ one: 1, two: 2, three: 3, four: 4 }[value] ?? Number(value)); }

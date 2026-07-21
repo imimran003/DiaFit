@@ -16,8 +16,15 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
     var originalText: String
     var canonicalSearchName: String
     var regionalName: String?
+    /// A coarse identity supplied by structured interpretation. It is never a
+    /// nutrition source, but lets the app preserve a recognised food that is
+    /// not yet present in the bundled canonical catalog.
+    var category: FoodCategory?
     var quantity: Double?
     var unit: String?
+    /// Human-readable visual evidence for countable foods, for example
+    /// "six halves = three whole eggs". Nil means the count needs review.
+    var quantityEvidence: String?
     var estimatedGrams: Double?
     var preparationMethod: String?
     var additions: [String]
@@ -30,15 +37,18 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
     var requiresClarification: Bool
 
     init(originalText: String, canonicalSearchName: String, regionalName: String? = nil,
-         quantity: Double? = nil, unit: String? = nil, estimatedGrams: Double? = nil,
+         category: FoodCategory? = nil, quantity: Double? = nil, unit: String? = nil,
+         quantityEvidence: String? = nil, estimatedGrams: Double? = nil,
          preparationMethod: String? = nil, additions: [String] = [], exclusions: [String] = [],
          brand: String? = nil, productName: String? = nil, flavour: String? = nil,
          servingSize: String? = nil, confidence: Double = 0, requiresClarification: Bool = false) {
         self.originalText = originalText
         self.canonicalSearchName = canonicalSearchName
         self.regionalName = regionalName
+        self.category = category
         self.quantity = quantity
         self.unit = unit
+        self.quantityEvidence = quantityEvidence
         self.estimatedGrams = estimatedGrams
         self.preparationMethod = preparationMethod
         self.additions = additions
@@ -131,7 +141,7 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
     /// Kept beside the client so the backend contract can be generated and
     /// reviewed without placing an untyped prompt or schema in a view.
     static let strictJSONSchema = """
-    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","additions","exclusions","confidence","requiresClarification"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"}}}
+    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","category","quantityEvidence","additions","exclusions","confidence","requiresClarification"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"category":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"quantityEvidence":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"}}}
     """
 
     private struct UnderstandingRequest: Encodable {
@@ -226,6 +236,96 @@ struct HybridFoodNormalisationService: FoodNormalisationService, Sendable {
         guard !lhs.isEmpty, !rhs.isEmpty else { return 0 }
         let overlap = Double(lhs.intersection(rhs).count) / Double(max(lhs.count, rhs.count))
         return overlap == 0 ? 0 : overlap + (lhs == rhs ? 0.2 : 0)
+    }
+}
+
+/// Preserves a structured-AI food identity when the bundled catalog has no
+/// row for it. The generated record carries identity and serving metadata only;
+/// nutrition is still supplied by the normal provider/fallback hierarchy and
+/// remains visibly estimated. This prevents recognised regional dishes from
+/// disappearing merely because the offline catalog is incomplete.
+struct AIInterpretedCanonicalFoodFactory: Sendable {
+    func match(for item: ParsedFoodItem) -> CanonicalFoodMatch? {
+        let category = item.category ?? inferredCategory(for: item)
+        let searchName = item.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard item.confidence >= 0.60, category != .unknown, !searchName.isEmpty else { return nil }
+
+        let displayName = [item.regionalName, item.originalText, item.canonicalSearchName]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? searchName
+        let unit = servingUnit(item.unit) ?? .serving
+        let food = IndianFoodDefinition(
+            canonicalId: "interpreted.\(slug(searchName))",
+            canonicalName: displayName,
+            regionalNames: item.regionalName.map { [$0] } ?? [],
+            englishName: searchName,
+            transliterations: [],
+            aliases: Array(Set([item.originalText, searchName, item.regionalName].compactMap { $0 })),
+            category: category,
+            dietaryClassification: dietaryClassification(for: category),
+            commonIngredients: item.additions,
+            possibleAllergens: [],
+            commonPreparationMethods: item.preparationMethod.map { [$0] } ?? [],
+            nutritionPer100Grams: nil,
+            standardServing: StandardServing(quantity: 1, unit: unit, grams: item.estimatedGrams),
+            glycaemicIndex: nil,
+            glycaemicIndexSource: nil,
+            dataSource: "Structured AI identity; nutrition resolved separately",
+            dataVersion: nil,
+            confidence: .low,
+            revision: nil
+        )
+        return CanonicalFoodMatch(
+            food: food,
+            matchedAlias: displayName,
+            confidence: min(item.confidence, 0.79),
+            source: "structured-ai-provisional-identity"
+        )
+    }
+
+    private func inferredCategory(for item: ParsedFoodItem) -> FoodCategory {
+        let value = [item.canonicalSearchName, item.regionalName, item.originalText]
+            .compactMap { $0 }.joined(separator: " ").lowercased()
+        if value.contains("water") || value.contains("paani") { return .hydration }
+        if value.contains("egg") || value.contains("anda") { return .egg }
+        if ["roti", "chapati", "flatbread", "naan", "paratha", "bread"].contains(where: value.contains) { return .bread }
+        if value.contains("rice") || value.contains("chawal") { return .rice }
+        if ["dal", "lentil", "bean", "chickpea", "chana", "rajma"].contains(where: value.contains) { return .lentilOrLegume }
+        if value.contains("sprout") { return .sprouts }
+        if ["whey", "protein powder", "supplement"].contains(where: value.contains) { return .supplement }
+        if ["chicken", "fish", "mutton", "meat", "prawn"].contains(where: value.contains) { return .nonVegetarian }
+        if ["sabji", "sabzi", "vegetable curry", "potato curry", "paneer curry"].contains(where: value.contains) { return .vegetarianCurry }
+        if ["fruit", "vegetable", "salad", "apple", "banana"].contains(where: value.contains) { return .fruitOrVegetable }
+        if ["yogurt", "curd", "dahi", "raita", "milk"].contains(where: value.contains) { return .dairyOrSide }
+        return .unknown
+    }
+
+    private func servingUnit(_ raw: String?) -> ServingUnit? {
+        guard let raw else { return nil }
+        if let exact = ServingUnit(rawValue: raw) { return exact }
+        switch raw.lowercased() {
+        case "whole", "whole egg", "egg", "eggs": return .wholeEgg
+        case "bowl", "medium bowl": return .mediumBowl
+        case "piece", "pieces": return .piece
+        case "cup", "cups": return .cup
+        case "roti", "chapati": return .roti
+        default: return nil
+        }
+    }
+
+    private func dietaryClassification(for category: FoodCategory) -> DietaryClassification {
+        switch category {
+        case .egg: return .containsEgg
+        case .nonVegetarian: return .nonVegetarian
+        case .dairyOrSide: return .vegetarian
+        default: return .vegetarian
+        }
+    }
+
+    private func slug(_ value: String) -> String {
+        let result = value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: "-")
+        return result.isEmpty ? "food" : result
     }
 }
 
@@ -894,6 +994,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
             for parsed in parse.detectedItems {
                 group.addTask {
                     let match = await self.normalisation.match(parsed, memory: self.memory)
+                        ?? AIInterpretedCanonicalFoodFactory().match(for: parsed)
                     let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
                     return self.resolvedItem(parsed, match, nutrition, .openAI)
                 }
@@ -1001,7 +1102,10 @@ struct HybridMealAnalysisCoordinator: Sendable {
         imageReference: MealImageReference,
         imageType: MealImageType
     ) -> MealAnalysisResult {
-        let items = resolution.items.compactMap(makeDetectedItem)
+        // Never erase a provider-recognised component because canonical or
+        // nutrition resolution is incomplete. The review must show the item
+        // explicitly so the member can correct it.
+        let items = resolution.items.map(makeDetectedItem)
         let totals = NutritionValues.total(of: items.map(\.nutrition))
         let validation = DefaultNutritionValidationService().validate(rawValues: totals)
         let questions = resolution.clarificationQuestions.map {
@@ -1034,21 +1138,21 @@ struct HybridMealAnalysisCoordinator: Sendable {
         )
     }
 
-    private func makeDetectedItem(_ resolved: FoodResolutionItem) -> DetectedFoodItem? {
-        guard let canonical = resolved.canonical else { return nil }
+    private func makeDetectedItem(_ resolved: FoodResolutionItem) -> DetectedFoodItem {
         let parsed = resolved.parsedItem
-        let unit = servingUnit(for: parsed.unit, food: canonical.food)
+        let canonical = resolved.canonical
+        let unit = servingUnit(for: parsed.unit, food: canonical?.food)
         let quantity = parsed.quantity ?? 1
         let values = resolved.nutrition.lookup.values
         return DetectedFoodItem(
-            id: UUID(), canonicalFoodId: canonical.food.canonicalId,
-            displayName: canonical.food.canonicalName,
-            regionalName: parsed.regionalName ?? canonical.food.regionalNames.first,
-            category: canonical.food.category,
+            id: UUID(), canonicalFoodId: canonical?.food.canonicalId ?? "unresolved.\(slug(parsed.canonicalSearchName))",
+            displayName: canonical?.food.canonicalName ?? parsed.regionalName ?? parsed.originalText,
+            regionalName: parsed.regionalName ?? canonical?.food.regionalNames.first,
+            category: canonical?.food.category ?? parsed.category ?? .unknown,
             confidence: parsed.confidence >= 0.9 ? .high : parsed.confidence >= 0.75 ? .medium : .low,
             alternatives: [], quantity: quantity, servingUnit: unit,
             estimatedWeightGrams: resolved.nutrition.estimatedGrams,
-            visibleIngredients: [], inferredIngredients: canonical.food.commonIngredients,
+            visibleIngredients: [], inferredIngredients: canonical?.food.commonIngredients ?? [],
             possibleIngredients: [], preparationMethod: parsed.preparationMethod,
             nutrition: values, glycaemicInformation: .unavailable,
             assumptions: resolved.nutrition.assumptions + ["Serving is editable before confirmation."],
@@ -1060,8 +1164,8 @@ struct HybridMealAnalysisCoordinator: Sendable {
         )
     }
 
-    private func servingUnit(for raw: String?, food: IndianFoodDefinition) -> ServingUnit {
-        guard let raw else { return food.standardServing?.unit ?? .serving }
+    private func servingUnit(for raw: String?, food: IndianFoodDefinition?) -> ServingUnit {
+        guard let raw else { return food?.standardServing?.unit ?? .serving }
         if let unit = ServingUnit(rawValue: raw) { return unit }
         switch raw.lowercased() {
         case "whole", "whole egg", "egg", "eggs": return .wholeEgg
@@ -1073,8 +1177,14 @@ struct HybridMealAnalysisCoordinator: Sendable {
         case "glass", "glasses": return .glass
         case "piece", "pieces": return .piece
         case "scoop", "scoops": return .scoop
-        default: return food.standardServing?.unit ?? .serving
+        default: return food?.standardServing?.unit ?? .serving
         }
+    }
+
+    private func slug(_ value: String) -> String {
+        let result = value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: "-")
+        return result.isEmpty ? "food" : result
     }
 
     private func confidenceOrder(_ lhs: ConfidenceLevel, _ rhs: ConfidenceLevel) -> Bool {

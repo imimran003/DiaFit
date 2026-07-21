@@ -38,8 +38,10 @@ console.log(JSON.stringify({
     originalText: item.originalText,
     canonicalSearchName: item.canonicalSearchName,
     regionalName: item.regionalName,
+    category: item.category,
     quantity: item.quantity,
     unit: item.unit,
+    quantityEvidence: item.quantityEvidence,
     preparationMethod: item.preparationMethod,
     confidence: item.confidence,
     requiresClarification: item.requiresClarification

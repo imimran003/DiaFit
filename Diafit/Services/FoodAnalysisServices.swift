@@ -223,13 +223,15 @@ private struct RemoteAnalysisRequest: Encodable {
 struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
     let understanding: any FoodUnderstandingService
     let coordinator: HybridMealAnalysisCoordinator
+    let integrity = PhotoParseIntegrityService()
 
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         let trimmedHint = dishHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let instruction = trimmedHint.isEmpty
             ? "Inspect the entire meal photo and identify every distinct physical food serving exactly once. Preserve regional Indian names, include breads, rice, dal, sabji, curries and sides when visible, and never list alternative guesses as separate foods."
             : trimmedHint
-        let parse = try await understanding.parse(text: instruction, image: image)
+        let providerParse = try await understanding.parse(text: instruction, image: image)
+        let parse = integrity.audit(providerParse)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
 
         var result = await coordinator.analyse(
@@ -244,6 +246,39 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
             at: 0
         )
         return result
+    }
+}
+
+/// Structured vision still produces hypotheses. Countable foods must carry
+/// visual count evidence or remain explicitly reviewable instead of receiving
+/// an unjustified high-confidence default of one.
+struct PhotoParseIntegrityService: Sendable {
+    func audit(_ parse: MealParseResult) -> MealParseResult {
+        var audited = parse
+        var questions = audited.clarificationQuestions
+        audited.detectedItems = audited.detectedItems.map { item in
+            guard isVisuallyCountable(item) else { return item }
+            let evidence = item.quantityEvidence?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            guard evidence.isEmpty else { return item }
+
+            var reviewed = item
+            reviewed.confidence = min(reviewed.confidence, 0.74)
+            reviewed.requiresClarification = true
+            let name = reviewed.regionalName ?? reviewed.originalText
+            let question = "How many \(name) were visible?"
+            if !questions.contains(question) { questions.append(question) }
+            return reviewed
+        }
+        audited.clarificationQuestions = questions
+        audited.confidence = min(audited.confidence, audited.detectedItems.map(\.confidence).min() ?? audited.confidence)
+        return audited
+    }
+
+    private func isVisuallyCountable(_ item: ParsedFoodItem) -> Bool {
+        if item.category == .egg || item.category == .bread { return true }
+        let unit = item.unit?.lowercased() ?? ""
+        return ["whole", "whole egg", "egg", "eggs", "piece", "pieces", "roti", "chapati", "naan", "paratha"]
+            .contains(unit)
     }
 }
 

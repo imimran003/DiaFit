@@ -15,6 +15,8 @@ assert.equal(parsed.detectedItems.length, 3);
 assert.equal(parsed.detectedItems[0].canonicalSearchName, 'mung bean sprouts');
 assert.equal(parsed.detectedItems[1].quantity, 3);
 assert.equal(parsed.detectedItems[1].preparationMethod, 'boiled');
+assert.equal(parsed.detectedItems[1].category, 'egg');
+assert.equal(Object.hasOwn(parsed.detectedItems[1], 'quantityEvidence'), true);
 assert.deepEqual(parsed.detectedItems[2].exclusions, ['milk', 'cream', 'sugar']);
 assert.equal(Object.hasOwn(parsed.detectedItems[0], 'calories'), false);
 const genericWhey = await new MockMealParser().parse({ text: 'whey protein shake' });
@@ -67,6 +69,22 @@ assert.equal(geminiImageRequest.contents[0].parts[1].inlineData.data, 'aGVsbG8='
 assert.equal(geminiImageRequest.generationConfig.responseMimeType, 'application/json');
 assert.deepEqual(geminiImageRequest.generationConfig.responseJsonSchema, MEAL_PARSE_SCHEMA);
 assert.equal(JSON.stringify(geminiImageRequest).includes('caloriesKcal'), false);
+assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('quantityEvidence'), true);
+
+const uncataloguedCurry = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [{
+    ...parsed.detectedItems[0],
+    originalText: 'Aloo sabji',
+    canonicalSearchName: 'potato curry',
+    regionalName: 'aloo sabji',
+    category: 'vegetarianCurry',
+    quantity: 1,
+    unit: 'bowl'
+  }]
+});
+assert.equal(uncataloguedCurry.detectedItems[0].category, 'vegetarianCurry');
+validateMealParseResult(uncataloguedCurry);
 
 const duplicateRiceResult = {
   ...parsed,
