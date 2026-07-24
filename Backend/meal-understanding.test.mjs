@@ -71,6 +71,8 @@ assert.deepEqual(geminiImageRequest.generationConfig.responseJsonSchema, MEAL_PA
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('AI nutrition estimates must include'), true);
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('quantityEvidence'), true);
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('packagedLabelEvidence'), true);
+assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('top-to-bottom and left-to-right'), true);
+assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('separate containers'), true);
 
 const packagedProduct = sanitizeMealParseResult({
   ...parsed,

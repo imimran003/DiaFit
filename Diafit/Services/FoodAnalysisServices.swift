@@ -224,14 +224,25 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
     let understanding: any FoodUnderstandingService
     let coordinator: HybridMealAnalysisCoordinator
     let integrity = PhotoParseIntegrityService()
+    let inventoryVerification = PhotoInventoryVerificationService()
 
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         let trimmedHint = dishHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let instruction = trimmedHint.isEmpty
             ? "Inspect the entire meal photo and identify every distinct physical food serving exactly once. Preserve regional Indian names, include breads, rice, dal, sabji, curries and sides when visible, and never list alternative guesses as separate foods."
             : trimmedHint
-        let providerParse = try await understanding.parse(text: instruction, image: image)
-        let parse = integrity.audit(providerParse)
+        let primaryParse = try await understanding.parse(text: instruction, image: image)
+        let selectedParse: MealParseResult
+        if inventoryVerification.needsIndependentCheck(primaryParse),
+           let verifiedParse = try? await understanding.parse(
+               text: inventoryVerification.prompt(after: primaryParse),
+               image: image
+           ) {
+            selectedParse = inventoryVerification.preferred(primary: primaryParse, verified: verifiedParse)
+        } else {
+            selectedParse = primaryParse
+        }
+        let parse = integrity.audit(selectedParse)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
 
         var result = await coordinator.analyse(
@@ -246,6 +257,36 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
             at: 0
         )
         return result
+    }
+}
+
+/// A whole plate can be nutritionally complete while still being visually
+/// incomplete. Sparse two-component interpretations receive one independent
+/// inventory check. The second pass must return the complete plate and only
+/// replaces the first when it finds more distinct physical servings.
+struct PhotoInventoryVerificationService: Sendable {
+    func needsIndependentCheck(_ parse: MealParseResult) -> Bool {
+        parse.detectedItems.count == 2
+    }
+
+    func prompt(after parse: MealParseResult) -> String {
+        let firstPass = parse.detectedItems
+            .map { $0.regionalName ?? $0.originalText }
+            .joined(separator: ", ")
+        return """
+        Re-inspect the entire food photograph independently. The first inventory found: \(firstPass). \
+        Return a complete corrected inventory, not only additions. Scan the main plate and every separate bowl \
+        from top to bottom and left to right. Check separately for grains, breads or stacked flatbreads, dal or \
+        other legumes, dry vegetables or sabzi, wet curries, protein foods, sides, and drinks. Distinguish a \
+        separate lentil dish from generic vegetable soup when the visual evidence supports it. Preserve visible \
+        counts and regional names. Include each physical serving exactly once and do not invent food hidden from view.
+        """
+    }
+
+    func preferred(primary: MealParseResult, verified: MealParseResult) -> MealParseResult {
+        guard !verified.detectedItems.isEmpty,
+              verified.detectedItems.count >= primary.detectedItems.count else { return primary }
+        return verified
     }
 }
 
@@ -418,6 +459,29 @@ struct PhotoAnalysisOrchestrator: Sendable {
                 at: 0
             )
         } else if localCompleteness.isComplete {
+            let liveRecognitionUnavailable = remote == nil || remoteFailed
+            if liveRecognitionUnavailable,
+               !isSafeFallback(candidates: candidates, result: result, memberDescription: trimmedDescription) {
+                var unresolved = local.makeAnalysis(
+                    description: "",
+                    imageReference: image.imageReference,
+                    imageType: .originalPhoto
+                )
+                unresolved.recognitionModelVersion = "On-device whole-image suggestions withheld"
+                unresolved.warnings.insert(
+                    remoteFailed
+                        ? "Live recognition is unavailable. The private whole-image suggestions were too broad to identify this plate safely."
+                        : "Secure AI recognition is not configured. The private whole-image suggestions were too broad to identify this plate safely.",
+                    at: 0
+                )
+                FoodLoggingDiagnostics.record("photo.classification", fields: [
+                    "route": "unsafe-on-device-suggestions-withheld",
+                    "candidateCount": String(candidates.count),
+                    "remoteAttempted": String(remote != nil),
+                    "remoteFailed": String(remoteFailed)
+                ])
+                return unresolved
+            }
             if remoteFailed {
                 result.overallConfidence = .low
                 result.warnings.insert(
@@ -468,6 +532,18 @@ struct PhotoAnalysisOrchestrator: Sendable {
             "missing": completeness.evaluate(result).missingRequirements.joined(separator: ",")
         ])
         return result
+    }
+
+    private func isSafeFallback(
+        candidates: [FoodImageCandidate],
+        result: MealAnalysisResult,
+        memberDescription: String
+    ) -> Bool {
+        if !memberDescription.isEmpty { return true }
+        guard candidates.count == 1,
+              result.detectedItems.count == 1,
+              let candidate = candidates.first else { return false }
+        return candidate.confidence >= 0.90
     }
 
     private func confidenceLevel(for score: Double) -> ConfidenceLevel {
@@ -962,7 +1038,7 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
         if items.isEmpty && imageType == .originalPhoto {
             questions.append(ClarificationQuestion(
                 id: UUID(), relatedFoodItemId: nil,
-                question: "What is the main dish in this photo?",
+                question: "What food or main dish is in this photo?",
                 answerType: .freeText, options: [], impactLevel: .high, answer: nil
             ))
         }
