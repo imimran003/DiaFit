@@ -1775,6 +1775,63 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertNotNil(store.persistenceIssue)
     }
 
+    func testDailyEnergyBalanceReportsDeficitSurplusAndBalancedWithoutDoubleScaling() {
+        let deficit = DailyEnergyBalance.calculate(
+            intakeKilocalories: 1_650,
+            burnedKilocalories: 2_120.4
+        )
+        XCTAssertEqual(deficit?.intakeKilocalories, 1_650)
+        XCTAssertEqual(deficit?.burnedKilocalories, 2_120)
+        XCTAssertEqual(deficit?.differenceKilocalories, 470)
+        XCTAssertEqual(deficit?.kind, .deficit)
+
+        let surplus = DailyEnergyBalance.calculate(
+            intakeKilocalories: 2_300,
+            burnedKilocalories: 2_050
+        )
+        XCTAssertEqual(surplus?.differenceKilocalories, 250)
+        XCTAssertEqual(surplus?.kind, .surplus)
+
+        let balanced = DailyEnergyBalance.calculate(
+            intakeKilocalories: 2_000,
+            burnedKilocalories: 2_000
+        )
+        XCTAssertEqual(balanced?.differenceKilocalories, 0)
+        XCTAssertEqual(balanced?.kind, .balanced)
+    }
+
+    func testDailyEnergyBalanceRequiresCompleteFiniteBurnData() {
+        XCTAssertNil(DailyEnergyBalance.calculate(intakeKilocalories: 1_800, burnedKilocalories: nil))
+        XCTAssertNil(DailyEnergyBalance.calculate(intakeKilocalories: 1_800, burnedKilocalories: -.infinity))
+        XCTAssertNil(DailyEnergyBalance.calculate(intakeKilocalories: 1_800, burnedKilocalories: -1))
+
+        let incomplete = HealthActivitySummary(
+            dayStart: .now,
+            steps: 8_400,
+            walkingRunningKilometres: 6.2,
+            activeEnergyKilocalories: 510,
+            restingEnergyKilocalories: nil,
+            fetchedAt: .now
+        )
+        XCTAssertNil(incomplete.totalEnergyBurnedKilocalories)
+        XCTAssertTrue(incomplete.hasAnyData)
+    }
+
+    func testHealthActivitySummaryAddsActiveAndRestingEnergyExactlyOnce() {
+        let summary = HealthActivitySummary(
+            dayStart: .now,
+            steps: 10_250,
+            walkingRunningKilometres: 7.85,
+            activeEnergyKilocalories: 620.25,
+            restingEnergyKilocalories: 1_540.5,
+            fetchedAt: .now
+        )
+
+        XCTAssertEqual(summary.totalEnergyBurnedKilocalories ?? -1, 2_160.75, accuracy: 0.001)
+        XCTAssertEqual(summary.steps, 10_250)
+        XCTAssertEqual(summary.walkingRunningKilometres ?? -1, 7.85, accuracy: 0.001)
+    }
+
     private func fixtureFoodImage() -> PreparedFoodImage {
         PreparedFoodImage(
             data: Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5WQAAAABJRU5ErkJggg==")!,

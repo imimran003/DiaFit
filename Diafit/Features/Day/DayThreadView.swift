@@ -3,6 +3,7 @@ import SwiftUI
 struct DayThreadView: View {
     @EnvironmentObject private var store: DiaryStore
     @Environment(\.appDependencies) private var dependencies
+    @Environment(\.scenePhase) private var scenePhase
     let dayID: Day.ID
     @Binding var isAtlasOpen: Bool
     let mealNamespace: Namespace.ID
@@ -16,6 +17,7 @@ struct DayThreadView: View {
     @State private var showsGlucoseEntry = false
     @State private var showsGlucoseHistory = false
     @State private var glucoseDraft: GlucoseDraft?
+    @State private var healthActivityState: HealthActivityViewState = .disconnected
     @FocusState private var composerFocused: Bool
 
     private var day: Day? { store.day(id: dayID) }
@@ -26,7 +28,15 @@ struct DayThreadView: View {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
                         LazyVStack(spacing: 18) {
-                            DayHeader(day: day, openAtlas: openAtlas, logGlucose: { showsGlucoseEntry = true }, openGlucoseHistory: { showsGlucoseHistory = true })
+                            DayHeader(
+                                day: day,
+                                healthActivityState: healthActivityState,
+                                openAtlas: openAtlas,
+                                connectHealth: connectHealth,
+                                refreshHealth: refreshHealth,
+                                logGlucose: { showsGlucoseEntry = true },
+                                openGlucoseHistory: { showsGlucoseHistory = true }
+                            )
                                 .padding(.bottom, day.meals.isEmpty ? 0 : 4)
                                 // Preserve a large accessibility presentation
                                 // without allowing editorial display type to
@@ -179,6 +189,51 @@ struct DayThreadView: View {
             Button("Cancel", role: .cancel) { mealPendingDeletion = nil }
         } message: { meal in
             Text("\(meal.title) will be removed from this day. This can’t be undone in the current session.")
+        }
+        .task(id: dayID) {
+            await loadHealthActivity()
+        }
+        .onChange(of: scenePhase) { _, phase in
+            guard phase == .active, dependencies.healthActivity.hasRequestedAccess else { return }
+            Task { await loadHealthActivity() }
+        }
+    }
+
+    private func connectHealth() {
+        Task { @MainActor in
+            healthActivityState = .loading
+            do {
+                try await dependencies.healthActivity.requestAccess()
+                await loadHealthActivity()
+            } catch {
+                healthActivityState = dependencies.healthActivity.isAvailable
+                    ? .failed("Health access wasn’t completed. You can try again.")
+                    : .unavailable
+            }
+        }
+    }
+
+    private func refreshHealth() {
+        Task { await loadHealthActivity() }
+    }
+
+    @MainActor
+    private func loadHealthActivity() async {
+        let health = dependencies.healthActivity
+        guard health.isAvailable else {
+            healthActivityState = .unavailable
+            return
+        }
+        guard health.hasRequestedAccess else {
+            healthActivityState = .disconnected
+            return
+        }
+        healthActivityState = .loading
+        do {
+            let date = store.day(id: dayID)?.date ?? .now
+            healthActivityState = .ready(try await health.summary(for: date, calendar: .autoupdatingCurrent))
+        } catch {
+            healthActivityState = .failed("Apple Health data couldn’t be refreshed.")
         }
     }
 
@@ -345,7 +400,10 @@ struct DayThreadView: View {
 
 private struct DayHeader: View {
     let day: Day
+    let healthActivityState: HealthActivityViewState
     let openAtlas: () -> Void
+    let connectHealth: () -> Void
+    let refreshHealth: () -> Void
     let logGlucose: () -> Void
     let openGlucoseHistory: () -> Void
 
@@ -383,6 +441,12 @@ private struct DayHeader: View {
             }
 
             DailyRhythm(day: day)
+            EnergyAndMovementSection(
+                intakeKilocalories: day.totalEnergy,
+                state: healthActivityState,
+                connect: connectHealth,
+                refresh: refreshHealth
+            )
             GlucoseSummaryStrip(
                 day: day,
                 preferredUnit: GlucoseUnit(rawValue: UserDefaults.standard.string(forKey: "diafit.glucose.preferredUnit") ?? "") ?? .milligramsPerDeciliter,
@@ -391,6 +455,303 @@ private struct DayHeader: View {
             )
         }
         .padding(.top, 8)
+    }
+}
+
+private enum HealthActivityViewState: Equatable {
+    case disconnected
+    case loading
+    case ready(HealthActivitySummary)
+    case unavailable
+    case failed(String)
+}
+
+private struct EnergyAndMovementSection: View {
+    let intakeKilocalories: Int
+    let state: HealthActivityViewState
+    let connect: () -> Void
+    let refresh: () -> Void
+
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 13) {
+            HStack {
+                Text("ENERGY & MOVEMENT")
+                    .font(DiafitType.caption.weight(.bold))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.quietInk)
+                Spacer()
+                trailingAction
+            }
+
+            switch state {
+            case .disconnected:
+                connectionPrompt
+            case .loading:
+                loading
+            case .ready(let summary):
+                activity(summary)
+            case .unavailable:
+                statusMessage("Apple Health isn’t available on this device.")
+            case .failed(let message):
+                failure(message)
+            }
+        }
+        .padding(.vertical, 3)
+    }
+
+    @ViewBuilder
+    private var trailingAction: some View {
+        switch state {
+        case .disconnected:
+            Button("Connect Health", action: connect)
+                .font(DiafitType.caption.weight(.semibold))
+                .foregroundStyle(Color.ink)
+                .frame(minHeight: 44)
+                .accessibilityHint("Choose which activity information Diafit may read")
+        case .ready, .failed:
+            Button(action: refresh) {
+                Image(systemName: "arrow.clockwise")
+                    .font(.system(size: 14, weight: .semibold))
+                    .frame(width: 44, height: 44)
+            }
+            .foregroundStyle(Color.ink)
+            .accessibilityLabel("Refresh Apple Health activity")
+        case .loading:
+            ProgressView()
+                .controlSize(.small)
+                .frame(width: 44, height: 44)
+                .accessibilityLabel("Refreshing Apple Health activity")
+        case .unavailable:
+            EmptyView()
+        }
+    }
+
+    private var connectionPrompt: some View {
+        Button(action: connect) {
+            HStack(spacing: 13) {
+                Image(systemName: "heart.text.square")
+                    .font(.system(size: 17, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 40, height: 40)
+                    .background(Color.lime.opacity(0.58), in: Circle())
+                VStack(alignment: .leading, spacing: 3) {
+                    Text("Add activity from Apple Health")
+                        .font(DiafitType.body.weight(.semibold))
+                        .foregroundStyle(Color.ink)
+                    Text("Steps, distance, calories burned, and your daily balance.")
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Color.quietInk)
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(PressableStyle(pressedScale: 0.98))
+        .accessibilityLabel("Connect Apple Health")
+        .accessibilityHint("Reads steps, distance, active energy, and resting energy")
+    }
+
+    private var loading: some View {
+        HStack(spacing: 12) {
+            ProgressView()
+                .controlSize(.small)
+            Text("Refreshing today’s movement…")
+                .font(DiafitType.caption)
+                .foregroundStyle(Color.quietInk)
+        }
+        .frame(minHeight: 52, alignment: .leading)
+        .accessibilityElement(children: .combine)
+    }
+
+    @ViewBuilder
+    private func activity(_ summary: HealthActivitySummary) -> some View {
+        let balance = DailyEnergyBalance.calculate(
+            intakeKilocalories: intakeKilocalories,
+            burnedKilocalories: summary.totalEnergyBurnedKilocalories
+        )
+
+        VStack(alignment: .leading, spacing: 12) {
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(spacing: 0) {
+                        energyRows(summary: summary, balance: balance)
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 0) {
+                        energyColumns(summary: summary, balance: balance)
+                    }
+                }
+            }
+
+            HStack(spacing: 10) {
+                MovementLabel(
+                    icon: "figure.walk",
+                    text: summary.steps.map { $0.formatted() + " steps" } ?? "Steps —"
+                )
+                Text("·").foregroundStyle(Color.rule)
+                MovementLabel(
+                    icon: "point.topleft.down.to.point.bottomright.curvepath",
+                    text: summary.walkingRunningKilometres.map { $0.formatted(.number.precision(.fractionLength(1))) + " km" } ?? "Distance —"
+                )
+            }
+            .font(DiafitType.caption)
+            .accessibilityElement(children: .ignore)
+            .accessibilityIdentifier("health-summary-movement")
+            .accessibilityLabel(movementAccessibilityLabel(summary))
+
+            if summary.totalEnergyBurnedKilocalories == nil {
+                Text(summary.hasAnyData
+                     ? "Daily balance needs both active and resting energy from Apple Health."
+                     : "No Apple Health activity was found for this day.")
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Burned combines active and resting energy. Balance is intake minus burned.")
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func energyColumns(summary: HealthActivitySummary, balance: DailyEnergyBalance?) -> some View {
+        HealthMetric(label: "Eaten", value: "\(intakeKilocalories)", unit: "kcal", identifier: "health-summary-eaten")
+        SummaryDivider()
+        HealthMetric(
+            label: "Burned",
+            value: summary.totalEnergyBurnedKilocalories.map { "\(Int($0.rounded()))" } ?? "—",
+            unit: summary.totalEnergyBurnedKilocalories == nil ? "" : "kcal",
+            identifier: "health-summary-burned"
+        )
+        SummaryDivider()
+        HealthMetric(
+            label: balance?.kind.displayName ?? "Balance",
+            value: balance.map { "\($0.differenceKilocalories)" } ?? "—",
+            unit: balance == nil ? "" : "kcal",
+            identifier: "health-summary-balance"
+        )
+    }
+
+    @ViewBuilder
+    private func energyRows(summary: HealthActivitySummary, balance: DailyEnergyBalance?) -> some View {
+        HealthMetric(label: "Eaten", value: "\(intakeKilocalories)", unit: "kcal", identifier: "health-summary-eaten", horizontal: true)
+        Divider().overlay(Color.rule.opacity(0.65))
+        HealthMetric(
+            label: "Burned",
+            value: summary.totalEnergyBurnedKilocalories.map { "\(Int($0.rounded()))" } ?? "—",
+            unit: summary.totalEnergyBurnedKilocalories == nil ? "" : "kcal",
+            identifier: "health-summary-burned",
+            horizontal: true
+        )
+        Divider().overlay(Color.rule.opacity(0.65))
+        HealthMetric(
+            label: balance?.kind.displayName ?? "Balance",
+            value: balance.map { "\($0.differenceKilocalories)" } ?? "—",
+            unit: balance == nil ? "" : "kcal",
+            identifier: "health-summary-balance",
+            horizontal: true
+        )
+    }
+
+    private func statusMessage(_ message: String) -> some View {
+        Text(message)
+            .font(DiafitType.caption)
+            .foregroundStyle(Color.quietInk)
+            .frame(minHeight: 44, alignment: .leading)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func movementAccessibilityLabel(_ summary: HealthActivitySummary) -> String {
+        let steps = summary.steps.map { "\($0.formatted()) steps" } ?? "Steps unavailable"
+        let distance = summary.walkingRunningKilometres.map {
+            "\($0.formatted(.number.precision(.fractionLength(1)))) kilometers"
+        } ?? "Distance unavailable"
+        return "\(steps), \(distance)"
+    }
+
+    private func failure(_ message: String) -> some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(message)
+                .font(DiafitType.caption)
+                .foregroundStyle(Color.quietInk)
+            Button("Try again", action: refresh)
+                .font(DiafitType.caption.weight(.semibold))
+                .foregroundStyle(Color.ink)
+                .frame(minHeight: 44)
+        }
+    }
+}
+
+private struct HealthMetric: View {
+    let label: String
+    let value: String
+    let unit: String
+    let identifier: String
+    var horizontal = false
+
+    var body: some View {
+        Group {
+            if horizontal {
+                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    Text(label)
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                    Spacer(minLength: 12)
+                    valueView
+                }
+                .padding(.vertical, 10)
+            } else {
+                VStack(alignment: .leading, spacing: 5) {
+                    Text(label)
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                        .lineLimit(1)
+                        .minimumScaleFactor(0.75)
+                    valueView
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(unit.isEmpty ? "\(label), unavailable" : "\(label), \(value) kilocalories")
+        .accessibilityIdentifier(identifier)
+    }
+
+    private var valueView: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 4) {
+            Text(value)
+                .font(DiafitType.metric)
+                .fontWeight(.semibold)
+                .monospacedDigit()
+            if !unit.isEmpty {
+                Text(unit)
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+            }
+        }
+        .foregroundStyle(Color.ink)
+        .lineLimit(1)
+        .minimumScaleFactor(0.72)
+    }
+}
+
+private struct MovementLabel: View {
+    let icon: String
+    let text: String
+
+    var body: some View {
+        Label(text, systemImage: icon)
+            .foregroundStyle(Color.quietInk)
+            .lineLimit(1)
+            .minimumScaleFactor(0.8)
     }
 }
 

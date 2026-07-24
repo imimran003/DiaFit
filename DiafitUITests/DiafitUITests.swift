@@ -17,6 +17,21 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["daily-summary-calories"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["daily-summary-carbohydrates"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["daily-summary-protein"].exists)
+        XCTAssertTrue(app.buttons["Connect Apple Health"].exists)
+    }
+
+    func testHealthActivityFixtureShowsBurnedMovementAndDailyDeficit() throws {
+        app.terminate()
+        app.launchArguments = ["UITestMode", "UITestHealthActivityFixture"]
+        app.launch()
+
+        XCTAssertTrue(app.descendants(matching: .any)["health-summary-eaten"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["health-summary-burned"].label.contains("2000"))
+        XCTAssertTrue(app.descendants(matching: .any)["health-summary-balance"].label.contains("Deficit"))
+        XCTAssertTrue(app.descendants(matching: .any)["health-summary-balance"].label.contains("2000"))
+        let movement = app.descendants(matching: .any)["health-summary-movement"]
+        XCTAssertTrue(movement.label.contains("steps"))
+        XCTAssertTrue(movement.label.contains("kilometers"))
     }
 
     func testMealAtlasOpensAndCloses() throws {

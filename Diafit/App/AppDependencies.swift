@@ -18,6 +18,7 @@ struct AppDependencies: Sendable {
     let clarification: any MealClarificationService
     let userFoodMemory: any UserFoodMemoryRepository
     let packagedFoods: any PackagedFoodRepository
+    let healthActivity: any HealthActivityProviding
 
     static let local = makeRuntime()
 
@@ -61,6 +62,18 @@ struct AppDependencies: Sendable {
         let photoRemote: (any FoodRecognitionService)? = backendUnderstanding.map {
             StructuredPhotoRecognitionService(understanding: $0, coordinator: coordinator)
         }
+        let healthActivity: any HealthActivityProviding
+        #if DEBUG
+        if arguments.contains("UITestHealthActivityFixture") {
+            healthActivity = FixtureHealthActivityService.connected
+        } else if arguments.contains("UITestMode") {
+            healthActivity = FixtureHealthActivityService.disconnected
+        } else {
+            healthActivity = HealthKitActivityService()
+        }
+        #else
+        healthActivity = HealthKitActivityService()
+        #endif
 
         return AppDependencies(
             photoAnalysis: PhotoAnalysisOrchestrator(
@@ -80,7 +93,8 @@ struct AppDependencies: Sendable {
             ),
             clarification: DefaultMealClarificationService(),
             userFoodMemory: memory,
-            packagedFoods: packaged
+            packagedFoods: packaged,
+            healthActivity: healthActivity
         )
     }
 }
