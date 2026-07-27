@@ -18,14 +18,18 @@ quantity parser, supplement profile, or request created before confirmation.
 `FoodUnderstandingPipeline` runs synchronously and independently of any remote
 service, so the core flow remains testable offline:
 
-1. Unicode/case input normalisation.
+1. Unicode/case input normalisation plus shared Romanised-token
+   canonicalisation (`daal` → `dal`, `chaawal` → `chawal`, common plural
+   flatbreads, and related spelling variants). The same tokens are used by
+   exact aliases, fuzzy matching and AI-result normalisation.
 2. Tokenisation that preserves decimal quantities.
 3. Longest-span alias matching against the curated catalog.
 4. Non-overlapping compound-meal decomposition; connector words are never
    consumed, so `with`, `and`, `plus`, `along with`, and comma-separated lists
    can contain multiple foods.
 5. Quantity and unit extraction (digits, words, fractions, pair/couple, bowls,
-   eggs, scoops, cups, glasses, pieces, slices, tablespoons, teaspoons, grams).
+   eggs, scoops, cups, glasses, katori, pieces, slices, tablespoons, teaspoons,
+   grams).
 6. Preparation and modifier extraction.
 7. Canonical normalisation and confidence scoring.
 8. Supplement profile creation, including scoop grams, flavour, and water/milk

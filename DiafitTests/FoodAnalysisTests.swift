@@ -480,7 +480,7 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertNotNil(result.visualRequest?.cacheKey)
     }
 
-    func testImageOnlyPhotoAnalysisUsesSingleHighConfidenceOfflineFoodSafely() async throws {
+    func testImageOnlyPhotoAnalysisDoesNotTreatWholeImageLabelAsCompleteWithoutStructuredVision() async throws {
         let classifier = StubFoodImageClassificationService(candidates: [
             FoodImageCandidate(canonicalFoodId: "banana", sourceLabel: "banana", confidence: 0.94)
         ])
@@ -492,15 +492,24 @@ final class FoodAnalysisTests: XCTestCase {
 
         let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
 
-        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["banana"])
-        XCTAssertFalse(result.mealTotals.isEmpty)
-        XCTAssertNotNil(result.mealTotals.caloriesKcal)
-        XCTAssertNotNil(result.mealTotals.carbohydrateGrams)
-        XCTAssertNotNil(result.mealTotals.fibreGrams)
-        XCTAssertNotNil(result.mealTotals.proteinGrams)
-        XCTAssertEqual(result.nutritionValidation?.isApproved, true)
-        XCTAssertTrue(result.clarificationQuestions.allSatisfy { $0.answerType != .freeText })
+        XCTAssertTrue(result.detectedItems.isEmpty)
+        XCTAssertTrue(result.mealTotals.isEmpty)
+        XCTAssertTrue(result.clarificationQuestions.contains { $0.answerType == .freeText })
         XCTAssertEqual(result.imageType, .originalPhoto)
+    }
+
+    func testMasoorDaalWithRotiKeepsBothComponentsAndExplicitQuantities() async throws {
+        let result = await HybridMealAnalysisCoordinator(
+            router: DefaultFoodResolutionRouter(catalog: catalog)
+        ).analyse(text: "I had 2 roti and 1 katori masoor daal")
+
+        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["roti", "masoor-dal"]))
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 2)
+        let dal = try XCTUnwrap(result.detectedItems.first(where: { $0.canonicalFoodId == "masoor-dal" }))
+        XCTAssertEqual(dal.quantity, 1)
+        XCTAssertEqual(dal.servingUnit, .katori)
+        XCTAssertFalse(dal.nutrition.isEmpty)
+        XCTAssertFalse(result.mealTotals.isEmpty)
     }
 
     func testSabudanaPhotoNamesAndCommonMisspellingsResolveToUsableNutrition() throws {
@@ -651,7 +660,7 @@ final class FoodAnalysisTests: XCTestCase {
         let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
 
         let parseCount = await counter.value
-        XCTAssertEqual(parseCount, 1)
+        XCTAssertEqual(parseCount, 2)
         XCTAssertEqual(result.detectedItems.map { $0.canonicalFoodId }, ["sabudana-khichdi"])
         XCTAssertFalse(result.mealTotals.isEmpty)
         XCTAssertEqual(result.nutritionValidation?.isApproved, true)
@@ -750,6 +759,50 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
     }
 
+    func testStructuredVisionRechecksSingleGenericSoupAndRecoversVisiblePlate() async throws {
+        let generic = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Vegetable soup", canonicalSearchName: "vegetable soup", category: .vegetarianCurry, quantity: 1, unit: "cup", confidence: 0.78)
+            ],
+            unresolvedItems: [],
+            mealDescription: "Vegetable soup",
+            clarificationQuestions: [],
+            confidence: 0.78
+        )
+        let complete = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Three boiled eggs", canonicalSearchName: "hard-boiled egg", regionalName: "boiled anda", category: .egg, quantity: 3, unit: "whole eggs", quantityEvidence: "visible pieces equal three whole eggs", preparationMethod: "boiled", confidence: 0.94),
+                ParsedFoodItem(originalText: "Two rotis", canonicalSearchName: "whole wheat flatbread", regionalName: "roti", category: .bread, quantity: 2, unit: "pieces", quantityEvidence: "two visible roti layers", preparationMethod: "pan-cooked", confidence: 0.94),
+                ParsedFoodItem(originalText: "Mixed vegetable sabzi", canonicalSearchName: "mixed vegetable curry", regionalName: "sabzi", category: .vegetarianCurry, quantity: 1, unit: "bowl", quantityEvidence: "one separate bowl", confidence: 0.86)
+            ],
+            unresolvedItems: [],
+            mealDescription: "Boiled eggs, rotis and vegetable sabzi",
+            clarificationQuestions: [],
+            confidence: 0.86
+        )
+        let understanding = SequentialMealUnderstanding(results: [generic, complete])
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router)
+        )
+
+        let result = try await remote.analyse(fixtureFoodImage(), dishHint: nil)
+        let callCount = await understanding.callCount
+
+        XCTAssertEqual(callCount, 2)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.category == .egg })?.quantity, 3)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.category == .bread })?.quantity, 2)
+        XCTAssertNotNil(result.detectedItems.first(where: { $0.category == .vegetarianCurry }))
+        XCTAssertFalse(result.detectedItems.contains { $0.displayName.localizedCaseInsensitiveContains("soup") })
+        XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
+    }
+
     func testRemoteFailureDoesNotPresentMultipleWholeImageLabelsAsACompletePlate() async {
         let orchestrator = PhotoAnalysisOrchestrator(
             remote: FailingFoodRecognitionService(),
@@ -765,6 +818,22 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems.isEmpty)
         XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("live recognition") })
         XCTAssertTrue(result.clarificationQuestions.contains { $0.question.localizedCaseInsensitiveContains("food") })
+    }
+
+    func testRemoteFailureDoesNotPresentSingleGenericSoupLabelAsACompletePlate() async {
+        let orchestrator = PhotoAnalysisOrchestrator(
+            remote: FailingFoodRecognitionService(),
+            onDevice: StubFoodImageClassificationService(candidates: [
+                FoodImageCandidate(canonicalFoodId: "vegetable-soup", sourceLabel: "vegetable soup", confidence: 0.97)
+            ]),
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        )
+
+        let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
+
+        XCTAssertTrue(result.detectedItems.isEmpty)
+        XCTAssertFalse(result.nutritionValidation?.isApproved == true)
+        XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("live recognition") })
     }
 
     func testIndependentPhotoInventoryCanCorrectTwoWrongLabelsWithoutAddingItems() {
@@ -1076,7 +1145,7 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
     }
 
-    func testCompleteOnDeviceRecognitionDoesNotDependOnBackendAvailability() async throws {
+    func testOnDeviceWholeImageSuggestionIsWithheldWhenBackendFails() async throws {
         let classifier = StubFoodImageClassificationService(candidates: [
             FoodImageCandidate(canonicalFoodId: "banana", sourceLabel: "banana", confidence: 0.9)
         ])
@@ -1088,11 +1157,10 @@ final class FoodAnalysisTests: XCTestCase {
 
         let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
 
-        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["banana"])
-        XCTAssertFalse(result.mealTotals.isEmpty)
-        XCTAssertTrue(result.assumptions.contains { $0.localizedCaseInsensitiveContains("on-device") })
-        XCTAssertEqual(result.overallConfidence, .low)
-        XCTAssertTrue(result.clarificationQuestions.contains { $0.question.contains("Live recognition is unavailable") })
+        XCTAssertTrue(result.detectedItems.isEmpty)
+        XCTAssertTrue(result.mealTotals.isEmpty)
+        XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("live recognition") })
+        XCTAssertTrue(result.clarificationQuestions.contains { $0.answerType == .freeText })
     }
 
     func testLowConfidenceOnDeviceLabelEscalatesToStructuredPhotoInterpretation() async throws {
@@ -1134,7 +1202,7 @@ final class FoodAnalysisTests: XCTestCase {
         let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
         let parseCount = await counter.value
 
-        XCTAssertEqual(parseCount, 1)
+        XCTAssertEqual(parseCount, 2)
         XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["sabudana-khichdi"])
         XCTAssertTrue(result.recognitionModelVersion?.contains("structured") == true)
     }

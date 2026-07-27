@@ -227,8 +227,25 @@ private struct NormalizedFoodInput: Sendable {
     let tokens: [String]
 }
 
-private enum FoodInputNormalizer {
-    static func normalize(_ value: String) -> NormalizedFoodInput {
+enum FoodInputNormalizer {
+    /// Canonicalises common Romanised spelling variants at the token layer so
+    /// every catalog alias, quantity parser and fuzzy matcher sees the same
+    /// language. This is deliberately linguistic—not a list of meal phrases.
+    private static let canonicalTokens: [String: String] = [
+        "daal": "dal",
+        "daals": "dal",
+        "dals": "dal",
+        "chaawal": "chawal",
+        "paani": "pani",
+        "subzi": "sabzi",
+        "chhole": "chole",
+        "khichadi": "khichdi",
+        "rotis": "roti",
+        "chapatis": "chapati",
+        "phulkas": "phulka"
+    ]
+
+    fileprivate static func normalize(_ value: String) -> NormalizedFoodInput {
         let tokens = tokens(for: value)
         return NormalizedFoodInput(text: tokens.joined(separator: " "), tokens: tokens)
     }
@@ -255,7 +272,7 @@ private enum FoodInputNormalizer {
             }
         }
         if !buffer.isEmpty { result.append(buffer) }
-        return result
+        return result.map { canonicalTokens[$0] ?? $0 }
     }
 }
 
@@ -271,6 +288,7 @@ private enum QuantityExtractor {
         "egg": .wholeEgg, "eggs": .wholeEgg,
         "serving": .serving, "servings": .serving,
         "bowl": .mediumBowl, "bowls": .mediumBowl,
+        "katori": .katori, "katoris": .katori,
         "cup": .cup, "cups": .cup,
         "glass": .glass, "glasses": .glass,
         "piece": .piece, "pieces": .piece,

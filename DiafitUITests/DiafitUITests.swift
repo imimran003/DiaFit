@@ -106,6 +106,19 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Confirm estimate"].waitForExistence(timeout: 2))
     }
 
+    func testMasoorDaalCompoundEntryShowsRotiAndDalBeforeConfirmation() throws {
+        submitFoodNote("I had 2 roti and 1 katori masoor daal")
+
+        XCTAssertTrue(app.staticTexts["Roti"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Masoor dal"].exists)
+        XCTAssertFalse(metricLabel("meal-total-kcal").contains("—"))
+        XCTAssertFalse(metricLabel("meal-total-carbs").contains("—"))
+        XCTAssertFalse(metricLabel("meal-total-protein").contains("—"))
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.exists)
+        XCTAssertTrue(confirm.isEnabled)
+    }
+
     func testFoodQuantitiesAndSugarExclusionStayInFoodRoute() throws {
         submitFoodNote("Sprouts with 2 walnut and 2 almonds and 2 whole boiled eggs with 2 whole wheat bread slice and 1 milk tea without sugar")
 

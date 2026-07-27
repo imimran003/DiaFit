@@ -261,12 +261,12 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
 }
 
 /// A whole plate can be nutritionally complete while still being visually
-/// incomplete. Sparse two-component interpretations receive one independent
-/// inventory check. The second pass must return the complete plate and only
+/// incomplete. Sparse one- or two-component interpretations receive one
+/// independent inventory check. The second pass must return the complete plate and only
 /// replaces the first when it finds more distinct physical servings.
 struct PhotoInventoryVerificationService: Sendable {
     func needsIndependentCheck(_ parse: MealParseResult) -> Bool {
-        parse.detectedItems.count == 2
+        (1...2).contains(parse.detectedItems.count)
     }
 
     func prompt(after parse: MealParseResult) -> String {
@@ -461,7 +461,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
         } else if localCompleteness.isComplete {
             let liveRecognitionUnavailable = remote == nil || remoteFailed
             if liveRecognitionUnavailable,
-               !isSafeFallback(candidates: candidates, result: result, memberDescription: trimmedDescription) {
+               !isSafeFallback(memberDescription: trimmedDescription) {
                 var unresolved = local.makeAnalysis(
                     description: "",
                     imageReference: image.imageReference,
@@ -534,16 +534,12 @@ struct PhotoAnalysisOrchestrator: Sendable {
         return result
     }
 
-    private func isSafeFallback(
-        candidates: [FoodImageCandidate],
-        result: MealAnalysisResult,
-        memberDescription: String
-    ) -> Bool {
-        if !memberDescription.isEmpty { return true }
-        guard candidates.count == 1,
-              result.detectedItems.count == 1,
-              let candidate = candidates.first else { return false }
-        return candidate.confidence >= 0.90
+    private func isSafeFallback(memberDescription: String) -> Bool {
+        // Whole-image classification cannot prove that a plate contains only
+        // one food. It is useful as a private suggestion, but never sufficient
+        // to auto-confirm an image-only meal. A member-entered description is
+        // explicit evidence and may still use the local nutrition path.
+        !memberDescription.isEmpty
     }
 
     private func confidenceLevel(for score: Double) -> ConfidenceLevel {
@@ -638,12 +634,7 @@ struct IndianFoodCatalogService: FoodNormalisationService, Sendable {
     }
 
     private func normalized(_ value: String) -> String {
-        value
-            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased()
-            .components(separatedBy: CharacterSet.alphanumerics.inverted)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
+        FoodInputNormalizer.tokens(for: value).joined(separator: " ")
     }
 }
 

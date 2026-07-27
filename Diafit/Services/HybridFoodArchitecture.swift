@@ -302,8 +302,7 @@ struct HybridFoodNormalisationService: FoodNormalisationService, Sendable {
     }
 
     private func tokens(_ value: String) -> [String] {
-        value.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased().split { !$0.isLetter && !$0.isNumber }.map(String.init)
+        FoodInputNormalizer.tokens(for: value)
     }
 
     private func similarity(_ lhs: Set<String>, _ rhs: Set<String>) -> Double {
@@ -1277,8 +1276,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
     }
 
     private func normalize(_ text: String) -> String {
-        text.folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
-            .lowercased().split { !$0.isLetter && !$0.isNumber }.joined(separator: " ")
+        FoodInputNormalizer.tokens(for: text).joined(separator: " ")
     }
 }
 
