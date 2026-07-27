@@ -50,6 +50,19 @@ struct AppDependencies: Sendable {
                 tokenProvider: RuntimeBackendAccessTokenProvider(token: $0.accessToken)
             )
         }
+        let mealVisuals: MealVisualGenerationService
+        if let backendConfiguration {
+            mealVisuals = MealVisualGenerationService(
+                generator: BackendMealVisualGenerator(
+                    endpoint: backendConfiguration.endpoint,
+                    tokenProvider: RuntimeBackendAccessTokenProvider(token: backendConfiguration.accessToken)
+                ),
+                assets: .live(),
+                ledger: MealVisualRuntime.ledger
+            )
+        } else {
+            mealVisuals = .local
+        }
         let understanding: any FoodUnderstandingService = backendUnderstanding ?? localUnderstanding
         let router = DefaultFoodResolutionRouter(
             catalog: catalog,
@@ -81,7 +94,7 @@ struct AppDependencies: Sendable {
                 onDevice: AppleFoodImageClassificationService(catalog: catalog),
                 local: LocalMealAnalysisEngine(catalog: catalog)
             ),
-            mealVisuals: .local,
+            mealVisuals: mealVisuals,
             foodUnderstanding: understanding,
             conversationInputRouter: DefaultConversationInputRouter(),
             foodResolutionRouter: router,

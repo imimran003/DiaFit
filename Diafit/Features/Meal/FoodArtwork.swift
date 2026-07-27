@@ -1,9 +1,9 @@
 import SwiftUI
 import UIKit
 
-/// The food image is a cutout, not a rectangular photograph. That lets one
-/// art-directed object travel naturally from a generous thread moment into the
-/// denser atlas without inventing a new crop for each destination.
+/// The same visual travels from thread to atlas to detail. Member photos remain
+/// full-bleed and recognisable; generated/bundled editorial art keeps the
+/// art-directed stage treatment used by the rest of the product.
 struct FoodArtwork: View {
     enum Treatment { case thread, atlas, detail }
 
@@ -20,49 +20,69 @@ struct FoodArtwork: View {
 
     var body: some View {
         GeometryReader { proxy in
-            TimelineView(.animation(minimumInterval: usesStaticRendering ? 3_600 : 1 / 60)) { timeline in
-                FoodStage(artwork: meal.artwork)
-                    .overlay {
-                        if let image = generatedImage {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .scaleEffect(imageScale)
-                                .padding(imagePadding)
-                        } else if meal.artwork == .neutral {
-                            DeterministicMealComposition(
-                                items: meal.analysis?.detectedItems ?? [],
-                                fallbackTitle: meal.title
-                            )
-                        } else if let image = FoodImageCache.image(named: meal.artwork.rawValue) {
-                            Image(uiImage: image)
-                                .resizable()
-                                .scaledToFit()
-                                .scaleEffect(imageScale)
-                                .offset(y: imageOffset)
-                                .padding(imagePadding)
-                        }
-                    }
+            if isOriginalPhoto, let image = storedImage {
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFill()
                     .frame(width: proxy.size.width, height: proxy.size.height)
-                    .compositingGroup()
-                    .layerEffect(
-                        ShaderLibrary.lensPass(
-                            .float2(proxy.size),
-                            .float(usesStaticRendering ? 0 : Float(timeline.date.timeIntervalSinceReferenceDate))
-                        ),
-                        maxSampleOffset: CGSize(width: 2, height: 2)
-                    )
+                    .clipped()
+            } else {
+                TimelineView(.animation(minimumInterval: usesStaticRendering ? 3_600 : 1 / 60)) { timeline in
+                    FoodStage(artwork: meal.artwork)
+                        .overlay {
+                            if let image = storedImage {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .scaleEffect(imageScale)
+                                    .padding(imagePadding)
+                            } else if meal.artwork == .neutral {
+                                DeterministicMealComposition(
+                                    items: meal.analysis?.detectedItems ?? [],
+                                    fallbackTitle: meal.title,
+                                    isCompact: treatment == .atlas
+                                )
+                            } else if let image = FoodImageCache.image(named: meal.artwork.rawValue) {
+                                Image(uiImage: image)
+                                    .resizable()
+                                    .scaledToFit()
+                                    .scaleEffect(imageScale)
+                                    .offset(y: imageOffset)
+                                    .padding(imagePadding)
+                            }
+                        }
+                        .frame(width: proxy.size.width, height: proxy.size.height)
+                        .compositingGroup()
+                        .layerEffect(
+                            ShaderLibrary.lensPass(
+                                .float2(proxy.size),
+                                .float(usesStaticRendering ? 0 : Float(timeline.date.timeIntervalSinceReferenceDate))
+                            ),
+                            maxSampleOffset: CGSize(width: 2, height: 2)
+                        )
+                }
             }
         }
-        .accessibilityLabel(meal.artwork == .neutral
-            ? "Deterministic meal image for \(meal.title)"
-            : "Studio food image of \(meal.title)")
+        .accessibilityLabel(accessibilityDescription)
     }
 
-    private var generatedImage: UIImage? {
+    private var storedImage: UIImage? {
         guard let fileName = meal.visualIdentity?.assetFileName,
               let url = MealVisualAssetStore.liveURL(for: fileName) else { return nil }
-        return FoodImageCache.image(at: url, cacheKey: "generated-\(fileName)")
+        return FoodImageCache.image(at: url, cacheKey: "meal-visual-\(fileName)")
+    }
+
+    private var isOriginalPhoto: Bool {
+        meal.visualIdentity?.source == .originalPhoto
+    }
+
+    private var accessibilityDescription: String {
+        switch meal.visualIdentity?.source {
+        case .originalPhoto: return "Your meal photo of \(meal.title)"
+        case .generatedEditorial: return "Generated food image of \(meal.title)"
+        case .bundledEditorial: return "Studio food image of \(meal.title)"
+        case .deterministicPlaceholder, .none: return "Meal visual for \(meal.title)"
+        }
     }
 
     private var imageScale: CGFloat {
@@ -153,6 +173,7 @@ private struct FoodStage: View {
 private struct DeterministicMealComposition: View {
     let items: [DetectedFoodItem]
     let fallbackTitle: String
+    let isCompact: Bool
 
     var body: some View {
         Group {
@@ -163,22 +184,29 @@ private struct DeterministicMealComposition: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(16)
+        .padding(isCompact ? 10 : 16)
     }
 
     private var componentComposition: some View {
-        VStack(spacing: 11) {
+        VStack(spacing: isCompact ? 7 : 11) {
             HStack(spacing: 10) {
-                ForEach(items.prefix(3)) { item in
+                ForEach(items.prefix(isCompact ? 2 : 3)) { item in
                     componentTile(item)
                 }
+                if isCompact, items.count > 2 {
+                    Text("+\(items.count - 2)")
+                        .font(.system(size: 14, weight: .bold, design: .rounded))
+                        .foregroundStyle(.white.opacity(0.88))
+                }
             }
-            Text(items.map { "\($0.quantity.formatted(.number.precision(.fractionLength(0...1)))) \($0.displayName)" }.joined(separator: " · ").uppercased())
+            Text(isCompact
+                 ? fallbackTitle.uppercased()
+                 : items.map { "\($0.quantity.formatted(.number.precision(.fractionLength(0...1)))) \($0.displayName)" }.joined(separator: " · ").uppercased())
                 .font(.system(size: 8, weight: .bold, design: .rounded))
                 .tracking(0.8)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.white.opacity(0.78))
-                .lineLimit(2)
+                .lineLimit(isCompact ? 1 : 2)
         }
     }
 

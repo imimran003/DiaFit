@@ -76,7 +76,7 @@ struct MealAnalysisReviewCard: View {
                     .frame(height: 178)
                     .clipShape(RoundedRectangle(cornerRadius: 24, style: .continuous))
                     .overlay(alignment: .bottomLeading) {
-                        Text("YOUR PHOTO · NOT SAVED YET")
+                        Text("YOUR PHOTO · SAVES WITH MEAL")
                             .font(.system(size: 9, weight: .bold, design: .rounded))
                             .tracking(0.8)
                             .foregroundStyle(.white)

@@ -29,6 +29,10 @@ struct MealAnalysisResult: Identifiable, Codable, Hashable, Sendable {
     /// Sandbox-relative reference written only after an image payload passes
     /// request association and file validation.
     var generatedVisualAsset: MealVisualAsset? = nil
+    /// Protected, sandbox-relative copy of the member's own meal photo. Raw
+    /// bytes never enter the diary archive; confirmation is the boundary that
+    /// permits this separate local asset to be retained with the meal.
+    var originalPhotoAsset: MealVisualAsset? = nil
 
     var id: UUID { analysisId }
 
@@ -408,7 +412,9 @@ enum ClarificationImpact: String, Codable, Hashable, Sendable {
 struct MealAnalysisDraft: Identifiable, Codable, Hashable {
     let id: UUID
     var result: MealAnalysisResult
-    /// Kept only while the review sheet is onscreen unless a member explicitly opts in to retention.
+    /// Kept only while the review sheet is onscreen. Confirming the meal may
+    /// copy these bytes into the protected visual asset store; the draft and
+    /// diary archive never encode the raw image.
     var transientImageData: Data?
     var state: State
 

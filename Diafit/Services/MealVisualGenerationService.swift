@@ -41,6 +41,75 @@ struct UnavailableMealVisualGenerator: MealVisualGenerating {
     }
 }
 
+/// Calls Diafit's authenticated backend, never an image-provider endpoint. The
+/// provider credential remains server-side and responses are accepted only
+/// when all meal/request/cache association fields match.
+struct BackendMealVisualGenerator: MealVisualGenerating {
+    let endpoint: URL
+    let tokenProvider: BackendAccessTokenProvider
+    let session: URLSession
+    let isConfigured = true
+
+    init(endpoint: URL, tokenProvider: BackendAccessTokenProvider, session: URLSession = .shared) {
+        self.endpoint = endpoint
+        self.tokenProvider = tokenProvider
+        self.session = session
+    }
+
+    func generate(_ request: MealVisualRequest) async throws -> GeneratedMealVisual {
+        let token = try await tokenProvider.accessToken()
+        var urlRequest = URLRequest(url: endpoint.appending(path: "v1/meal-visual"))
+        urlRequest.httpMethod = "POST"
+        urlRequest.timeoutInterval = 45
+        urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        urlRequest.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        urlRequest.setValue(request.requestID.uuidString, forHTTPHeaderField: "Idempotency-Key")
+        urlRequest.httpBody = try JSONEncoder().encode(RequestBody(
+            apiVersion: "v1",
+            mealID: request.mealID,
+            requestID: request.requestID,
+            cacheKey: request.cacheKey,
+            canonicalComponentIDs: request.canonicalComponentIDs,
+            quantitySignature: request.quantitySignature,
+            styleVersion: request.styleVersion,
+            prompt: request.prompt
+        ))
+
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
+              let body = try? JSONDecoder().decode(ResponseBody.self, from: data),
+              let imageData = Data(base64Encoded: body.imageBase64) else {
+            throw MealVisualGenerationError.providerUnavailable
+        }
+        return GeneratedMealVisual(
+            mealID: body.mealID,
+            requestID: body.requestID,
+            cacheKey: body.cacheKey,
+            mimeType: body.mimeType,
+            data: imageData
+        )
+    }
+
+    private struct RequestBody: Encodable {
+        let apiVersion: String
+        let mealID: UUID
+        let requestID: UUID
+        let cacheKey: String
+        let canonicalComponentIDs: [String]
+        let quantitySignature: [String]
+        let styleVersion: String
+        let prompt: String
+    }
+
+    private struct ResponseBody: Decodable {
+        let mealID: UUID
+        let requestID: UUID
+        let cacheKey: String
+        let mimeType: String
+        let imageBase64: String
+    }
+}
+
 /// Generated images live separately from the diary JSON. The archive stores
 /// only a sandbox-relative file name, never an absolute path or provider URL.
 actor MealVisualAssetStore {
@@ -88,6 +157,43 @@ actor MealVisualAssetStore {
             )
         }
         return fileName
+    }
+
+    func storeOriginalPhoto(data: Data, mealID: UUID, requestID: UUID) throws -> MealVisualAsset {
+        guard data.count <= maximumBytes else { throw MealVisualGenerationError.imageTooLarge }
+        let mimeType: String
+        let fileExtension: String
+        if Self.isJPEG(data) {
+            mimeType = "image/jpeg"
+            fileExtension = "jpg"
+        } else if Self.isPNG(data) {
+            mimeType = "image/png"
+            fileExtension = "png"
+        } else {
+            throw MealVisualGenerationError.invalidImagePayload
+        }
+
+        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        let cacheKey = "original-\(mealID.uuidString.lowercased())"
+        let fileName = "\(cacheKey)-\(requestID.uuidString.lowercased()).\(fileExtension)"
+        let destination = directory.appendingPathComponent(fileName, isDirectory: false)
+        try data.write(to: destination, options: [.atomic])
+        if appliesFileProtection {
+            try fileManager.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: destination.path
+            )
+        }
+        var values = URLResourceValues()
+        values.isExcludedFromBackup = true
+        var mutableDestination = destination
+        try? mutableDestination.setResourceValues(values)
+        return MealVisualAsset(
+            requestID: requestID,
+            cacheKey: cacheKey,
+            fileName: fileName,
+            mimeType: mimeType
+        )
     }
 
     func remove(fileName: String) {
@@ -143,6 +249,10 @@ struct MealVisualGenerationService: Sendable {
         in diary: DiaryStore,
         dayID: Day.ID
     ) async {
+        // A member's own confirmed photo is the truthful primary visual. Never
+        // spend provider work creating a decorative replacement for it.
+        guard draft.transientImageData == nil,
+              draft.result.originalPhotoAsset == nil else { return }
         guard var request = draft.result.visualRequest,
               request.state != .waitingForClarification else { return }
 
@@ -209,8 +319,56 @@ struct MealVisualGenerationService: Sendable {
 
     func delete(meal: Meal) async {
         await ledger.delete(mealID: meal.id)
-        if let fileName = meal.visualIdentity?.assetFileName {
+        let fileNames = Set([
+            meal.visualIdentity?.assetFileName,
+            meal.analysis?.originalPhotoAsset?.fileName,
+            meal.analysis?.generatedVisualAsset?.fileName
+        ].compactMap { $0 })
+        for fileName in fileNames {
             await assets.remove(fileName: fileName)
+        }
+    }
+
+    /// Confirmation explicitly retains a prepared, metadata-stripped photo as
+    /// the meal's local visual. Failure never rolls back nutrition persistence.
+    @MainActor
+    func retainOriginalPhoto(
+        _ data: Data,
+        mealID: UUID,
+        in diary: DiaryStore,
+        dayID: Day.ID
+    ) async {
+        guard var meal = diary.day(id: dayID)?.meals.first(where: { $0.id == mealID }),
+              var analysis = meal.analysis else { return }
+        do {
+            let requestID = analysis.visualRequest?.requestID ?? analysis.analysisId
+            let asset = try await assets.storeOriginalPhoto(
+                data: data,
+                mealID: mealID,
+                requestID: requestID
+            )
+            analysis.originalPhotoAsset = asset
+            analysis.imageReference = MealImageReference(
+                identifier: analysis.imageReference.identifier,
+                retention: .memberPermitted
+            )
+            analysis.imageType = .originalPhoto
+            meal.analysis = analysis
+            meal.visualIdentity = MealVisualIdentityFactory().make(
+                mealID: meal.id,
+                result: analysis,
+                artwork: meal.artwork
+            )
+            diary.update(meal, in: dayID)
+            FoodLoggingDiagnostics.record("visual.original-retained", fields: [
+                "mealID": mealID.uuidString,
+                "requestID": requestID.uuidString
+            ])
+        } catch {
+            FoodLoggingDiagnostics.record("visual.original-retention-failed", fields: [
+                "mealID": mealID.uuidString,
+                "reason": String(describing: type(of: error))
+            ])
         }
     }
 

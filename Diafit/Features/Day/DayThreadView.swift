@@ -358,8 +358,19 @@ struct DayThreadView: View {
     }
 
     private func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID) {
+        let originalPhotoData = draft.transientImageData
         let meal = DiaryMealLoggingService(userFoodMemory: dependencies.userFoodMemory)
             .confirm(draft, replacing: itemID, in: store, dayID: dayID)
+        if let originalPhotoData {
+            Task {
+                await dependencies.mealVisuals.retainOriginalPhoto(
+                    originalPhotoData,
+                    mealID: meal.id,
+                    in: store,
+                    dayID: dayID
+                )
+            }
+        }
         store.append(
             ThreadItem(
                 id: UUID(),

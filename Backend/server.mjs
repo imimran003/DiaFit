@@ -4,6 +4,7 @@ import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { GeminiMealParser, OpenAIMealParser, MockMealParser, validateMealParseResult } from './meal-understanding.mjs';
+import { DisabledMealVisualGenerator, GeminiMealVisualGenerator, validateMealVisualRequest } from './meal-visual.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const config = {
@@ -11,6 +12,7 @@ const config = {
   port: Number(process.env.PORT ?? 8787),
   mode: process.env.DIAFIT_ANALYSIS_MODE ?? 'disabled',
   mealParserMode: process.env.DIAFIT_MEAL_PARSER_MODE ?? 'disabled',
+  mealVisualMode: process.env.DIAFIT_MEAL_VISUAL_MODE ?? 'disabled',
   developmentToken: process.env.DIAFIT_DEVELOPMENT_TOKEN ?? '',
   rateLimit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 20),
   timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 25_000)
@@ -47,7 +49,7 @@ createServer(async (request, response) => {
   setHeaders(response, requestId);
   try {
     if (request.method === 'GET' && request.url === '/health') {
-      return send(response, 200, { status: 'ok', apiVersion: 'v1', mode: config.mode, mealParserMode: config.mealParserMode, fixtureVersion: fixtures.version });
+      return send(response, 200, { status: 'ok', apiVersion: 'v1', mode: config.mode, mealParserMode: config.mealParserMode, mealVisualMode: config.mealVisualMode, fixtureVersion: fixtures.version });
     }
     if (request.method === 'POST' && request.url === '/v1/meal-parse') {
       const principal = authenticate(request);
@@ -75,6 +77,40 @@ createServer(async (request, response) => {
       }
       audit('meal_parse_completed', { requestId, principal, componentCount: result.detectedItems.length, unresolvedCount: result.unresolvedItems.length });
       return send(response, 200, responseBody);
+    }
+    if (request.method === 'POST' && request.url === '/v1/meal-visual') {
+      const principal = authenticate(request);
+      if (!principal) return send(response, 401, { error: 'unauthorized', requestId });
+      if (!limiter.take(`${principal}:meal-visual`)) return send(response, 429, { error: 'rate_limited', requestId });
+      const input = validateMealVisualRequest(await readJSON(request));
+      const cacheKey = `${principal}:${input.cacheKey}`;
+      const cached = mealVisualCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) {
+        return send(response, 200, {
+          mealID: input.mealID,
+          requestID: input.requestID,
+          cacheKey: input.cacheKey,
+          mimeType: cached.mimeType,
+          imageBase64: cached.imageBase64
+        });
+      }
+      if (cached) mealVisualCache.delete(cacheKey);
+      const controller = new AbortController();
+      let result;
+      try {
+        result = await withTimeout(mealVisualGenerator.generate(input, { signal: controller.signal }), Math.max(config.timeoutMs, 40_000));
+      } catch (error) {
+        controller.abort();
+        throw error;
+      }
+      if (mealVisualCache.size >= 128) mealVisualCache.delete(mealVisualCache.keys().next().value);
+      mealVisualCache.set(cacheKey, {
+        mimeType: result.mimeType,
+        imageBase64: result.imageBase64,
+        expiresAt: Date.now() + 24 * 60 * 60_000
+      });
+      audit('meal_visual_completed', { requestId, principal, componentCount: input.canonicalComponentIDs.length, cacheKey: input.cacheKey.slice(0, 12) });
+      return send(response, 200, result);
     }
     if (request.method !== 'POST' || request.url !== '/v1/meal-analysis') {
       return send(response, 404, { error: 'not_found', requestId });
@@ -283,6 +319,10 @@ const mealParser = config.mealParserMode === 'openai'
     ? new MockMealParser()
     : new DisabledMealParser();
 const mealParseCache = new Map();
+const mealVisualCache = new Map();
+const mealVisualGenerator = config.mealVisualMode === 'gemini'
+  ? new GeminiMealVisualGenerator()
+  : new DisabledMealVisualGenerator();
 
 function parserModelName() {
   if (config.mealParserMode === 'openai') return process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini';

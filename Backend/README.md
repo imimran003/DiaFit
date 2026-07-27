@@ -16,6 +16,14 @@ Set `DIAFIT_MEAL_PARSER_MODE=mock` for deterministic offline parsing, `gemini` w
 
 The Gemini free tier is suitable for development and personal testing, subject to Google's current quotas and data-use terms. It is not an unlimited production service. Keep the key out of the iOS target and Git, and obtain explicit consent before uploading a meal photo. For a local free-tier run, copy `.env.example` to the ignored `.env`, set `DIAFIT_MEAL_PARSER_MODE=gemini`, and add `GEMINI_API_KEY` there.
 
+`POST /v1/meal-visual` is the optional provider-independent visual endpoint for
+text-only meals. Set `DIAFIT_MEAL_VISUAL_MODE=gemini` to enable it. It uses
+`GEMINI_IMAGE_MODEL` and returns a validated, association-bound image payload;
+the provider key never enters the app. Gemini image generation currently has
+no free API tier, so this mode is deliberately disabled by default. Uploaded
+meal photos do not use this endpoint: after confirmation, the prepared,
+metadata-stripped photo is kept only in protected local app storage.
+
 An opt-in live smoke test is available after the backend starts. Set `LIVE_FOOD_IMAGE_PATH` to a local JPEG or PNG and run `npm run test:live-photo`. It prints only structured food identities and confidence; it never prints the image or provider credential. Deterministic CI continues to use the mock provider. The local HTTPS tunnel used for device testing is temporary: restart it and update the user-only Xcode scheme whenever its URL changes.
 
 For an Xcode-launched simulator build, pass the backend origin as

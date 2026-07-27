@@ -40,7 +40,7 @@ For an editable conversational image workflow, OpenAI’s current docs recommend
 
 ## Photo analysis extension
 
-The photo flow is a conversation moment, not a scan-and-submit form. A camera button creates a temporary, metadata-stripped photo note. The next object in the thread is an explicit review: individual foods, a suggested serving, carbohydrates first, then only the two clarification questions that can meaningfully change an estimate. Confirmation is the moment that turns it into diary history; the original photo disappears by default, while the decorative editorial tile travels naturally into the atlas.
+The photo flow is a conversation moment, not a scan-and-submit form. A camera button creates a temporary, metadata-stripped photo note. The next object in the thread is an explicit review: individual foods, a suggested serving, carbohydrates first, then only the clarification questions that can meaningfully change an estimate. Confirmation is the explicit boundary that turns the review into diary history and retains the prepared photo in protected local storage. That same photo travels through the thread, atlas, and detail transition; deleting the meal deletes its local visual. Text-only meals may receive an editorial image through the authenticated backend, with a truthful deterministic composition when generation is unavailable.
 
 The visual system must never make recognition look more certain than it is. A generated image is marked decorative and cannot replace an original review photo. Food, oil/ghee, recipe, and serving assumptions remain available after logging; glycaemic data is not extrapolated. See [the detailed analysis architecture](PhotoAnalysisArchitecture.md).
 

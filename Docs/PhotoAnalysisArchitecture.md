@@ -12,7 +12,13 @@ The current iOS build supports a complete **image-first local review path**:
 5. The draft appears inside the day thread, exposes components, quantities and serving units, asks only applicable high-impact questions, and recalculates supported values after correction. A compound correction such as “carrots with blueberries” resolves every supported component instead of silently failing an exact-string lookup.
 6. Only an explicit confirmation replaces the draft with a logged meal. The resulting meal is immediately available to the existing meal atlas. A confirmed analysis can be reopened for refinement or deleted through an explicit destructive confirmation.
 
-No photo is uploaded by the default app configuration. When an authenticated backend is explicitly configured, the backend may use the optional Gemini or OpenAI structured vision parser; provider keys never enter the iOS binary. The original photo is not kept after confirmation; the existing editorial food image remains a decorative timeline treatment, never evidence of the meal or portion.
+No photo is uploaded by the default app configuration. When an authenticated backend is explicitly configured, the backend may use the optional Gemini or OpenAI structured vision parser; provider keys never enter the iOS binary. Before confirmation, photo bytes remain transient. Confirmation retains the prepared, metadata-stripped photo as a protected local asset referenced by the meal archive; it is excluded from device backup and removed with the meal. It remains visual context, not evidence of ingredients or portion.
+
+Text-only meals may request an editorial food image from the authenticated
+`/v1/meal-visual` backend route. The request is quantity-sensitive and bound to
+meal, request, cache, and style identifiers. A late or mismatched response is
+discarded. Provider credentials stay server-side. Generated visuals are
+decorative and never supply nutrition data.
 
 Provider output is deduplicated before nutrition aggregation, and canonical matching checks its English search name, regional name, and original term. This prevents one physical rice serving from being counted twice under alternative preparation labels and preserves regional components such as roti, dal, and dry sabji in a mixed thali. A preparation conflict becomes one editable component with a clarification instead of two calorie entries.
 

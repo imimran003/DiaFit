@@ -153,14 +153,24 @@ struct MealVisualIdentityFactory: Sendable {
             "\(item.canonicalFoodId):\(item.quantity):\(item.servingUnit.rawValue):\(item.preparationMethod ?? "unspecified")"
         }.sorted()
         let composition: MealVisualIdentity.Composition = foodIDs.count > 1 ? .combinedMeal : .singleFood
+        let originalAsset = result.originalPhotoAsset.flatMap { asset in
+            result.imageType == .originalPhoto && result.imageReference.retention == .memberPermitted
+                ? asset
+                : nil
+        }
         let generatedAsset = result.generatedVisualAsset.flatMap { asset in
             result.visualRequest?.requestID == asset.requestID && result.visualRequest?.cacheKey == asset.cacheKey
                 ? asset
                 : nil
         }
-        let source: MealVisualSource = generatedAsset != nil
-            ? .generatedEditorial
-            : (artwork == .neutral ? .deterministicPlaceholder : .bundledEditorial)
+        let source: MealVisualSource
+        if originalAsset != nil {
+            source = .originalPhoto
+        } else if generatedAsset != nil {
+            source = .generatedEditorial
+        } else {
+            source = artwork == .neutral ? .deterministicPlaceholder : .bundledEditorial
+        }
         // A meal's visual identity follows the structured request that created
         // it. Generating a fresh UUID every render made a persisted meal look
         // like a new visual on every redraw and broke continuity after reload.
@@ -194,7 +204,7 @@ struct MealVisualIdentityFactory: Sendable {
             source: source,
             cacheKey: cacheKey,
             createdAt: .now,
-            assetFileName: generatedAsset?.fileName
+            assetFileName: originalAsset?.fileName ?? generatedAsset?.fileName
         )
     }
 

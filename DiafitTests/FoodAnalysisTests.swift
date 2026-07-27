@@ -1873,6 +1873,76 @@ final class FoodAnalysisTests: XCTestCase {
     }
 
     @MainActor
+    func testConfirmedPhotoIsRetainedLocallyAndBecomesPrimaryMealVisual() async throws {
+        var result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "biryani")
+        result.imageType = .originalPhoto
+        result.imageReference = .transient()
+        let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5WQAAAABJRU5ErkJggg==")!
+        let draft = MealAnalysisDraft(result: result, transientImageData: png)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-original-photo-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let service = MealVisualGenerationService(
+            generator: UnavailableMealVisualGenerator(),
+            assets: MealVisualAssetStore(directory: directory, appliesFileProtection: false),
+            ledger: MealVisualRequestLedger()
+        )
+
+        let meal = DiaryMealLoggingService().confirm(draft, replacing: itemID, in: store, dayID: day.id)
+        await service.retainOriginalPhoto(png, mealID: meal.id, in: store, dayID: day.id)
+
+        let retained = try XCTUnwrap(store.day(id: day.id)?.meals.first)
+        XCTAssertEqual(retained.analysis?.imageReference.retention, .memberPermitted)
+        XCTAssertEqual(retained.visualIdentity?.source, .originalPhoto)
+        let asset = try XCTUnwrap(retained.analysis?.originalPhotoAsset)
+        XCTAssertEqual(retained.visualIdentity?.assetFileName, asset.fileName)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: directory.appendingPathComponent(asset.fileName).path))
+
+        let restored = try JSONDecoder().decode(Meal.self, from: JSONEncoder().encode(retained))
+        XCTAssertEqual(restored.analysis?.originalPhotoAsset, asset)
+        XCTAssertEqual(restored.visualIdentity?.source, .originalPhoto)
+
+        await service.delete(meal: retained)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: directory.appendingPathComponent(asset.fileName).path))
+    }
+
+    func testOriginalPhotoVisualOutranksGeneratedEditorialAsset() throws {
+        var result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "black coffee")
+        let request = try XCTUnwrap(result.visualRequest)
+        result.imageType = .originalPhoto
+        result.imageReference = MealImageReference(identifier: "local-test", retention: .memberPermitted)
+        result.originalPhotoAsset = MealVisualAsset(
+            requestID: request.requestID,
+            cacheKey: "original-test",
+            fileName: "original-test.png",
+            mimeType: "image/png"
+        )
+        result.generatedVisualAsset = MealVisualAsset(
+            requestID: request.requestID,
+            cacheKey: request.cacheKey,
+            fileName: "generated-test.png",
+            mimeType: "image/png"
+        )
+
+        let identity = MealVisualIdentityFactory().make(
+            mealID: request.mealID,
+            result: result,
+            artwork: .neutral
+        )
+        XCTAssertEqual(identity.source, .originalPhoto)
+        XCTAssertEqual(identity.assetFileName, "original-test.png")
+    }
+
+    @MainActor
     func testVisualRetryForAnEditedMealUpdatesOnlyTheVisualRequestUntilConfirmation() async throws {
         let engine = LocalMealAnalysisEngine(catalog: catalog)
         let original = engine.makeAnalysis(description: "sprouts with 2 boiled eggs")
