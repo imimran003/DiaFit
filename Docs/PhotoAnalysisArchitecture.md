@@ -50,6 +50,16 @@ The bundle is not presented as IFCT data and should not be expanded with copied 
 - It has `GET /health`, a versioned `POST /v1/meal-analysis`, request timeouts, strict result validation, and redacted audit events. Raw photo bytes and bearer tokens are not logged or written to disk.
 - Fixture mode is an explicit development-only provider. It exercises the structural response, mixed-meal fixtures, and low-confidence situations; it is not computer vision and publishes no accuracy claim.
 - `BackendFoodUnderstandingService` calls `/v1/meal-parse`; `StructuredPhotoRecognitionService` converts its schema-constrained food identities into canonical matches and validated nutrition. The runtime constructs this path only when `DIAFIT_BACKEND_URL` and `DIAFIT_BACKEND_ACCESS_TOKEN` (or the legacy local `DIAFIT_DEVELOPMENT_TOKEN`) are supplied through the Xcode launch environment. In DEBUG builds, a configured launch stores only that temporary backend URL and app-to-backend access token in the device Keychain using `AfterFirstUnlockThisDeviceOnly`; this lets a developer reopen the installed app from the Home Screen without silently losing live recognition. A later configured launch replaces stale tunnel details. Release builds do not use this development persistence path and must obtain an authenticated backend session through the production account flow.
+- The phone allows 35 seconds for a structured vision request while the backend
+  provider deadline defaults to 25 seconds. The client retries one transient
+  upload/network interruption with the same idempotency key. This ordering is
+  intentional: the backend must finish or reject the request before the phone
+  considers private on-device recovery. Response metadata is decoded through a
+  separate envelope, and development diagnostics record only status, byte
+  count, component count, and a safe coding path—never photo bytes or meal text.
+- Prepared JPEGs are capped at 1.9 MB. Base64 expansion therefore remains under
+  the backend's 2.8 MB JSON-body limit; accepted device photos cannot cross the
+  transport boundary and then fail solely because of encoding overhead.
 - Gemini and OpenAI provider credentials always remain on the Mac or deployed backend and never enter the iOS binary or device Keychain. If a configured live service fails, the app may retain supported on-device canonical suggestions, but it marks the result low confidence and requires an explicit confirmation that the food names match the photo. It must not present local fallback labels as a successful live-AI result.
 
 Deployments must replace the development bearer guard with real authentication/authorization, managed secret storage, persistent rate limiting, TLS ingress, logging controls, temporary-object cleanup, abuse protection, costs/quotas, and provider observability. See [`Backend/README.md`](../Backend/README.md) for the deployment checklist and `.env.example` for non-secret configuration names.

@@ -192,24 +192,90 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
 
     func parse(text: String, image: PreparedFoodImage? = nil) async throws -> MealParseResult {
         let token = try await tokenProvider.accessToken()
+        let idempotencyKey = "meal-parse-\(UUID().uuidString)"
         // Versioned backend route; the service may be backed by OpenAI,
         // fixtures, or another provider without changing this client.
         var request = URLRequest(url: endpoint.appending(path: "v1/meal-parse"))
         request.httpMethod = "POST"
-        request.timeoutInterval = 15
+        // Vision requests on a phone can spend several seconds uploading over
+        // Wi-Fi before provider inference begins. Keep this above the backend
+        // provider timeout so a valid response is not abandoned at the edge.
+        request.timeoutInterval = 35
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
         request.httpBody = try JSONEncoder().encode(UnderstandingRequest(
             apiVersion: "v1", text: text,
             imageReference: image?.imageReference.identifier,
-            imageBase64: image?.data.base64EncodedString(), mimeType: image?.mimeType
+            imageBase64: image?.data.base64EncodedString(), mimeType: image?.mimeType,
+            idempotencyKey: idempotencyKey
         ))
-        let (data, response) = try await session.data(for: request)
+        let (data, response) = try await perform(request)
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
+                "status": "http-error",
+                "statusCode": String(status),
+                "responseBytes": String(data.count)
+            ])
             throw FoodAnalysisError.endpointUnavailable
         }
-        do { return try JSONDecoder().decode(MealParseResult.self, from: data) }
-        catch { throw FoodAnalysisError.malformedProviderResponse }
+        do {
+            let result = try Self.decodeResponse(data)
+            FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
+                "status": "decoded",
+                "componentCount": String(result.detectedItems.count),
+                "responseBytes": String(data.count)
+            ])
+            return result
+        } catch {
+            FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
+                "status": "decode-error",
+                "reason": Self.safeDecodingReason(error),
+                "responseBytes": String(data.count)
+            ])
+            throw FoodAnalysisError.malformedProviderResponse
+        }
+    }
+
+    /// The backend adds request metadata beside the schema-constrained parse.
+    /// Decode through an explicit envelope so that transport metadata can
+    /// evolve without weakening the typed meal contract.
+    static func decodeResponse(_ data: Data) throws -> MealParseResult {
+        let response = try JSONDecoder().decode(MealParseResponse.self, from: data)
+        return MealParseResult(
+            detectedItems: response.detectedItems,
+            unresolvedItems: response.unresolvedItems,
+            mealDescription: response.mealDescription,
+            clarificationQuestions: response.clarificationQuestions,
+            confidence: response.confidence
+        )
+    }
+
+    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(for: request)
+        } catch let error as URLError where [.timedOut, .networkConnectionLost, .cannotConnectToHost]
+            .contains(error.code) {
+            FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
+                "status": "retrying",
+                "reason": String(error.code.rawValue)
+            ])
+            // The same idempotency key makes this single retry safe.
+            return try await session.data(for: request)
+        }
+    }
+
+    private static func safeDecodingReason(_ error: Error) -> String {
+        guard let error = error as? DecodingError else { return "non-decoding-error" }
+        switch error {
+        case .typeMismatch(_, let context), .valueNotFound(_, let context),
+             .keyNotFound(_, let context), .dataCorrupted(let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return path.isEmpty ? "root" : path
+        @unknown default:
+            return "unknown"
+        }
     }
 
     /// Kept beside the client so the backend contract can be generated and
@@ -224,6 +290,15 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         let imageReference: String?
         let imageBase64: String?
         let mimeType: String?
+        let idempotencyKey: String
+    }
+
+    private struct MealParseResponse: Decodable {
+        let detectedItems: [ParsedFoodItem]
+        let unresolvedItems: [String]
+        let mealDescription: String
+        let clarificationQuestions: [String]
+        let confidence: Double
     }
 }
 

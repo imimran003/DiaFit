@@ -13,7 +13,7 @@ const config = {
   mealParserMode: process.env.DIAFIT_MEAL_PARSER_MODE ?? 'disabled',
   developmentToken: process.env.DIAFIT_DEVELOPMENT_TOKEN ?? '',
   rateLimit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 20),
-  timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 12_000)
+  timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 25_000)
 };
 
 const fixtures = JSON.parse(await readFile(join(here, 'fixtures/recognition-fixtures.json'), 'utf8'));

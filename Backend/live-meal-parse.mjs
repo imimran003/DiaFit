@@ -32,6 +32,11 @@ if (!response.ok) {
   process.exit(1);
 }
 
+if (process.env.LIVE_FOOD_FULL_RESPONSE === '1') {
+  console.log(JSON.stringify(document, null, 2));
+  process.exit(0);
+}
+
 console.log(JSON.stringify({
   parserModel: document.parserModel,
   detectedItems: document.detectedItems.map(item => ({

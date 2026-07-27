@@ -211,6 +211,109 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(BackendFoodUnderstandingService.strictJSONSchema.isEmpty)
     }
 
+    func testBackendEnvelopeDecodesCompleteIndianPlateWithoutDroppingComponents() throws {
+        let json = """
+        {
+          "detectedItems": [
+            {
+              "originalText":"bhindi fry","canonicalSearchName":"bhindi fry","regionalName":"bhindi fry",
+              "category":"vegetarianCurry","quantity":1,"unit":"bowl",
+              "quantityEvidence":"one bowl of bhindi fry","estimatedGrams":150,
+              "preparationMethod":"stir-fried","additions":[],"exclusions":[],
+              "brand":null,"productName":null,"flavour":null,"servingSize":null,
+              "confidence":0.95,"requiresClarification":false,"isPackagedProduct":false,
+              "packagedLabelEvidence":null,"aiNutritionEstimate":null
+            },
+            {
+              "originalText":"dal","canonicalSearchName":"dal","regionalName":"dal",
+              "category":"lentilOrLegume","quantity":1,"unit":"bowl",
+              "quantityEvidence":"one bowl of dal","estimatedGrams":200,
+              "preparationMethod":"boiled and tempered","additions":[],"exclusions":[],
+              "brand":null,"productName":null,"flavour":null,"servingSize":null,
+              "confidence":0.9,"requiresClarification":false,"isPackagedProduct":false,
+              "packagedLabelEvidence":null,"aiNutritionEstimate":null
+            },
+            {
+              "originalText":"curd","canonicalSearchName":"yogurt","regionalName":"dahi",
+              "category":"dairyOrSide","quantity":1,"unit":"bowl",
+              "quantityEvidence":"one bowl of curd","estimatedGrams":100,
+              "preparationMethod":"fermented","additions":["masala"],"exclusions":[],
+              "brand":null,"productName":null,"flavour":null,"servingSize":null,
+              "confidence":0.9,"requiresClarification":false,"isPackagedProduct":false,
+              "packagedLabelEvidence":null,"aiNutritionEstimate":null
+            },
+            {
+              "originalText":"steamed rice","canonicalSearchName":"steamed rice","regionalName":"chawal",
+              "category":"rice","quantity":1,"unit":"serving",
+              "quantityEvidence":"one portion of rice","estimatedGrams":150,
+              "preparationMethod":"steamed","additions":[],"exclusions":[],
+              "brand":null,"productName":null,"flavour":null,"servingSize":null,
+              "confidence":0.95,"requiresClarification":false,"isPackagedProduct":false,
+              "packagedLabelEvidence":null,"aiNutritionEstimate":null
+            },
+            {
+              "originalText":"rotis","canonicalSearchName":"roti","regionalName":"roti",
+              "category":"bread","quantity":3,"unit":"pieces",
+              "quantityEvidence":"three visible layers of roti","estimatedGrams":90,
+              "preparationMethod":"pan-cooked","additions":[],"exclusions":[],
+              "brand":null,"productName":null,"flavour":null,"servingSize":null,
+              "confidence":0.95,"requiresClarification":false,"isPackagedProduct":false,
+              "packagedLabelEvidence":null,"aiNutritionEstimate":null
+            }
+          ],
+          "unresolvedItems":[],
+          "mealDescription":"Bhindi fry, dal, dahi, steamed rice, and rotis.",
+          "clarificationQuestions":[],
+          "confidence":0.95,
+          "requestId":"75901e32-3ca3-4007-ae63-7ee9b7ded764",
+          "parserModel":"gemini-3.1-flash-lite"
+        }
+        """
+
+        let parse = try BackendFoodUnderstandingService.decodeResponse(Data(json.utf8))
+
+        XCTAssertEqual(parse.detectedItems.count, 5)
+        XCTAssertEqual(
+            Set(parse.detectedItems.map(\.category)),
+            Set([.vegetarianCurry, .lentilOrLegume, .dairyOrSide, .rice, .bread])
+        )
+        XCTAssertEqual(parse.detectedItems.first(where: { $0.category == .bread })?.quantity, 3)
+    }
+
+    func testExactPhotoProviderInventoryResolvesToFiveEditableNutritionItems() async throws {
+        let parse = try BackendFoodUnderstandingService.decodeResponse(Data("""
+        {
+          "detectedItems":[
+            {"originalText":"bhindi fry","canonicalSearchName":"bhindi fry","regionalName":"bhindi fry","category":"vegetarianCurry","quantity":1,"unit":"bowl","quantityEvidence":"one bowl","estimatedGrams":150,"preparationMethod":"stir-fried","additions":[],"exclusions":[],"brand":null,"productName":null,"flavour":null,"servingSize":null,"confidence":0.95,"requiresClarification":false,"isPackagedProduct":false,"packagedLabelEvidence":null,"aiNutritionEstimate":null},
+            {"originalText":"dal","canonicalSearchName":"dal","regionalName":"dal","category":"lentilOrLegume","quantity":1,"unit":"bowl","quantityEvidence":"one bowl","estimatedGrams":200,"preparationMethod":"tempered","additions":[],"exclusions":[],"brand":null,"productName":null,"flavour":null,"servingSize":null,"confidence":0.9,"requiresClarification":false,"isPackagedProduct":false,"packagedLabelEvidence":null,"aiNutritionEstimate":null},
+            {"originalText":"curd","canonicalSearchName":"yogurt","regionalName":"dahi","category":"dairyOrSide","quantity":1,"unit":"bowl","quantityEvidence":"one bowl","estimatedGrams":100,"preparationMethod":"fermented","additions":[],"exclusions":[],"brand":null,"productName":null,"flavour":null,"servingSize":null,"confidence":0.9,"requiresClarification":false,"isPackagedProduct":false,"packagedLabelEvidence":null,"aiNutritionEstimate":null},
+            {"originalText":"steamed rice","canonicalSearchName":"steamed rice","regionalName":"chawal","category":"rice","quantity":1,"unit":"serving","quantityEvidence":"one serving","estimatedGrams":150,"preparationMethod":"steamed","additions":[],"exclusions":[],"brand":null,"productName":null,"flavour":null,"servingSize":null,"confidence":0.95,"requiresClarification":false,"isPackagedProduct":false,"packagedLabelEvidence":null,"aiNutritionEstimate":null},
+            {"originalText":"rotis","canonicalSearchName":"roti","regionalName":"roti","category":"bread","quantity":3,"unit":"pieces","quantityEvidence":"three visible layers","estimatedGrams":90,"preparationMethod":"pan-cooked","additions":[],"exclusions":[],"brand":null,"productName":null,"flavour":null,"servingSize":null,"confidence":0.95,"requiresClarification":false,"isPackagedProduct":false,"packagedLabelEvidence":null,"aiNutritionEstimate":null}
+          ],
+          "unresolvedItems":[],"mealDescription":"Indian thali","clarificationQuestions":[],"confidence":0.95,
+          "requestId":"request-123","parserModel":"gemini-3.1-flash-lite"
+        }
+        """.utf8))
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = try await StructuredPhotoRecognitionService(
+            understanding: StubMealUnderstanding(result: parse),
+            coordinator: HybridMealAnalysisCoordinator(router: router)
+        ).analyse(fixtureFoodImage(), dishHint: nil)
+
+        XCTAssertEqual(result.detectedItems.count, 5)
+        XCTAssertEqual(
+            Set(result.detectedItems.map(\.canonicalFoodId)),
+            Set(["bhindi-masala", "dal", "dahi", "steamed-rice", "roti"])
+        )
+        XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 3)
+    }
+
     func testCatalogRecipeCalculationSumsVerifiedIngredients() async {
         let service = CatalogRecipeCalculationService(resolver: HybridNutritionResolutionService(catalog: catalog))
         let result = await service.calculate(ingredients: [
