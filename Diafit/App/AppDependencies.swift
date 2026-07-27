@@ -115,11 +115,26 @@ struct RuntimeBackendConfiguration: Sendable {
 
     init?(rawURL: String, accessToken: String) {
         guard let endpoint = URL(string: rawURL),
-              let scheme = endpoint.scheme?.lowercased(),
-              scheme == "https" || (scheme == "http" && ["127.0.0.1", "localhost"].contains(endpoint.host)),
+              Self.isAllowed(endpoint),
               accessToken.count >= 8 else { return nil }
         self.endpoint = endpoint
         self.accessToken = accessToken
+    }
+
+    private static func isAllowed(_ endpoint: URL) -> Bool {
+        guard let scheme = endpoint.scheme?.lowercased(),
+              let host = endpoint.host?.lowercased() else { return false }
+        if scheme == "https" { return true }
+        guard scheme == "http" else { return false }
+        if ["127.0.0.1", "localhost"].contains(host) { return true }
+        #if DEBUG
+        // A physical development device may use the authenticated backend on
+        // the developer's Mac over the same private Bonjour network. Release
+        // builds still require HTTPS.
+        return host.hasSuffix(".local")
+        #else
+        return false
+        #endif
     }
 }
 

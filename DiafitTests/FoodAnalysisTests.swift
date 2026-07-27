@@ -583,6 +583,12 @@ final class FoodAnalysisTests: XCTestCase {
         ]))
         XCTAssertEqual(valid.endpoint.absoluteString, "https://api.example.test/diafit")
         XCTAssertEqual(valid.accessToken, "account-token")
+        #if DEBUG
+        XCTAssertNotNil(RuntimeBackendConfiguration(environment: [
+            "DIAFIT_BACKEND_URL": "http://Imrans-MacBook-Air.local:8787",
+            "DIAFIT_BACKEND_ACCESS_TOKEN": "account-token"
+        ]))
+        #endif
         XCTAssertNil(RuntimeBackendConfiguration(environment: [
             "DIAFIT_BACKEND_URL": "http://192.168.1.10:8787",
             "DIAFIT_BACKEND_ACCESS_TOKEN": "account-token"
