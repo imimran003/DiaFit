@@ -1,4 +1,5 @@
 import XCTest
+import UIKit
 @testable import Diafit
 
 final class FoodAnalysisTests: XCTestCase {
@@ -705,7 +706,7 @@ final class FoodAnalysisTests: XCTestCase {
         let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
         let parseCount = await counter.value
 
-        XCTAssertEqual(parseCount, 1)
+        XCTAssertEqual(parseCount, 2)
         XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["bhindi-masala", "dal", "steamed-rice", "roti"]))
         XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 2)
         XCTAssertEqual(result.detectedItems.filter { $0.category == .rice }.count, 1)
@@ -861,6 +862,132 @@ final class FoodAnalysisTests: XCTestCase {
         let selected = PhotoInventoryVerificationService().preferred(primary: primary, verified: verified)
 
         XCTAssertEqual(selected.detectedItems.map(\.originalText), ["Steamed rice", "Dal"])
+    }
+
+    func testIndependentPhotoInventoryMergesDisjointVisibleServings() {
+        let primary = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Kadhi",
+                    canonicalSearchName: "Indian yogurt and gram flour curry",
+                    regionalName: "kadhi",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "katori",
+                    confidence: 0.91
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Kadhi",
+            clarificationQuestions: [],
+            confidence: 0.91
+        )
+        let spatialCheck = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Two rotis",
+                    canonicalSearchName: "whole wheat flatbread",
+                    regionalName: "roti",
+                    category: .bread,
+                    quantity: 2,
+                    unit: "pieces",
+                    quantityEvidence: "two stacked flatbreads are visible",
+                    confidence: 0.94
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Two rotis",
+            clarificationQuestions: [],
+            confidence: 0.94
+        )
+
+        let selected = PhotoInventoryVerificationService().preferred(primary: primary, verified: spatialCheck)
+
+        XCTAssertEqual(Set(selected.detectedItems.map(\.regionalName)), Set(["kadhi", "roti"]))
+        XCTAssertEqual(selected.detectedItems.first(where: { $0.category == .bread })?.quantity, 2)
+    }
+
+    func testStructuredPhotoResultDeduplicatesEquivalentQuickChecks() async throws {
+        let repeatedQuestion = "Was the rice a small, medium, or large serving?"
+        let biryani = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Biryani",
+                    canonicalSearchName: "biryani",
+                    regionalName: "biryani",
+                    category: .rice,
+                    quantity: 1,
+                    unit: "plate",
+                    confidence: 0.9
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Biryani",
+            clarificationQuestions: [
+                repeatedQuestion,
+                repeatedQuestion,
+                "  WAS the rice a small, medium or large serving  "
+            ],
+            confidence: 0.9
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = try await StructuredPhotoRecognitionService(
+            understanding: StubMealUnderstanding(result: biryani),
+            coordinator: HybridMealAnalysisCoordinator(router: router)
+        ).analyse(fixtureFoodImage(), dishHint: nil)
+
+        XCTAssertEqual(
+            result.clarificationQuestions.filter {
+                $0.question.localizedCaseInsensitiveContains("small")
+                    && $0.question.localizedCaseInsensitiveContains("large")
+            }.count,
+            1
+        )
+    }
+
+    func testSpatialPlateReviewCreatesOverlappingMontageWithoutChangingImageIdentity() throws {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 480))
+        let sourceData = try XCTUnwrap(renderer.image { context in
+            UIColor.systemBackground.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 320, height: 480))
+            UIColor.systemOrange.setFill()
+            context.fill(CGRect(x: 12, y: 12, width: 140, height: 180))
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 168, y: 280, width: 140, height: 188))
+        }.jpegData(compressionQuality: 0.9))
+        let prepared = try AppleImagePreparationService().prepare(imageData: sourceData)
+
+        let montage = try XCTUnwrap(SpatialPlateReviewImageService().make(from: prepared))
+
+        XCTAssertEqual(montage.pixelWidth, 2_048)
+        XCTAssertEqual(montage.pixelHeight, 2_048)
+        XCTAssertEqual(montage.mimeType, "image/jpeg")
+        XCTAssertEqual(montage.imageReference, prepared.imageReference)
+        XCTAssertNotEqual(montage.data, prepared.data)
+    }
+
+    func testQuestionDeduplicationPrefersTheActionableAnsweredQuestion() {
+        let wording = "Was the rice a small, medium, or large serving?"
+        let freeText = ClarificationQuestion(
+            id: UUID(), relatedFoodItemId: nil, question: wording,
+            answerType: .freeText, options: [], impactLevel: .high, answer: nil
+        )
+        let choice = ClarificationQuestion(
+            id: UUID(), relatedFoodItemId: UUID(), question: wording,
+            answerType: .singleChoice, options: ["Small", "Medium", "Large"],
+            impactLevel: .high, answer: "Medium"
+        )
+
+        let questions = SemanticQuestionDeduplicator.uniqueQuestions([freeText, choice, choice])
+
+        XCTAssertEqual(questions.count, 1)
+        XCTAssertEqual(questions[0].answerType, .singleChoice)
+        XCTAssertEqual(questions[0].answer, "Medium")
     }
 
     func testStructuredVisionPreservesUncataloguedRecognisedCurryWithEditableFallback() async throws {

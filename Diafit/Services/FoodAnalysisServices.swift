@@ -225,6 +225,7 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
     let coordinator: HybridMealAnalysisCoordinator
     let integrity = PhotoParseIntegrityService()
     let inventoryVerification = PhotoInventoryVerificationService()
+    let spatialReview = SpatialPlateReviewImageService()
 
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         let trimmedHint = dishHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -236,7 +237,7 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
         if inventoryVerification.needsIndependentCheck(primaryParse),
            let verifiedParse = try? await understanding.parse(
                text: inventoryVerification.prompt(after: primaryParse),
-               image: image
+               image: spatialReview.make(from: image) ?? image
            ) {
             selectedParse = inventoryVerification.preferred(primary: primaryParse, verified: verifiedParse)
         } else {
@@ -261,12 +262,12 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
 }
 
 /// A whole plate can be nutritionally complete while still being visually
-/// incomplete. Sparse one- or two-component interpretations receive one
-/// independent inventory check. The second pass must return the complete plate and only
-/// replaces the first when it finds more distinct physical servings.
+/// incomplete. Common one-to-four-component interpretations receive one
+/// independent inventory check. The second pass must return the complete plate
+/// and is reconciled with the first rather than blindly replacing it.
 struct PhotoInventoryVerificationService: Sendable {
     func needsIndependentCheck(_ parse: MealParseResult) -> Bool {
-        (1...2).contains(parse.detectedItems.count)
+        (1...4).contains(parse.detectedItems.count)
     }
 
     func prompt(after parse: MealParseResult) -> String {
@@ -275,7 +276,9 @@ struct PhotoInventoryVerificationService: Sendable {
             .joined(separator: ", ")
         return """
         Re-inspect the entire food photograph independently. The first inventory found: \(firstPass). \
-        Return a complete corrected inventory, not only additions. Scan the main plate and every separate bowl \
+        The supplied image may be a spatial review montage containing overlapping views of the same original \
+        photograph. Do not count a food twice merely because it appears in more than one panel. Return a complete \
+        corrected inventory, not only additions. Scan the main plate and every separate bowl \
         from top to bottom and left to right. Check separately for grains, breads or stacked flatbreads, dal or \
         other legumes, dry vegetables or sabzi, wet curries, protein foods, sides, and drinks. Distinguish a \
         separate lentil dish from generic vegetable soup when the visual evidence supports it. Preserve visible \
@@ -284,9 +287,191 @@ struct PhotoInventoryVerificationService: Sendable {
     }
 
     func preferred(primary: MealParseResult, verified: MealParseResult) -> MealParseResult {
-        guard !verified.detectedItems.isEmpty,
-              verified.detectedItems.count >= primary.detectedItems.count else { return primary }
-        return verified
+        guard !verified.detectedItems.isEmpty else { return primary }
+
+        let primaryKeys = Set(primary.detectedItems.map(identityKey))
+        let verifiedKeys = Set(verified.detectedItems.map(identityKey))
+        let hasSharedIdentity = !primaryKeys.intersection(verifiedKeys).isEmpty
+        var selected: MealParseResult
+
+        if !hasSharedIdentity, primary.detectedItems.allSatisfy(isReplaceableGeneric) {
+            selected = verified
+        } else if !hasSharedIdentity {
+            // Spatially separated bowls and breads are often noticed on
+            // different passes. A disjoint inventory is additive evidence,
+            // not a reason to discard the first visible serving.
+            selected = verified
+            selected.detectedItems = deduplicatedItems(primary.detectedItems + verified.detectedItems)
+            selected.mealDescription = [primary.mealDescription, verified.mealDescription]
+                .filter { !$0.isEmpty }
+                .joined(separator: ", ")
+            selected.confidence = min(primary.confidence, verified.confidence)
+        } else if verified.detectedItems.count > primary.detectedItems.count {
+            selected = verified
+        } else if verified.detectedItems.count >= primary.detectedItems.count {
+            // With an overlapping anchor, the independent full inventory is
+            // authoritative and can correct a generic first-pass label.
+            selected = verified
+        } else {
+            selected = primary
+        }
+
+        selected.unresolvedItems = SemanticQuestionDeduplicator.uniqueStrings(
+            primary.unresolvedItems + verified.unresolvedItems
+        )
+        selected.clarificationQuestions = SemanticQuestionDeduplicator.uniqueStrings(
+            primary.clarificationQuestions + verified.clarificationQuestions
+        )
+        return selected
+    }
+
+    private func identityKey(_ item: ParsedFoodItem) -> String {
+        let source = item.canonicalSearchName.isEmpty
+            ? (item.regionalName ?? item.originalText)
+            : item.canonicalSearchName
+        return SemanticQuestionDeduplicator.normalizedKey(source)
+    }
+
+    private func deduplicatedItems(_ items: [ParsedFoodItem]) -> [ParsedFoodItem] {
+        var seen: Set<String> = []
+        return items.filter { seen.insert(identityKey($0)).inserted }
+    }
+
+    private func isReplaceableGeneric(_ item: ParsedFoodItem) -> Bool {
+        guard item.confidence < 0.8 else { return false }
+        let key = identityKey(item)
+        return ["food", "meal", "dish", "vegetable soup", "mixed food", "mixed dish"]
+            .contains(where: { key == $0 || key.hasPrefix($0 + " ") })
+    }
+}
+
+/// Reframes one photograph into overlapping spatial views for the independent
+/// inventory pass. It helps the vision model inspect foods at the edges of a
+/// large plate without uploading additional photographs or requiring the user
+/// to type a hint.
+struct SpatialPlateReviewImageService: Sendable {
+    func make(from image: PreparedFoodImage) -> PreparedFoodImage? {
+        guard image.pixelWidth >= 64, image.pixelHeight >= 64,
+              let source = CGImageSourceCreateWithData(image.data as CFData, nil),
+              let original = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+
+        let canvasSide = 2_048
+        guard let context = CGContext(
+            data: nil,
+            width: canvasSide,
+            height: canvasSide,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else { return nil }
+
+        context.setFillColor(CGColor(gray: 0.96, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: canvasSide, height: canvasSide))
+        context.interpolationQuality = .high
+
+        let width = CGFloat(original.width)
+        let height = CGFloat(original.height)
+        let crops = [
+            CGRect(x: 0, y: height * 0.40, width: width, height: height * 0.60),
+            CGRect(x: 0, y: 0, width: width, height: height * 0.60),
+            CGRect(x: 0, y: 0, width: width * 0.60, height: height),
+            CGRect(x: width * 0.40, y: 0, width: width * 0.60, height: height)
+        ]
+        let cells = [
+            CGRect(x: 0, y: 1_024, width: 1_024, height: 1_024),
+            CGRect(x: 1_024, y: 1_024, width: 1_024, height: 1_024),
+            CGRect(x: 0, y: 0, width: 1_024, height: 1_024),
+            CGRect(x: 1_024, y: 0, width: 1_024, height: 1_024)
+        ]
+
+        for (crop, cell) in zip(crops, cells) {
+            guard let cropped = original.cropping(to: crop.integral) else { continue }
+            drawAspectFit(cropped, in: cell.insetBy(dx: 6, dy: 6), context: context)
+        }
+
+        guard let montage = context.makeImage() else { return nil }
+        let output = NSMutableData()
+        guard let destination = CGImageDestinationCreateWithData(
+            output,
+            "public.jpeg" as CFString,
+            1,
+            nil
+        ) else { return nil }
+        CGImageDestinationAddImage(destination, montage, [
+            kCGImageDestinationLossyCompressionQuality: 0.82
+        ] as CFDictionary)
+        guard CGImageDestinationFinalize(destination), output.length > 0 else { return nil }
+
+        return PreparedFoodImage(
+            data: output as Data,
+            mimeType: "image/jpeg",
+            pixelWidth: canvasSide,
+            pixelHeight: canvasSide,
+            imageReference: image.imageReference
+        )
+    }
+
+    private func drawAspectFit(_ image: CGImage, in destination: CGRect, context: CGContext) {
+        let scale = min(
+            destination.width / CGFloat(image.width),
+            destination.height / CGFloat(image.height)
+        )
+        let size = CGSize(width: CGFloat(image.width) * scale, height: CGFloat(image.height) * scale)
+        let rect = CGRect(
+            x: destination.midX - size.width / 2,
+            y: destination.midY - size.height / 2,
+            width: size.width,
+            height: size.height
+        )
+        context.draw(image, in: rect)
+    }
+}
+
+/// Clarification text can be produced by interpretation, nutrition fallback
+/// and UI correction stages. UUID-based identity cannot remove duplicates, so
+/// questions are canonicalised by their readable content at the boundary.
+enum SemanticQuestionDeduplicator {
+    static func uniqueStrings(_ values: [String]) -> [String] {
+        var seen: Set<String> = []
+        return values.compactMap { value in
+            let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty, seen.insert(normalizedKey(trimmed)).inserted else { return nil }
+            return trimmed
+        }
+    }
+
+    static func uniqueQuestions(_ values: [ClarificationQuestion]) -> [ClarificationQuestion] {
+        var result: [ClarificationQuestion] = []
+        var indexByKey: [String: Int] = [:]
+        for question in values {
+            let key = normalizedKey(question.question)
+            guard !key.isEmpty else { continue }
+            if let index = indexByKey[key] {
+                if usefulness(of: question) > usefulness(of: result[index]) {
+                    result[index] = question
+                }
+            } else {
+                indexByKey[key] = result.count
+                result.append(question)
+            }
+        }
+        return result
+    }
+
+    static func normalizedKey(_ value: String) -> String {
+        value
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+
+    private static func usefulness(of question: ClarificationQuestion) -> Int {
+        (question.answer == nil ? 0 : 100)
+            + (question.answerType == .freeText ? 0 : 10)
+            + question.options.count
+            + (question.relatedFoodItemId == nil ? 0 : 1)
     }
 }
 
@@ -310,7 +495,7 @@ struct PhotoParseIntegrityService: Sendable {
             if !questions.contains(question) { questions.append(question) }
             return reviewed
         }
-        audited.clarificationQuestions = questions
+        audited.clarificationQuestions = SemanticQuestionDeduplicator.uniqueStrings(questions)
         audited.confidence = min(audited.confidence, audited.detectedItems.map(\.confidence).min() ?? audited.confidence)
         return audited
     }

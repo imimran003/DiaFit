@@ -38,7 +38,11 @@ struct MealAnalysisReviewCard: View {
         self.onDiscard = onDiscard
         self.onRetryVisual = onRetryVisual
         self.confirmationTitle = confirmationTitle
-        _editableDraft = State(initialValue: draft)
+        var normalizedDraft = draft
+        normalizedDraft.result.clarificationQuestions = SemanticQuestionDeduplicator.uniqueQuestions(
+            draft.result.clarificationQuestions
+        )
+        _editableDraft = State(initialValue: normalizedDraft)
     }
 
     private var result: MealAnalysisResult { editableDraft.result }
@@ -53,7 +57,8 @@ struct MealAnalysisReviewCard: View {
     }
 
     private var visibleClarificationQuestions: [ClarificationQuestion] {
-        result.clarificationQuestions.filter { $0.answerType != .freeText }
+        SemanticQuestionDeduplicator.uniqueQuestions(result.clarificationQuestions)
+            .filter { $0.answerType != .freeText }
     }
 
     private var nutritionIsSafeToConfirm: Bool {
@@ -275,6 +280,9 @@ struct MealAnalysisReviewCard: View {
             $0.answerType == .freeText && $0.relatedFoodItemId == nil
         }
         editableDraft.result.clarificationQuestions.append(contentsOf: corrected.clarificationQuestions)
+        editableDraft.result.clarificationQuestions = SemanticQuestionDeduplicator.uniqueQuestions(
+            editableDraft.result.clarificationQuestions
+        )
         editableDraft.result.assumptions.append("Food names were corrected by you; servings remain editable estimates.")
         componentQuery = ""
         componentError = nil

@@ -883,7 +883,7 @@ struct DefaultMealClarificationService: MealClarificationService, Sendable {
             questions.append("How many scoops, and was it mixed with water or milk?")
         }
         if matches.count < parse.detectedItems.count { questions.append("What food or packaged product should I use for the unmatched item?") }
-        return Array(NSOrderedSet(array: questions)) as? [String] ?? questions
+        return SemanticQuestionDeduplicator.uniqueStrings(questions)
     }
 }
 
@@ -1243,14 +1243,14 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         if items.contains(where: { $0.canonical?.food.canonicalId == "paratha" }) { questions.append("Was the paratha plain, stuffed or buttered?") }
         if items.contains(where: { $0.canonical?.food.canonicalId == "kadhi" }) { questions.append("Was it plain kadhi or kadhi with pakoras?") }
         if items.contains(where: { $0.parsedItem.canonicalSearchName.localizedCaseInsensitiveContains("whey") && !$0.parsedItem.additions.contains(where: { ["water", "milk"].contains($0) }) }) { questions.append("How many scoops, and was it mixed with water or milk?") }
-        return Array(NSOrderedSet(array: questions)) as? [String] ?? questions
+        return SemanticQuestionDeduplicator.uniqueStrings(questions)
     }
 
     private func result(text: String, normalized: String, items: [FoodResolutionItem], unresolved: [String], extraQuestions: [String], attemptedAI: Bool = false) -> FoodResolutionResult {
         let reviewAssumptions = items.reduce(into: [String]()) { partial, item in
             partial.append(contentsOf: item.nutrition.assumptions.filter { $0.localizedCaseInsensitiveContains("review") })
         }
-        let questions = Array(NSOrderedSet(array: extraQuestions + reviewAssumptions)) as? [String] ?? extraQuestions
+        let questions = SemanticQuestionDeduplicator.uniqueStrings(extraQuestions + reviewAssumptions)
         let confidence = items.map { $0.parsedItem.confidence }.min() ?? 0
         FoodLoggingDiagnostics.record("resolution.route", fields: [
             "inputFingerprint": FoodLoggingDiagnostics.fingerprint(text),
@@ -1316,7 +1316,7 @@ struct HybridMealAnalysisCoordinator: Sendable {
         let items = resolution.items.map(makeDetectedItem)
         let totals = NutritionValues.total(of: items.map(\.nutrition))
         let validation = DefaultNutritionValidationService().validate(rawValues: totals)
-        let questions = resolution.clarificationQuestions.map {
+        let questions = SemanticQuestionDeduplicator.uniqueStrings(resolution.clarificationQuestions).map {
             ClarificationQuestion(id: UUID(), relatedFoodItemId: nil, question: $0,
                                   answerType: .freeText, options: [], impactLevel: .high, answer: nil)
         }
