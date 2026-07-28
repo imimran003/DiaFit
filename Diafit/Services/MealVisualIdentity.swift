@@ -8,6 +8,170 @@ enum MealVisualSource: String, Codable, Hashable, Sendable {
     case deterministicPlaceholder
 }
 
+/// A small, stable visual vocabulary for meals that do not have a member
+/// photo or an authenticated image provider. These are deliberately semantic
+/// categories rather than image names so the UI can render them with native
+/// vectors, SF Symbols, print, widgets, or a future export renderer.
+enum FoodGlyphKind: String, Codable, Hashable, Sendable {
+    case water
+    case coffee
+    case tea
+    case flatbread
+    case rice
+    case lentils
+    case curry
+    case egg
+    case sprouts
+    case fruit
+    case vegetables
+    case dairy
+    case shake
+    case beverage
+    case fish
+    case meat
+    case snack
+    case dessert
+    case meal
+}
+
+struct FoodGlyphDescriptor: Hashable, Sendable {
+    let kind: FoodGlyphKind
+    let accessibilityName: String
+}
+
+/// Keeps food-to-visual mapping out of SwiftUI and gives every screen the same
+/// offline answer. Canonical identity wins over the broad catalog category:
+/// coffee and chai, for example, both live in a drink category but should not
+/// look identical in the atlas.
+struct FoodGlyphResolver: Sendable {
+    func descriptor(canonicalFoodID: String, category: FoodCategory) -> FoodGlyphDescriptor {
+        let normalized = canonicalFoodID
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: "_", with: "-")
+            .replacingOccurrences(of: " ", with: "-")
+
+        if containsAny(normalized, ["water", "paani", "pani"]) {
+            return descriptor(.water)
+        }
+        if containsAny(normalized, ["coffee", "espresso", "latte", "cappuccino"]) {
+            return descriptor(.coffee)
+        }
+        if containsAny(normalized, ["chai", "tea"]) {
+            return descriptor(.tea)
+        }
+        if containsAny(normalized, [
+            "roti", "chapati", "phulka", "paratha", "naan", "poori", "puri",
+            "bhatura", "dosa", "bread", "toast"
+        ]) {
+            return descriptor(.flatbread)
+        }
+        if containsAny(normalized, [
+            "rice", "chawal", "chaawal", "biryani", "pulao", "pilaf", "poha",
+            "khichdi", "khichadi", "sabudana", "sabodana"
+        ]) {
+            return descriptor(.rice)
+        }
+        if containsAny(normalized, [
+            "dal", "daal", "lentil", "rajma", "chole", "chana", "sambar",
+            "moong", "mung", "masoor", "toor", "arhar"
+        ]) {
+            return descriptor(.lentils)
+        }
+        if containsAny(normalized, ["egg", "omelette", "omelet", "anda", "ande"]) {
+            return descriptor(.egg)
+        }
+        if containsAny(normalized, ["sprout", "sprouted"]) {
+            return descriptor(.sprouts)
+        }
+        if containsAny(normalized, [
+            "whey", "protein-powder", "protein-shake", "shake", "smoothie"
+        ]) {
+            return descriptor(.shake)
+        }
+        if containsAny(normalized, [
+            "dahi", "yogurt", "yoghurt", "curd", "raita", "paneer", "milk",
+            "serek", "cottage-cheese"
+        ]) {
+            return descriptor(.dairy)
+        }
+        if containsAny(normalized, [
+            "banana", "apple", "orange", "mango", "berry", "berries", "fruit",
+            "grape", "melon", "guava", "papaya"
+        ]) {
+            return descriptor(.fruit)
+        }
+        if containsAny(normalized, [
+            "vegetable", "sabji", "sabzi", "bhindi", "okra", "salad", "carrot",
+            "broccoli", "spinach", "palak", "cauliflower", "gobi"
+        ]) {
+            return descriptor(.vegetables)
+        }
+        if containsAny(normalized, ["fish", "salmon", "tuna", "prawn", "shrimp"]) {
+            return descriptor(.fish)
+        }
+        if containsAny(normalized, ["chicken", "mutton", "lamb", "beef", "meat", "kebab"]) {
+            return descriptor(.meat)
+        }
+        if containsAny(normalized, ["curry", "kadhi", "karhi", "korma", "masala"]) {
+            return descriptor(.curry)
+        }
+        if containsAny(normalized, ["lassi", "chaas", "juice", "drink", "soda"]) {
+            return descriptor(.beverage)
+        }
+        if containsAny(normalized, ["cake", "dessert", "sweet", "mithai", "halwa", "ice-cream"]) {
+            return descriptor(.dessert)
+        }
+
+        switch category {
+        case .hydration: return descriptor(.water)
+        case .bread: return descriptor(.flatbread)
+        case .rice: return descriptor(.rice)
+        case .lentilOrLegume: return descriptor(.lentils)
+        case .vegetarianCurry: return descriptor(.curry)
+        case .nonVegetarian: return descriptor(.meat)
+        case .breakfastOrSnack: return descriptor(.snack)
+        case .dairyOrSide: return descriptor(.dairy)
+        case .dessertOrDrink: return descriptor(.beverage)
+        case .fruitOrVegetable: return descriptor(.vegetables)
+        case .egg: return descriptor(.egg)
+        case .sprouts: return descriptor(.sprouts)
+        case .supplement: return descriptor(.shake)
+        case .unknown: return descriptor(.meal)
+        }
+    }
+
+    private func containsAny(_ value: String, _ terms: [String]) -> Bool {
+        terms.contains { value.contains($0) }
+    }
+
+    private func descriptor(_ kind: FoodGlyphKind) -> FoodGlyphDescriptor {
+        let name: String
+        switch kind {
+        case .water: name = "Water"
+        case .coffee: name = "Coffee"
+        case .tea: name = "Tea"
+        case .flatbread: name = "Flatbread"
+        case .rice: name = "Rice"
+        case .lentils: name = "Lentils"
+        case .curry: name = "Curry"
+        case .egg: name = "Egg"
+        case .sprouts: name = "Sprouts"
+        case .fruit: name = "Fruit"
+        case .vegetables: name = "Vegetables"
+        case .dairy: name = "Dairy"
+        case .shake: name = "Protein shake"
+        case .beverage: name = "Drink"
+        case .fish: name = "Fish"
+        case .meat: name = "Protein"
+        case .snack: name = "Snack"
+        case .dessert: name = "Dessert"
+        case .meal: name = "Meal"
+        }
+        return FoodGlyphDescriptor(kind: kind, accessibilityName: name)
+    }
+}
+
 enum MealVisualRequestState: String, Codable, Hashable, Sendable {
     /// A provider may run with the structured prompt. Local builds replace this
     /// immediately with a deterministic component composition.

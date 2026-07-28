@@ -70,3 +70,14 @@
   with water both passed on the iPhone 17 Pro simulator. A full nine-test UI
   invocation became unstable during repeated relaunches and was stopped; it
   is not reported as a pass.
+
+## 2026-07-28 — Offline meal visual vocabulary
+
+- Replaced the generic fork-and-knife placeholder with a deterministic native
+  visual vocabulary for water, coffee, tea, flatbreads, rice, lentils, curries,
+  eggs, sprouts, produce, dairy, shakes, proteins, snacks, and desserts.
+- Canonical food identity is resolved outside SwiftUI, so all screens can share
+  the same visual and common Indian aliases remain visually distinct offline.
+- Member-uploaded photos remain the first-choice meal visual. The vector
+  composition is a truthful fallback for manual entries when generated imagery
+  is disabled or unavailable; it is not presented as a photo of the portion.

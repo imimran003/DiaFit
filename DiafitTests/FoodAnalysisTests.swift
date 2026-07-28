@@ -1767,6 +1767,34 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(first.canonicalFoodIDs, ["chai", "paratha"])
     }
 
+    func testOfflineFoodGlyphResolverUsesCanonicalFoodIdentityBeforeBroadCategory() {
+        let resolver = FoodGlyphResolver()
+        let examples: [(String, FoodCategory, FoodGlyphKind)] = [
+            ("black-coffee", .dessertOrDrink, .coffee),
+            ("chai-with-milk-and-sugar", .dessertOrDrink, .tea),
+            ("roti", .bread, .flatbread),
+            ("chicken-biryani", .rice, .rice),
+            ("sabodana-khichdi", .breakfastOrSnack, .rice),
+            ("masoor-dal", .lentilOrLegume, .lentils),
+            ("boiled-egg", .egg, .egg),
+            ("mixed-sprouts", .sprouts, .sprouts),
+            ("generic-whey-protein", .supplement, .shake),
+            ("high-protein-serek", .dairyOrSide, .dairy),
+            ("banana", .fruitOrVegetable, .fruit),
+            ("bhindi-masala", .vegetarianCurry, .vegetables),
+            ("salmon", .nonVegetarian, .fish),
+            ("unknown-entry", .unknown, .meal)
+        ]
+
+        for (canonicalID, category, expected) in examples {
+            XCTAssertEqual(
+                resolver.descriptor(canonicalFoodID: canonicalID, category: category).kind,
+                expected,
+                canonicalID
+            )
+        }
+    }
+
     func testVisualIdentityFollowsTheStructuredRequestAcrossRenders() throws {
         let result = LocalMealAnalysisEngine(catalog: catalog)
             .makeAnalysis(description: "sprouts with 3 boiled eggs")
