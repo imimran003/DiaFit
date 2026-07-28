@@ -18,6 +18,9 @@ struct DayThreadView: View {
     @State private var showsGlucoseHistory = false
     @State private var glucoseDraft: GlucoseDraft?
     @State private var healthActivityState: HealthActivityViewState = .disconnected
+    @State private var dailyReviewReminderEnabled = false
+    @State private var isEnablingDailyReviewReminder = false
+    @State private var dailyReviewReminderMessage: String?
     @FocusState private var composerFocused: Bool
 
     private var day: Day? { store.day(id: dayID) }
@@ -65,6 +68,9 @@ struct DayThreadView: View {
                                     discardDraft: {
                                         store.remove(itemID: item.id, from: dayID)
                                     },
+                                    retryDraftAnalysis: { draft in
+                                        retryPhotoAnalysis(draft, itemID: item.id)
+                                    },
                                     retryDraftVisual: { draft in
                                         Task {
                                             await dependencies.mealVisuals.prepare(
@@ -90,6 +96,15 @@ struct DayThreadView: View {
                                 )
                                 .id(item.id)
                             }
+
+                            DailyNutritionReviewSection(
+                                day: day,
+                                activity: healthActivitySummary,
+                                reminderEnabled: dailyReviewReminderEnabled,
+                                isEnablingReminder: isEnablingDailyReviewReminder,
+                                reminderMessage: dailyReviewReminderMessage,
+                                enableReminder: enableDailyReviewReminder
+                            )
 
                             if isThinking {
                                 ThinkingBubble(label: thinkingLabel)
@@ -149,7 +164,7 @@ struct DayThreadView: View {
                 NavigationStack {
                     ScrollView(showsIndicators: false) {
                         MealAnalysisReviewCard(
-                            draft: MealAnalysisDraft(result: analysis),
+                            draft: MealAnalysisDraft(result: analysis, mealPeriod: meal.period),
                             onUpdate: { _ in },
                             onConfirm: { draft in update(meal, from: draft) },
                             onDiscard: { mealBeingEdited = nil },
@@ -192,6 +207,7 @@ struct DayThreadView: View {
         }
         .task(id: dayID) {
             await loadHealthActivity()
+            dailyReviewReminderEnabled = await dependencies.dailyReviewReminder.isEnabled()
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active, dependencies.healthActivity.hasRequestedAccess else { return }
@@ -217,6 +233,29 @@ struct DayThreadView: View {
         Task { await loadHealthActivity() }
     }
 
+    private var healthActivitySummary: HealthActivitySummary? {
+        if case .ready(let summary) = healthActivityState { return summary }
+        return nil
+    }
+
+    private func enableDailyReviewReminder() {
+        guard !isEnablingDailyReviewReminder else { return }
+        isEnablingDailyReviewReminder = true
+        dailyReviewReminderMessage = nil
+        Task { @MainActor in
+            do {
+                let enabled = try await dependencies.dailyReviewReminder.enable(hour: 22)
+                dailyReviewReminderEnabled = enabled
+                dailyReviewReminderMessage = enabled
+                    ? "10 PM reminder enabled."
+                    : "Notifications are off. You can enable them in Settings."
+            } catch {
+                dailyReviewReminderMessage = "The reminder could not be scheduled. Try again."
+            }
+            isEnablingDailyReviewReminder = false
+        }
+    }
+
     @MainActor
     private func loadHealthActivity() async {
         let health = dependencies.healthActivity
@@ -239,7 +278,8 @@ struct DayThreadView: View {
 
     private func scrollToTail(_ proxy: ScrollViewProxy, animated: Bool = true) {
         DispatchQueue.main.async {
-            if animated {
+            let usesStaticRendering = ProcessInfo.processInfo.arguments.contains("UITestMode")
+            if animated && !usesStaticRendering {
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
                     proxy.scrollTo("tail", anchor: .bottom)
                 }
@@ -357,6 +397,32 @@ struct DayThreadView: View {
         }
     }
 
+    private func retryPhotoAnalysis(_ draft: MealAnalysisDraft, itemID: ThreadItem.ID) {
+        guard let imageData = draft.transientImageData else { return }
+        composerFocused = false
+
+        Task { @MainActor in
+            do {
+                let prepared = try AppleImagePreparationService().prepare(imageData: imageData)
+                let result = await dependencies.photoAnalysis.analyse(
+                    image: prepared,
+                    description: ""
+                )
+                store.update(
+                    MealAnalysisDraft(result: result, transientImageData: prepared.data),
+                    for: itemID,
+                    in: dayID
+                )
+            } catch {
+                var failedDraft = draft
+                failedDraft.result.warnings = SemanticQuestionDeduplicator.uniqueStrings(
+                    [error.localizedDescription] + failedDraft.result.warnings
+                )
+                store.update(failedDraft, for: itemID, in: dayID)
+            }
+        }
+    }
+
     private func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID) {
         let originalPhotoData = draft.transientImageData
         let meal = DiaryMealLoggingService(userFoodMemory: dependencies.userFoodMemory)
@@ -385,6 +451,7 @@ struct DayThreadView: View {
 
     private func update(_ meal: Meal, from draft: MealAnalysisDraft) {
         var updated = meal
+        updated.period = draft.mealPeriod
         updated.energy = Int(draft.result.mealTotals.caloriesKcal?.rounded() ?? 0)
         updated.carbs = Int(draft.result.mealTotals.carbohydrateGrams?.rounded() ?? 0)
         updated.protein = Int(draft.result.mealTotals.proteinGrams?.rounded() ?? 0)
@@ -475,6 +542,160 @@ private enum HealthActivityViewState: Equatable {
     case ready(HealthActivitySummary)
     case unavailable
     case failed(String)
+}
+
+private struct DailyNutritionReviewSection: View {
+    let day: Day
+    let activity: HealthActivitySummary?
+    let reminderEnabled: Bool
+    let isEnablingReminder: Bool
+    let reminderMessage: String?
+    let enableReminder: () -> Void
+
+    private let reviewer = DailyNutritionReviewService()
+
+    var body: some View {
+        if !day.meals.isEmpty {
+            if DailyReviewAvailability.isAvailable(for: day.date),
+               let review = reviewer.review(for: day, activity: activity) {
+                DailyNutritionReviewCard(review: review)
+            } else if Calendar.autoupdatingCurrent.isDateInToday(day.date) {
+                EveningReviewPending(
+                    reminderEnabled: reminderEnabled,
+                    isEnabling: isEnablingReminder,
+                    message: reminderMessage,
+                    enable: enableReminder
+                )
+            }
+        }
+    }
+}
+
+private struct EveningReviewPending: View {
+    let reminderEnabled: Bool
+    let isEnabling: Bool
+    let message: String?
+    let enable: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 10) {
+                Image(systemName: reminderEnabled ? "bell.badge.fill" : "moon.stars")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 38, height: 38)
+                    .background(Color.lime.opacity(0.42), in: Circle())
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Daily review · 10 PM")
+                        .font(DiafitType.body.weight(.semibold))
+                        .foregroundStyle(Color.ink)
+                    Text("A brief review appears here after your day is logged.")
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                }
+                Spacer(minLength: 4)
+                if !reminderEnabled {
+                    Button(action: enable) {
+                        if isEnabling {
+                            ProgressView().controlSize(.small)
+                        } else {
+                            Text("Remind me")
+                                .font(DiafitType.caption.weight(.semibold))
+                        }
+                    }
+                    .foregroundStyle(Color.ink)
+                    .frame(minHeight: 44)
+                    .disabled(isEnabling)
+                    .accessibilityHint("Requests permission for a private daily notification at 10 PM")
+                } else {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(Color.ink)
+                        .accessibilityLabel("Reminder enabled")
+                }
+            }
+            if let message {
+                Text(message)
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+            }
+        }
+        .padding(.vertical, 5)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("daily-review-pending")
+    }
+}
+
+private struct DailyNutritionReviewCard: View {
+    let review: DailyNutritionReview
+    @State private var expanded = true
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Button {
+                withAnimation(.easeInOut(duration: 0.2)) { expanded.toggle() }
+            } label: {
+                HStack(spacing: 11) {
+                    Image(systemName: "moon.stars.fill")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 38, height: 38)
+                        .background(Color.lime.opacity(0.55), in: Circle())
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(review.title)
+                            .font(DiafitType.title)
+                            .foregroundStyle(Color.ink)
+                        Text(review.overview)
+                            .font(DiafitType.caption)
+                            .foregroundStyle(Color.quietInk)
+                    }
+                    Spacer(minLength: 4)
+                    Image(systemName: expanded ? "chevron.up" : "chevron.down")
+                        .font(.system(size: 12, weight: .semibold))
+                        .foregroundStyle(Color.quietInk)
+                }
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint(expanded ? "Collapses the daily review" : "Expands the daily review")
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 15) {
+                    ForEach(Array(review.observations.enumerated()), id: \.element.id) { index, observation in
+                        HStack(alignment: .top, spacing: 11) {
+                            Text("\(index + 1)")
+                                .font(DiafitType.caption.weight(.bold))
+                                .foregroundStyle(Color.ink)
+                                .frame(width: 26, height: 26)
+                                .background(Color.mist.opacity(0.9), in: Circle())
+                            VStack(alignment: .leading, spacing: 3) {
+                                Text(observation.title)
+                                    .font(DiafitType.body.weight(.semibold))
+                                    .foregroundStyle(Color.ink)
+                                Text(observation.detail)
+                                    .font(DiafitType.caption)
+                                    .foregroundStyle(Color.quietInk)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                        }
+                    }
+                    Text(review.closing)
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                        .padding(.top, 2)
+                }
+                .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .padding(16)
+        .background(Color.mist.opacity(0.4), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.rule.opacity(0.78), lineWidth: 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("daily-nutrition-review")
+    }
 }
 
 private struct EnergyAndMovementSection: View {

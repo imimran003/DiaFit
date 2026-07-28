@@ -7,6 +7,7 @@ struct ThreadItemView: View {
     let updateDraft: (MealAnalysisDraft) -> Void
     let confirmDraft: (MealAnalysisDraft) -> Void
     let discardDraft: () -> Void
+    let retryDraftAnalysis: (MealAnalysisDraft) -> Void
     let retryDraftVisual: (MealAnalysisDraft) -> Void
     let editMeal: (Meal) -> Void
     let deleteMeal: (Meal) -> Void
@@ -33,6 +34,7 @@ struct ThreadItemView: View {
                 onUpdate: updateDraft,
                 onConfirm: confirmDraft,
                 onDiscard: discardDraft,
+                onRetryAnalysis: retryDraftAnalysis,
                 onRetryVisual: retryDraftVisual
             )
         case .glucose(let reading):

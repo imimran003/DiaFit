@@ -26,45 +26,51 @@ struct FoodArtwork: View {
                     .scaledToFill()
                     .frame(width: proxy.size.width, height: proxy.size.height)
                     .clipped()
+            } else if usesStaticRendering {
+                renderedArtwork(size: proxy.size, time: 0)
             } else {
-                TimelineView(.animation(minimumInterval: usesStaticRendering ? 3_600 : 1 / 60)) { timeline in
-                    FoodStage(artwork: meal.artwork)
-                        .overlay {
-                            if let image = storedImage {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .scaleEffect(imageScale)
-                                    .padding(imagePadding)
-                            } else if meal.artwork == .neutral {
-                                DeterministicMealComposition(
-                                    items: meal.analysis?.detectedItems ?? [],
-                                    fallbackTitle: meal.title,
-                                    isCompact: treatment == .atlas
-                                )
-                            } else if let image = FoodImageCache.image(named: meal.artwork.rawValue) {
-                                Image(uiImage: image)
-                                    .resizable()
-                                    .scaledToFit()
-                                    .scaleEffect(imageScale)
-                                    .offset(y: imageOffset)
-                                    .padding(imagePadding)
-                            }
-                        }
-                        .frame(width: proxy.size.width, height: proxy.size.height)
-                        .compositingGroup()
-                        .layerEffect(
-                            ShaderLibrary.lensPass(
-                                .float2(proxy.size),
-                                .float(usesStaticRendering ? 0 : Float(timeline.date.timeIntervalSinceReferenceDate))
-                            ),
-                            maxSampleOffset: CGSize(width: 2, height: 2)
-                        )
+                TimelineView(.animation(minimumInterval: 1 / 60)) { timeline in
+                    renderedArtwork(
+                        size: proxy.size,
+                        time: Float(timeline.date.timeIntervalSinceReferenceDate)
+                    )
                 }
             }
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(accessibilityDescription)
+    }
+
+    private func renderedArtwork(size: CGSize, time: Float) -> some View {
+        FoodStage(artwork: meal.artwork)
+            .overlay {
+                if let image = storedImage {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(imageScale)
+                        .padding(imagePadding)
+                } else if meal.artwork == .neutral {
+                    DeterministicMealComposition(
+                        items: meal.analysis?.detectedItems ?? [],
+                        fallbackTitle: meal.title,
+                        isCompact: treatment == .atlas
+                    )
+                } else if let image = FoodImageCache.image(named: meal.artwork.rawValue) {
+                    Image(uiImage: image)
+                        .resizable()
+                        .scaledToFit()
+                        .scaleEffect(imageScale)
+                        .offset(y: imageOffset)
+                        .padding(imagePadding)
+                }
+            }
+            .frame(width: size.width, height: size.height)
+            .compositingGroup()
+            .layerEffect(
+                ShaderLibrary.lensPass(.float2(size), .float(time)),
+                maxSampleOffset: CGSize(width: 2, height: 2)
+            )
     }
 
     private var storedImage: UIImage? {

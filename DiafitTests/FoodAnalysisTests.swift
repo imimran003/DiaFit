@@ -1381,6 +1381,101 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
     }
 
+    func testStructuredSproutsPlateKeepsEggsSproutsAndNutsWithUsableNutrition() async throws {
+        // Deterministic fixture matching the structured response expected for
+        // the reported photo: countable eggs and nuts plus one loose sprout
+        // serving. Nutrition remains canonical rather than model-authored.
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "hard-boiled eggs",
+                    canonicalSearchName: "hard-boiled egg",
+                    category: .egg,
+                    quantity: 2,
+                    unit: "whole",
+                    quantityEvidence: "four visible halves = two whole eggs",
+                    estimatedGrams: 100,
+                    preparationMethod: "hard-boiled",
+                    confidence: 1
+                ),
+                ParsedFoodItem(
+                    originalText: "walnuts",
+                    canonicalSearchName: "walnut",
+                    regionalName: "akhrot",
+                    category: .breakfastOrSnack,
+                    quantity: 3,
+                    unit: "whole",
+                    estimatedGrams: 12,
+                    confidence: 0.95
+                ),
+                ParsedFoodItem(
+                    originalText: "almonds",
+                    canonicalSearchName: "almond",
+                    regionalName: "badam",
+                    category: .breakfastOrSnack,
+                    quantity: 2,
+                    unit: "whole",
+                    estimatedGrams: 2.4,
+                    confidence: 0.95
+                ),
+                ParsedFoodItem(
+                    originalText: "sprouted legumes and peanuts",
+                    canonicalSearchName: "mixed sprouted legumes",
+                    regionalName: "sprouted chana and moong",
+                    category: .sprouts,
+                    quantity: 1,
+                    unit: "serving",
+                    estimatedGrams: 120,
+                    preparationMethod: "raw",
+                    confidence: 0.9
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Boiled eggs with mixed sprouts and nuts",
+            clarificationQuestions: [],
+            confidence: 0.9
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await HybridMealAnalysisCoordinator(router: router).analyse(
+            parse: parse,
+            originalInput: "photo inventory",
+            imageReference: .transient(),
+            imageType: .originalPhoto
+        )
+
+        XCTAssertEqual(
+            Set(result.detectedItems.map(\.canonicalFoodId)),
+            Set(["hard-boiled-egg", "mixed-sprouts", "walnut", "almond"])
+        )
+        XCTAssertEqual(result.detectedItems.first { $0.canonicalFoodId == "hard-boiled-egg" }?.servingUnit, .wholeEgg)
+        XCTAssertEqual(result.detectedItems.first { $0.canonicalFoodId == "walnut" }?.servingUnit, .piece)
+        XCTAssertEqual(result.detectedItems.first { $0.canonicalFoodId == "almond" }?.servingUnit, .piece)
+        XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
+        XCTAssertTrue(result.detectedItems.allSatisfy { $0.estimatedWeightGrams != nil })
+        XCTAssertFalse(result.mealTotals.isEmpty)
+        XCTAssertEqual(result.nutritionValidation?.isApproved, true)
+    }
+
+    func testSproutAndNutVisionAliasesResolveWithoutFoodSpecificViewLogic() {
+        let expected: [String: String] = [
+            "sprouted legumes": "mixed-sprouts",
+            "mixed sprouted legumes": "mixed-sprouts",
+            "sprouted chana and moong": "mixed-sprouts",
+            "badam": "almond",
+            "akhrot": "walnut",
+            "groundnuts": "peanut"
+        ]
+
+        for (alias, canonicalID) in expected {
+            XCTAssertEqual(catalog.normalise(alias)?.canonicalId, canonicalID, "Missing vision alias \(alias)")
+        }
+    }
+
     func testOnDeviceWholeImageSuggestionIsWithheldWhenBackendFails() async throws {
         let classifier = StubFoodImageClassificationService(candidates: [
             FoodImageCandidate(canonicalFoodId: "banana", sourceLabel: "banana", confidence: 0.9)
@@ -2320,6 +2415,109 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(summary.totalEnergyBurnedKilocalories ?? -1, 2_160.75, accuracy: 0.001)
         XCTAssertEqual(summary.steps, 10_250)
         XCTAssertEqual(summary.walkingRunningKilometres ?? -1, 7.85, accuracy: 0.001)
+    }
+
+    func testMealPeriodSuggestionAndLegacyLabelsRemainStable() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let start = try XCTUnwrap(calendar.date(from: DateComponents(
+            year: 2026, month: 7, day: 28, hour: 7
+        )))
+
+        XCTAssertEqual(MealPeriod.suggested(for: start, calendar: calendar), .breakfast)
+        XCTAssertEqual(
+            MealPeriod.suggested(
+                for: try XCTUnwrap(calendar.date(bySettingHour: 10, minute: 30, second: 0, of: start)),
+                calendar: calendar
+            ),
+            .midMorningSnack
+        )
+        XCTAssertEqual(
+            MealPeriod.suggested(
+                for: try XCTUnwrap(calendar.date(bySettingHour: 19, minute: 0, second: 0, of: start)),
+                calendar: calendar
+            ),
+            .dinner
+        )
+        XCTAssertEqual(MealPeriod(legacyLabel: "Evening snacks"), .eveningSnack)
+        XCTAssertEqual(MealPeriod(legacyLabel: "Lunch"), .lunch)
+    }
+
+    @MainActor
+    func testConfirmedMealKeepsUserSelectedMealPeriod() {
+        let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "2 roti")
+        let draft = MealAnalysisDraft(result: result, mealPeriod: .dinner)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(),
+            date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000,
+            carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+
+        let meal = DiaryMealLoggingService().confirm(draft, replacing: itemID, in: store, dayID: day.id)
+
+        XCTAssertEqual(meal.period, .dinner)
+        XCTAssertEqual(meal.mealType, "Dinner")
+        XCTAssertEqual(store.day(id: day.id)?.meals.first?.period, .dinner)
+    }
+
+    func testDailyNutritionReviewUsesRecordedFactsWithoutClinicalClaims() {
+        let breakfast = Meal(
+            id: UUID(), title: "Eggs", subtitle: "", mealType: "Breakfast", time: .now,
+            energy: 240, carbs: 2, protein: 24, fat: 14, artwork: .neutral, confidence: .verified
+        )
+        let lunch = Meal(
+            id: UUID(), title: "Dal and rice", subtitle: "", mealType: "Lunch", time: .now,
+            energy: 620, carbs: 88, protein: 25, fat: 16, artwork: .neutral, confidence: .verified
+        )
+        let dinner = Meal(
+            id: UUID(), title: "Paneer", subtitle: "", mealType: "Dinner", time: .now,
+            energy: 540, carbs: 24, protein: 32, fat: 34, artwork: .neutral, confidence: .verified
+        )
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [breakfast, lunch, dinner].map { ThreadItem(id: UUID(), kind: .meal($0)) },
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let activity = HealthActivitySummary(
+            dayStart: .now,
+            steps: 8_000,
+            walkingRunningKilometres: 5.8,
+            activeEnergyKilocalories: 500,
+            restingEnergyKilocalories: 1_500,
+            fetchedAt: .now
+        )
+
+        let review = DailyNutritionReviewService().review(for: day, activity: activity)
+        let text = ([review?.overview, review?.closing] + (review?.observations.map(\.detail) ?? []))
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+
+        XCTAssertEqual(review?.observations.count, 3)
+        XCTAssertTrue(text.contains("81 g of protein"))
+        XCTAssertTrue(text.contains("lunch"))
+        XCTAssertTrue(text.contains("below apple health"))
+        XCTAssertFalse(text.contains("flatten"))
+        XCTAssertFalse(text.contains("fat-burning"))
+        XCTAssertFalse(text.contains("optimize"))
+        XCTAssertTrue(text.contains("not as a diagnosis"))
+    }
+
+    func testDailyReviewAppearsAtTenPMAndForPastDays() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 28)))
+        let before = try XCTUnwrap(calendar.date(bySettingHour: 21, minute: 59, second: 0, of: today))
+        let atTen = try XCTUnwrap(calendar.date(bySettingHour: 22, minute: 0, second: 0, of: today))
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+
+        XCTAssertFalse(DailyReviewAvailability.isAvailable(for: today, now: before, calendar: calendar))
+        XCTAssertTrue(DailyReviewAvailability.isAvailable(for: today, now: atTen, calendar: calendar))
+        XCTAssertTrue(DailyReviewAvailability.isAvailable(for: yesterday, now: before, calendar: calendar))
     }
 
     private func fixtureFoodImage() -> PreparedFoodImage {

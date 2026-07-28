@@ -106,6 +106,25 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Confirm estimate"].waitForExistence(timeout: 2))
     }
 
+    func testMealPeriodCanBeChosenBeforeSavingAndAppearsOnMealTile() throws {
+        submitFoodNote("black coffee")
+        XCTAssertTrue(app.staticTexts["Black coffee"].waitForExistence(timeout: 4))
+        app.swipeDown()
+        app.swipeDown()
+
+        let lunch = app.buttons["Lunch"]
+        XCTAssertTrue(lunch.waitForExistence(timeout: 4))
+        lunch.tap()
+
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+
+        let savedMeal = app.buttons["Saved meal Black coffee"]
+        XCTAssertTrue(savedMeal.waitForExistence(timeout: 4))
+        XCTAssertTrue(savedMeal.label.contains("Lunch"))
+    }
+
     func testMasoorDaalCompoundEntryShowsRotiAndDalBeforeConfirmation() throws {
         submitFoodNote("I had 2 roti and 1 katori masoor daal")
 

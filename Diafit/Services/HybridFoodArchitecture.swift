@@ -253,17 +253,45 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
     }
 
     private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
-        do {
-            return try await session.data(for: request)
-        } catch let error as URLError where [.timedOut, .networkConnectionLost, .cannotConnectToHost]
-            .contains(error.code) {
-            FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
-                "status": "retrying",
-                "reason": String(error.code.rawValue)
-            ])
-            // The same idempotency key makes this single retry safe.
-            return try await session.data(for: request)
+        var lastError: Error = FoodAnalysisError.endpointUnavailable
+
+        for attempt in 0..<2 {
+            do {
+                let result = try await session.data(for: request)
+                let statusCode = (result.1 as? HTTPURLResponse)?.statusCode
+                let shouldRetryHTTP = statusCode == 408
+                    || statusCode == 429
+                    || statusCode.map { (500...599).contains($0) } == true
+                if attempt == 0, shouldRetryHTTP {
+                    FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
+                        "status": "retrying",
+                        "reason": "http-\(statusCode ?? -1)"
+                    ])
+                    try? await Task.sleep(for: .milliseconds(450))
+                    continue
+                }
+                return result
+            } catch let error as URLError {
+                lastError = error
+                let retryable = [
+                    URLError.Code.timedOut,
+                    .networkConnectionLost,
+                    .cannotConnectToHost,
+                    .notConnectedToInternet,
+                    .dnsLookupFailed
+                ].contains(error.code)
+                guard attempt == 0, retryable else { throw error }
+                FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
+                    "status": "retrying",
+                    "reason": String(error.code.rawValue)
+                ])
+                // The same idempotency key makes this single retry safe.
+                try? await Task.sleep(for: .milliseconds(450))
+            } catch {
+                throw error
+            }
         }
+        throw lastError
     }
 
     private static func safeDecodingReason(_ error: Error) -> String {
@@ -401,7 +429,7 @@ struct AIInterpretedCanonicalFoodFactory: Sendable {
         let displayName = [item.regionalName, item.originalText, item.canonicalSearchName]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty }) ?? searchName
-        let unit = servingUnit(item.unit) ?? .serving
+        let unit = servingUnit(item.unit, category: category) ?? .serving
         let food = IndianFoodDefinition(
             canonicalId: "interpreted.\(slug(searchName))",
             canonicalName: displayName,
@@ -448,11 +476,17 @@ struct AIInterpretedCanonicalFoodFactory: Sendable {
         return .unknown
     }
 
-    private func servingUnit(_ raw: String?) -> ServingUnit? {
+    private func servingUnit(_ raw: String?, category: FoodCategory) -> ServingUnit? {
         guard let raw else { return nil }
         if let exact = ServingUnit(rawValue: raw) { return exact }
         switch raw.lowercased() {
-        case "whole", "whole egg", "egg", "eggs": return .wholeEgg
+        case "whole":
+            // Vision models commonly call intact nuts, fruit and packaged
+            // items "whole". Only an egg identity is allowed to use the
+            // 50-gram whole-egg conversion.
+            return category == .egg ? .wholeEgg : .piece
+        case "whole egg", "egg", "eggs":
+            return .wholeEgg
         case "bowl", "medium bowl": return .mediumBowl
         case "piece", "pieces": return .piece
         case "cup", "cups": return .cup
@@ -1451,7 +1485,10 @@ struct HybridMealAnalysisCoordinator: Sendable {
         guard let raw else { return food?.standardServing?.unit ?? .serving }
         if let unit = ServingUnit(rawValue: raw) { return unit }
         switch raw.lowercased() {
-        case "whole", "whole egg", "egg", "eggs": return .wholeEgg
+        case "whole":
+            return food?.category == .egg ? .wholeEgg : .piece
+        case "whole egg", "egg", "eggs":
+            return .wholeEgg
         case "medium bowl", "bowl": return .mediumBowl
         case "small bowl": return .smallBowl
         case "large bowl": return .largeBowl

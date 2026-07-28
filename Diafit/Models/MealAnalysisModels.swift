@@ -412,6 +412,7 @@ enum ClarificationImpact: String, Codable, Hashable, Sendable {
 struct MealAnalysisDraft: Identifiable, Codable, Hashable {
     let id: UUID
     var result: MealAnalysisResult
+    var mealPeriod: MealPeriod
     /// Kept only while the review sheet is onscreen. Confirming the meal may
     /// copy these bytes into the protected visual asset store; the draft and
     /// diary archive never encode the raw image.
@@ -424,17 +425,24 @@ struct MealAnalysisDraft: Identifiable, Codable, Hashable {
         case failed(message: String)
     }
 
-    init(result: MealAnalysisResult, transientImageData: Data? = nil, state: State = .ready) {
+    init(
+        result: MealAnalysisResult,
+        transientImageData: Data? = nil,
+        state: State = .ready,
+        mealPeriod: MealPeriod? = nil
+    ) {
         self.id = result.analysisId
         self.result = result
         self.transientImageData = transientImageData
         self.state = state
+        self.mealPeriod = mealPeriod ?? .suggested(for: result.createdAt)
     }
 
     private enum CodingKeys: String, CodingKey {
         case id
         case result
         case state
+        case mealPeriod
     }
 
     init(from decoder: Decoder) throws {
@@ -442,6 +450,8 @@ struct MealAnalysisDraft: Identifiable, Codable, Hashable {
         id = try container.decode(UUID.self, forKey: .id)
         result = try container.decode(MealAnalysisResult.self, forKey: .result)
         state = try container.decodeIfPresent(State.self, forKey: .state) ?? .ready
+        mealPeriod = try container.decodeIfPresent(MealPeriod.self, forKey: .mealPeriod)
+            ?? .suggested(for: result.createdAt)
         // Raw member photos are deliberately session-only. A restored draft
         // retains its structured analysis but never silently persists bytes.
         transientImageData = nil
@@ -452,6 +462,7 @@ struct MealAnalysisDraft: Identifiable, Codable, Hashable {
         try container.encode(id, forKey: .id)
         try container.encode(result, forKey: .result)
         try container.encode(state, forKey: .state)
+        try container.encode(mealPeriod, forKey: .mealPeriod)
     }
 }
 

@@ -19,6 +19,7 @@ struct AppDependencies: Sendable {
     let userFoodMemory: any UserFoodMemoryRepository
     let packagedFoods: any PackagedFoodRepository
     let healthActivity: any HealthActivityProviding
+    let dailyReviewReminder: any DailyReviewReminderScheduling
 
     static let local = makeRuntime()
 
@@ -107,7 +108,8 @@ struct AppDependencies: Sendable {
             clarification: DefaultMealClarificationService(),
             userFoodMemory: memory,
             packagedFoods: packaged,
-            healthActivity: healthActivity
+            healthActivity: healthActivity,
+            dailyReviewReminder: LocalDailyReviewReminderScheduler()
         )
     }
 }

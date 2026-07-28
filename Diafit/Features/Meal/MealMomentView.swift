@@ -98,7 +98,7 @@ struct MealMomentView: View {
         .contentShape(RoundedRectangle(cornerRadius: 31, style: .continuous))
         .accessibilityHint("Double tap to reveal meal details")
         .accessibilityIdentifier("Saved meal \(meal.title)")
-        .accessibilityLabel("Saved meal \(meal.title), \(meal.energy) kcal")
+        .accessibilityLabel("\(meal.mealType), saved meal \(meal.title), \(meal.energy) kcal")
         .contextMenu {
             if meal.analysis != nil {
                 Button("Refine estimate", systemImage: "slider.horizontal.3") { edit(meal) }

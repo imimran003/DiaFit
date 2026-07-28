@@ -1,5 +1,72 @@
 import Foundation
 
+enum MealPeriod: String, Codable, CaseIterable, Identifiable, Hashable, Sendable {
+    case breakfast
+    case midMorningSnack
+    case lunch
+    case afternoonSnack
+    case dinner
+    case eveningSnack
+    case other
+
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .breakfast: return "Breakfast"
+        case .midMorningSnack: return "Mid-morning snack"
+        case .lunch: return "Lunch"
+        case .afternoonSnack: return "Afternoon snack"
+        case .dinner: return "Dinner"
+        case .eveningSnack: return "Evening snack"
+        case .other: return "Other"
+        }
+    }
+
+    var compactName: String {
+        switch self {
+        case .midMorningSnack: return "Mid-morning"
+        case .afternoonSnack: return "Afternoon snack"
+        case .eveningSnack: return "Evening snack"
+        default: return displayName
+        }
+    }
+
+    init(legacyLabel: String) {
+        let normalized = legacyLabel
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .replacingOccurrences(of: "-", with: " ")
+        if normalized.contains("breakfast") {
+            self = .breakfast
+        } else if normalized.contains("mid morning") || normalized.contains("morning snack") {
+            self = .midMorningSnack
+        } else if normalized.contains("lunch") {
+            self = .lunch
+        } else if normalized.contains("afternoon") {
+            self = .afternoonSnack
+        } else if normalized.contains("dinner") {
+            self = .dinner
+        } else if normalized.contains("evening") || normalized == "snack" {
+            self = .eveningSnack
+        } else {
+            self = .other
+        }
+    }
+
+    static func suggested(for date: Date, calendar: Calendar = .autoupdatingCurrent) -> MealPeriod {
+        switch calendar.component(.hour, from: date) {
+        case 5..<10: return .breakfast
+        case 10..<12: return .midMorningSnack
+        case 12..<16: return .lunch
+        case 16..<18: return .afternoonSnack
+        case 18..<22: return .dinner
+        case 22...23: return .eveningSnack
+        default: return .other
+        }
+    }
+}
+
 struct Day: Identifiable, Codable, Hashable {
     let id: UUID
     let date: Date
@@ -66,6 +133,14 @@ struct Meal: Identifiable, Codable, Hashable {
     /// This is independent from `artwork`: it records where the visual came
     /// from and which structured meal it belongs to.
     var visualIdentity: MealVisualIdentity? = nil
+
+    /// `mealType` remains encoded for compatibility with every existing diary
+    /// archive. New code uses this typed bridge, so old meals migrate without
+    /// rewriting or losing member data.
+    var period: MealPeriod {
+        get { MealPeriod(legacyLabel: mealType) }
+        set { mealType = newValue.displayName }
+    }
 
     enum Confidence: String, Codable, Hashable {
         case known = "Saved recipe"

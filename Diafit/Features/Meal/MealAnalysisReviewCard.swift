@@ -9,6 +9,7 @@ struct MealAnalysisReviewCard: View {
     let onUpdate: (MealAnalysisDraft) -> Void
     let onConfirm: (MealAnalysisDraft) -> Void
     let onDiscard: () -> Void
+    let onRetryAnalysis: (MealAnalysisDraft) -> Void
     let onRetryVisual: (MealAnalysisDraft) -> Void
     let confirmationTitle: String
 
@@ -16,6 +17,7 @@ struct MealAnalysisReviewCard: View {
     @State private var showsDetail = false
     @State private var componentQuery = ""
     @State private var componentError: String?
+    @State private var isRetryingAnalysis = false
 
     private let catalog = IndianFoodCatalogService()
     private let portions = StandardPortionEstimationService()
@@ -29,6 +31,7 @@ struct MealAnalysisReviewCard: View {
         onUpdate: @escaping (MealAnalysisDraft) -> Void,
         onConfirm: @escaping (MealAnalysisDraft) -> Void,
         onDiscard: @escaping () -> Void,
+        onRetryAnalysis: @escaping (MealAnalysisDraft) -> Void = { _ in },
         onRetryVisual: @escaping (MealAnalysisDraft) -> Void = { _ in },
         confirmationTitle: String = "Confirm estimate"
     ) {
@@ -36,6 +39,7 @@ struct MealAnalysisReviewCard: View {
         self.onUpdate = onUpdate
         self.onConfirm = onConfirm
         self.onDiscard = onDiscard
+        self.onRetryAnalysis = onRetryAnalysis
         self.onRetryVisual = onRetryVisual
         self.confirmationTitle = confirmationTitle
         var normalizedDraft = draft
@@ -68,6 +72,7 @@ struct MealAnalysisReviewCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             header
+            mealPeriodSelector
 
             if let image = editableDraft.transientImageData.flatMap(UIImage.init(data:)) {
                 Image(uiImage: image)
@@ -101,6 +106,9 @@ struct MealAnalysisReviewCard: View {
                 EmptyAnalysisState(
                     query: $componentQuery,
                     errorMessage: componentError,
+                    hasPhoto: editableDraft.transientImageData != nil,
+                    isRetrying: isRetryingAnalysis,
+                    retryAnalysis: retryAnalysis,
                     addComponent: addComponent
                 )
             } else {
@@ -165,7 +173,61 @@ struct MealAnalysisReviewCard: View {
             editableDraft.result.generatedVisualAsset = draft.result.generatedVisualAsset
             editableDraft.result.imageType = draft.result.imageType
         }
+        .onChange(of: draft.result.analysisId) { _, _ in
+            var normalizedDraft = draft
+            normalizedDraft.result.clarificationQuestions = SemanticQuestionDeduplicator.uniqueQuestions(
+                draft.result.clarificationQuestions
+            )
+            editableDraft = normalizedDraft
+            isRetryingAnalysis = false
+            componentError = nil
+        }
         .accessibilityElement(children: .contain)
+    }
+
+    private func retryAnalysis() {
+        guard !isRetryingAnalysis else { return }
+        isRetryingAnalysis = true
+        componentError = nil
+        onRetryAnalysis(editableDraft)
+    }
+
+    private var mealPeriodSelector: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("WHEN")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(1.05)
+                .foregroundStyle(Color.quietInk)
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 7) {
+                    ForEach(MealPeriod.allCases) { period in
+                        Button {
+                            guard editableDraft.mealPeriod != period else { return }
+                            editableDraft.mealPeriod = period
+                            onUpdate(editableDraft)
+                        } label: {
+                            Text(period.compactName)
+                                .font(DiafitType.caption.weight(.semibold))
+                                .foregroundStyle(
+                                    editableDraft.mealPeriod == period ? Color.paper : Color.ink
+                                )
+                                .padding(.horizontal, 12)
+                                .frame(minHeight: 40)
+                                .background(
+                                    editableDraft.mealPeriod == period ? Color.ink : Color.mist.opacity(0.72),
+                                    in: Capsule()
+                                )
+                        }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(period.displayName)
+                        .accessibilityAddTraits(editableDraft.mealPeriod == period ? .isSelected : [])
+                    }
+                }
+            }
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Meal period")
     }
 
     private var header: some View {
@@ -702,13 +764,47 @@ private struct DetectedItemEditor: View {
 private struct EmptyAnalysisState: View {
     @Binding var query: String
     let errorMessage: String?
+    let hasPhoto: Bool
+    let isRetrying: Bool
+    let retryAnalysis: () -> Void
     let addComponent: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 9) {
-            Text("Name the food to finish the estimate")
+        VStack(alignment: .leading, spacing: 12) {
+            Text(hasPhoto ? "Live recognition didn’t finish" : "Name the food to finish the estimate")
                 .font(.system(.body, design: .rounded, weight: .semibold))
                 .foregroundStyle(Color.ink)
+            if hasPhoto {
+                Text("Your photo is still here. Try the secure AI analysis again before entering anything manually.")
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+                    .lineSpacing(2)
+
+                Button(action: retryAnalysis) {
+                    HStack(spacing: 8) {
+                        if isRetrying {
+                            ProgressView()
+                                .tint(Color.paper)
+                        } else {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        Text(isRetrying ? "Checking the full plate…" : "Retry AI recognition")
+                    }
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.paper)
+                    .frame(maxWidth: .infinity)
+                    .frame(minHeight: 44)
+                    .background(Color.ink, in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .disabled(isRetrying)
+                .accessibilityLabel(isRetrying ? "AI meal recognition in progress" : "Retry AI meal recognition")
+
+                Text("Or correct it manually")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(0.7)
+                    .foregroundStyle(Color.quietInk)
+            }
             HStack(spacing: 8) {
                 TextField("e.g. rajma with rice", text: $query)
                     .font(DiafitType.caption)

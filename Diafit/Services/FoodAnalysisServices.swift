@@ -616,7 +616,11 @@ struct PhotoAnalysisOrchestrator: Sendable {
         var remoteIncomplete: MealAnalysisResult?
         if let remote {
             do {
-                let remoteResult = try await remote.analyse(image, dishHint: description)
+                let remoteResult = try await analyseWithRemoteRetry(
+                    remote,
+                    image: image,
+                    dishHint: description
+                )
                 let report = completeness.evaluate(remoteResult)
                 if report.isComplete {
                     FoodLoggingDiagnostics.record("photo.classification", fields: [
@@ -630,6 +634,10 @@ struct PhotoAnalysisOrchestrator: Sendable {
                 remoteIncomplete = remoteResult
             } catch {
                 remoteFailed = true
+                FoodLoggingDiagnostics.record("photo.classification", fields: [
+                    "route": "structured-backend-failed",
+                    "reason": safeRemoteFailureReason(error)
+                ])
             }
         }
 
@@ -725,6 +733,39 @@ struct PhotoAnalysisOrchestrator: Sendable {
         // to auto-confirm an image-only meal. A member-entered description is
         // explicit evidence and may still use the local nutrition path.
         !memberDescription.isEmpty
+    }
+
+    private func analyseWithRemoteRetry(
+        _ remote: any FoodRecognitionService,
+        image: PreparedFoodImage,
+        dishHint: String
+    ) async throws -> MealAnalysisResult {
+        do {
+            return try await remote.analyse(image, dishHint: dishHint)
+        } catch {
+            FoodLoggingDiagnostics.record("photo.classification", fields: [
+                "route": "structured-backend-retrying",
+                "reason": safeRemoteFailureReason(error)
+            ])
+            try? await Task.sleep(for: .milliseconds(550))
+            return try await remote.analyse(image, dishHint: dishHint)
+        }
+    }
+
+    private func safeRemoteFailureReason(_ error: Error) -> String {
+        if let error = error as? URLError {
+            return "url-\(error.code.rawValue)"
+        }
+        if let error = error as? FoodAnalysisError {
+            switch error {
+            case .endpointUnavailable: return "endpoint-unavailable"
+            case .malformedProviderResponse: return "malformed-response"
+            case .unsupportedImage: return "unsupported-image"
+            case .imageTooLarge: return "image-too-large"
+            case .unauthenticatedBackend: return "unauthenticated"
+            }
+        }
+        return "provider-error"
     }
 
     private func confidenceLevel(for score: Double) -> ConfidenceLevel {
@@ -1288,7 +1329,7 @@ struct DiaryMealLoggingService: MealLoggingService {
             id: mealID,
             title: title,
             subtitle: "Confirmed estimate · \(result.nutritionProvenance.dataSource)",
-            mealType: mealType(for: result),
+            mealType: draft.mealPeriod.displayName,
             time: .now,
             energy: Int(result.mealTotals.caloriesKcal?.rounded() ?? 0),
             carbs: Int(result.mealTotals.carbohydrateGrams?.rounded() ?? 0),
@@ -1337,10 +1378,6 @@ struct DiaryMealLoggingService: MealLoggingService {
     func delete(mealID: Meal.ID, in store: DiaryStore, dayID: Day.ID) {
         store.removeMeal(id: mealID, from: dayID)
         Task { await MealVisualRuntime.ledger.delete(mealID: mealID) }
-    }
-
-    private func mealType(for result: MealAnalysisResult) -> String {
-        result.detectedItems.contains(where: { $0.category == .breakfastOrSnack }) ? "Meal" : "Meal"
     }
 
     private func artwork(for result: MealAnalysisResult) -> Meal.Artwork {
