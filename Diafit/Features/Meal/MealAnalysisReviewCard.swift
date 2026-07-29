@@ -20,10 +20,7 @@ struct MealAnalysisReviewCard: View {
     @State private var isRetryingAnalysis = false
 
     private let catalog = IndianFoodCatalogService()
-    private let portions = StandardPortionEstimationService()
-    private let nutrition = CatalogNutritionLookupService()
-    private let fallback = CuratedNutritionFallbackService()
-    private let glycaemic = CatalogGlycaemicDataService()
+    private let itemRecalculator = MealItemNutritionRecalculator()
     private let validation = DefaultNutritionValidationService()
 
     init(
@@ -295,14 +292,16 @@ struct MealAnalysisReviewCard: View {
 
     private func changeQuantity(_ quantity: Double, for id: UUID) {
         guard let index = editableDraft.result.detectedItems.firstIndex(where: { $0.id == id }) else { return }
+        let previous = editableDraft.result.detectedItems[index]
         editableDraft.result.detectedItems[index].quantity = max(0.25, quantity)
-        recalculate()
+        recalculate(previousItems: [id: previous])
     }
 
     private func changeUnit(_ unit: ServingUnit, for id: UUID) {
         guard let index = editableDraft.result.detectedItems.firstIndex(where: { $0.id == id }) else { return }
+        let previous = editableDraft.result.detectedItems[index]
         editableDraft.result.detectedItems[index].servingUnit = unit
-        recalculate()
+        recalculate(previousItems: [id: previous])
     }
 
     private func changeFood(_ canonicalID: String, for id: UUID) {
@@ -401,55 +400,18 @@ struct MealAnalysisReviewCard: View {
         )
     }
 
-    private func recalculate() {
+    private func recalculate(previousItems: [UUID: DetectedFoodItem] = [:]) {
         let previousVisualRequest = editableDraft.result.visualRequest
+        let implicitPreviousItems = Dictionary(
+            uniqueKeysWithValues: editableDraft.result.detectedItems.map { ($0.id, $0) }
+        )
         applyVariationSelections()
         applySupplementSelections()
         for index in editableDraft.result.detectedItems.indices {
             let item = editableDraft.result.detectedItems[index]
-            guard let definition = catalog.food(canonicalID: item.canonicalFoodId) else { continue }
-            let weight = portions.estimatedWeight(quantity: item.quantity, unit: item.servingUnit, food: definition)
-            let catalogLookup = nutrition.nutrition(for: definition, estimatedWeightGrams: weight)
-            let fallbackResolution = catalogLookup.values.isEmpty
-                ? fallback.resolve(
-                    item: ParsedFoodItem(
-                        originalText: item.matchedAlias ?? item.displayName,
-                        canonicalSearchName: definition.englishName,
-                        regionalName: item.regionalName,
-                        quantity: item.quantity,
-                        unit: item.servingUnit.rawValue,
-                        estimatedGrams: weight,
-                        preparationMethod: item.preparationMethod,
-                        confidence: item.confidenceScore
-                    ),
-                    canonical: CanonicalFoodMatch(
-                        food: definition,
-                        matchedAlias: item.matchedAlias ?? item.displayName,
-                        confidence: item.confidenceScore,
-                        source: "member-corrected-canonical"
-                    )
-                )
-                : nil
-            let lookup = fallbackResolution?.lookup ?? catalogLookup
-            let resolvedValues = nutritionIncludingShakeBase(lookup.values, profile: item.supplementProfile)
-            let report = validation.validate(
-                rawValues: resolvedValues,
-                canonicalFoodID: definition.canonicalId,
-                quantity: item.quantity,
-                servingUnit: item.servingUnit,
-                estimatedWeightGrams: weight
-            )
-            editableDraft.result.detectedItems[index].estimatedWeightGrams = weight
-            editableDraft.result.detectedItems[index].rawNutrition = resolvedValues
-            editableDraft.result.detectedItems[index].nutrition = report.safeValues ?? .unavailable
-            editableDraft.result.detectedItems[index].nutritionValidation = report
-            editableDraft.result.detectedItems[index].nutritionProvenance = lookup.provenance
-            if let fallbackResolution {
-                editableDraft.result.detectedItems[index].assumptions = fallbackResolution.assumptions
-            }
-            editableDraft.result.detectedItems[index].glycaemicInformation = glycaemic.information(
-                for: definition,
-                availableCarbohydrateGrams: report.safeValues?.availableCarbohydrateGrams
+            editableDraft.result.detectedItems[index] = itemRecalculator.recalculate(
+                item,
+                previous: previousItems[item.id] ?? implicitPreviousItems[item.id]
             )
         }
 
@@ -518,14 +480,6 @@ struct MealAnalysisReviewCard: View {
                 "Swap in your saved or scanned product label whenever it is available."
             ]
         }
-    }
-
-    private func nutritionIncludingShakeBase(_ powder: NutritionValues, profile: SupplementProductProfile?) -> NutritionValues {
-        guard profile?.base == .milk,
-              let milk = catalog.normalise("milk") else { return powder }
-        let milkWeight = milk.standardServing?.grams ?? 240
-        let milkValues = nutrition.nutrition(for: milk, estimatedWeightGrams: milkWeight).values
-        return NutritionValues.total(of: [powder, milkValues])
     }
 
     private func applyVariationSelections() {

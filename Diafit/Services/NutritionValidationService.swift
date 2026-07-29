@@ -89,14 +89,31 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
             }
         }
 
-        let maximumQuantity = servingUnit == .millilitres ? 20_000.0 : 20.0
+        // Quantity is expressed in the selected unit. A perfectly ordinary
+        // 500 g portion must not be rejected as "500 servings".
+        let maximumQuantity: Double = switch servingUnit {
+        case .grams, .millilitres:
+            20_000
+        case .teaspoon, .tablespoon:
+            500
+        case .none:
+            20
+        default:
+            100
+        }
         if let quantity, (!quantity.isFinite || quantity < 0.1 || quantity > maximumQuantity) {
+            let quantityMessage: String = switch servingUnit {
+            case .grams:
+                "This weight is outside the supported 0.1–20,000 g range."
+            case .millilitres:
+                "This volume is outside the supported 0.1–20,000 mL range."
+            default:
+                "This serving quantity is outside the supported range."
+            }
             issues.append(.init(
                 code: .unreasonableQuantity,
                 severity: .blocking,
-                message: servingUnit == .millilitres
-                    ? "This volume is outside the supported 0.1–20,000 mL range."
-                    : "This serving quantity is outside the supported 0.1–20 range."
+                message: quantityMessage
             ))
         }
 

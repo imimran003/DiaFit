@@ -20,6 +20,25 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Connect Apple Health"].exists)
     }
 
+    func testProfileAndSettingsTabsExposeCleanFirstRunExperience() throws {
+        let profileTab = app.tabBars.buttons["Profile"]
+        XCTAssertTrue(profileTab.waitForExistence(timeout: 3))
+        profileTab.tap()
+
+        XCTAssertTrue(app.staticTexts["Set up your profile"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Edit"].exists)
+        XCTAssertTrue(app.staticTexts["PRIVATE BY DESIGN"].exists)
+
+        let settingsTab = app.tabBars.buttons["Settings"]
+        XCTAssertTrue(settingsTab.exists)
+        settingsTab.tap()
+
+        XCTAssertTrue(app.staticTexts["A few clear choices. Nothing hidden."].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Measurements"].exists)
+        XCTAssertTrue(app.staticTexts["Glucose"].exists)
+        XCTAssertTrue(app.staticTexts["Reset profile"].exists)
+    }
+
     func testHealthActivityFixtureShowsBurnedMovementAndDailyDeficit() throws {
         app.terminate()
         app.launchArguments = ["UITestMode", "UITestHealthActivityFixture"]

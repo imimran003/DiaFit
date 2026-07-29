@@ -197,10 +197,11 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         // fixtures, or another provider without changing this client.
         var request = URLRequest(url: endpoint.appending(path: "v1/meal-parse"))
         request.httpMethod = "POST"
-        // Vision requests on a phone can spend several seconds uploading over
-        // Wi-Fi before provider inference begins. Keep this above the backend
-        // provider timeout so a valid response is not abandoned at the edge.
-        request.timeoutInterval = 35
+        // Keep interactive logging bounded. Text requests should resolve
+        // quickly; compressed image uploads receive a little more time, but a
+        // dead tunnel must not leave "Checking nutrition" onscreen for nearly
+        // a minute.
+        request.timeoutInterval = image == nil ? 8 : 14
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
@@ -274,8 +275,7 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
             } catch let error as URLError {
                 lastError = error
                 let retryable = [
-                    URLError.Code.timedOut,
-                    .networkConnectionLost,
+                    URLError.Code.networkConnectionLost,
                     .cannotConnectToHost,
                     .notConnectedToInternet,
                     .dnsLookupFailed
@@ -1197,14 +1197,14 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         let trace = FoodUnderstandingPipeline(catalog: catalog).parse(text)
         if !trace.components.isEmpty, trace.components.allSatisfy({ $0.confidenceScore >= 0.8 }) {
             let resolved = await resolveLocal(trace.components)
-            let completeness = completeness.evaluate(resolved)
-            if completeness.isComplete {
+            let completenessReport = completeness.evaluate(resolved)
+            if completenessReport.isComplete {
                 let questions = localQuestions(for: resolved, input: normalized)
                 return result(text: text, normalized: normalized, items: resolved, unresolved: [], extraQuestions: questions, attemptedAI: false)
             }
             FoodLoggingDiagnostics.record("resolution.completeness", fields: [
                 "status": "requires-ai",
-                "missing": completeness.missingRequirements.joined(separator: ",")
+                "missing": completenessReport.missingRequirements.joined(separator: ",")
             ])
             if let understanding {
                 return await resolveIncompleteLocal(text: text, normalized: normalized, local: resolved, understanding: understanding)

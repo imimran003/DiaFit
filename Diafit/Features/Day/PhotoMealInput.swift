@@ -175,8 +175,8 @@ struct AppleImagePreparationService: ImageCompressionService {
     private let maxInputBytes = 20 * 1_024 * 1_024
     // Base64 adds roughly one third to the JPEG size. This cap keeps the
     // complete JSON request below the backend's independently enforced limit.
-    private let maxUploadBytes = 1_900_000
-    private let maxPixelDimension: CGFloat = 2_048
+    private let maxUploadBytes = 1_400_000
+    private let maxPixelDimension: CGFloat = 1_536
 
     func prepare(imageData: Data) throws -> PreparedFoodImage {
         guard imageData.count <= maxInputBytes else { throw FoodAnalysisError.imageTooLarge }

@@ -2,6 +2,7 @@ import SwiftUI
 
 struct RootExperience: View {
     @EnvironmentObject private var store: DiaryStore
+    @State private var selectedSection: AppSection = .today
     @State private var selectedDayID: Day.ID?
     @State private var atlasIsOpen = false
     @Namespace private var mealNamespace
@@ -10,6 +11,74 @@ struct RootExperience: View {
         ZStack {
             Color.paper.ignoresSafeArea()
 
+            TabView(selection: $selectedSection) {
+                todayExperience
+                    .tag(AppSection.today)
+                    .tabItem {
+                        Label(AppSection.today.title, systemImage: AppSection.today.symbol)
+                    }
+
+                DiaryOverviewView()
+                    .tag(AppSection.diary)
+                    .tabItem {
+                        Label(AppSection.diary.title, systemImage: AppSection.diary.symbol)
+                    }
+
+                InsightsOverviewView()
+                    .tag(AppSection.insights)
+                    .tabItem {
+                        Label(AppSection.insights.title, systemImage: AppSection.insights.symbol)
+                    }
+
+                ProfileView()
+                    .tag(AppSection.profile)
+                    .tabItem {
+                        Label(AppSection.profile.title, systemImage: AppSection.profile.symbol)
+                    }
+
+                SettingsView()
+                    .tag(AppSection.settings)
+                    .tabItem {
+                        Label(AppSection.settings.title, systemImage: AppSection.settings.symbol)
+                    }
+            }
+            .tint(Color.ink)
+            .accessibilityLabel("Diafit sections")
+
+            if let persistenceIssue = store.persistenceIssue {
+                VStack {
+                    PersistenceIssueBanner(
+                        message: persistenceIssue,
+                        retry: store.retryPersistence
+                    )
+                    Spacer()
+                }
+                .padding(.horizontal, 16)
+                .padding(.top, 8)
+                .zIndex(3)
+            }
+
+            if selectedSection == .today, selectedDayID == nil {
+                LaunchMark()
+                    .transition(.opacity)
+                    .zIndex(4)
+            }
+        }
+        .onAppear {
+            selectedDayID = selectedDayID ?? store.days.last?.id
+        }
+        .animation(.spring(response: 0.52, dampingFraction: 0.86), value: atlasIsOpen)
+    }
+
+    private var activeDay: Day? {
+        if let selectedDayID, let selected = store.day(id: selectedDayID) {
+            return selected
+        }
+        return store.days.last
+    }
+
+    private var todayExperience: some View {
+        ZStack {
             TabView(selection: $selectedDayID) {
                 ForEach(store.days) { day in
                     DayThreadView(
@@ -32,40 +101,35 @@ struct RootExperience: View {
                 .transition(.atlasReveal)
                 .zIndex(2)
             }
-
-            if let persistenceIssue = store.persistenceIssue {
-                VStack {
-                    PersistenceIssueBanner(
-                        message: persistenceIssue,
-                        retry: store.retryPersistence
-                    )
-                    Spacer()
-                }
-                .padding(.horizontal, 16)
-                .padding(.top, 8)
-                .zIndex(3)
-            }
-
-            // Persistence is loaded synchronously during the first app
-            // transaction. Keep that short interval intentional and branded
-            // instead of exposing a white, content-less launch frame.
-            if selectedDayID == nil {
-                LaunchMark()
-                    .transition(.opacity)
-                    .zIndex(4)
-            }
         }
-        .onAppear {
-            selectedDayID = selectedDayID ?? store.days.last?.id
+    }
+}
+
+private enum AppSection: Hashable {
+    case today
+    case diary
+    case insights
+    case profile
+    case settings
+
+    var title: String {
+        switch self {
+        case .today: return "Today"
+        case .diary: return "Diary"
+        case .insights: return "Insights"
+        case .profile: return "Profile"
+        case .settings: return "Settings"
         }
-        .animation(.spring(response: 0.52, dampingFraction: 0.86), value: atlasIsOpen)
     }
 
-    private var activeDay: Day? {
-        if let selectedDayID, let selected = store.day(id: selectedDayID) {
-            return selected
+    var symbol: String {
+        switch self {
+        case .today: return "sun.max"
+        case .diary: return "book.pages"
+        case .insights: return "chart.line.uptrend.xyaxis"
+        case .profile: return "person"
+        case .settings: return "gearshape"
         }
-        return store.days.last
     }
 }
 
@@ -124,5 +188,6 @@ struct RootExperience_Previews: PreviewProvider {
     static var previews: some View {
         RootExperience()
             .environmentObject(DiaryStore.preview)
+            .environmentObject(UserProfileStore())
     }
 }

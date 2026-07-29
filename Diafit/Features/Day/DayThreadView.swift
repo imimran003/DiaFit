@@ -301,6 +301,37 @@ struct DayThreadView: View {
         composerFocused = false
         store.append(ThreadItem(id: UUID(), kind: .person(text: note)), to: dayID)
 
+        if let day {
+            switch PreviousDayMealReferenceService().resolve(
+                note,
+                currentDay: day,
+                allDays: store.days
+            ) {
+            case .notAReference:
+                break
+            case .unavailable(let message):
+                store.append(
+                    ThreadItem(id: UUID(), kind: .agent(text: message, tools: ["Nothing added"])),
+                    to: dayID
+                )
+                return
+            case .review(let review, let sourceDescription):
+                let reviewItemID = UUID()
+                store.append(ThreadItem(id: reviewItemID, kind: .mealAnalysis(review)), to: dayID)
+                store.append(
+                    ThreadItem(
+                        id: UUID(),
+                        kind: .agent(
+                            text: "I found \(sourceDescription). Check that today’s portions match, then confirm to log a new meal.",
+                            tools: ["Copied for review", "Not saved yet"]
+                        )
+                    ),
+                    to: dayID
+                )
+                return
+            }
+        }
+
         switch dependencies.conversationInputRouter.route(note) {
         case .glucose(let parsedGlucose):
             glucoseDraft = parsedGlucose
@@ -317,11 +348,9 @@ struct DayThreadView: View {
         thinkingLabel = "Checking nutrition"
 
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(720))
             switch ConversationCoordinator.nutrition.resolve(note: note, at: .now) {
             case .saved(let meal):
                 store.append(ThreadItem(id: UUID(), kind: .meal(meal)), to: dayID)
-                try? await Task.sleep(for: .milliseconds(420))
                 store.append(
                     ThreadItem(
                         id: UUID(),
@@ -334,7 +363,11 @@ struct DayThreadView: View {
                 )
             case .review(_):
                 let resolvedResult = await dependencies.textMealAnalysis.analyse(text: note)
-                let review = MealAnalysisDraft(result: resolvedResult)
+                let selectedDate = store.day(id: dayID)?.date ?? .now
+                let review = MealAnalysisDraft(
+                    result: resolvedResult,
+                    mealPeriod: .suggested(for: selectedDate)
+                )
                 let reviewItemID = UUID()
                 store.append(ThreadItem(id: reviewItemID, kind: .mealAnalysis(review)), to: dayID)
                 Task {
@@ -345,7 +378,6 @@ struct DayThreadView: View {
                         dayID: dayID
                     )
                 }
-                try? await Task.sleep(for: .milliseconds(260))
                 store.append(
                     ThreadItem(
                         id: UUID(),
@@ -379,8 +411,6 @@ struct DayThreadView: View {
         thinkingLabel = "Identifying meal components"
 
         Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(520))
-            thinkingLabel = "Checking nutrition data"
             let result = await dependencies.photoAnalysis.analyse(image: image, description: description)
             let review = MealAnalysisDraft(result: result, transientImageData: image.data)
             let reviewItemID = UUID()

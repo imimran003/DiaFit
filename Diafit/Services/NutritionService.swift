@@ -15,6 +15,193 @@ enum ConversationalFoodResolution {
     case review(MealAnalysisDraft)
 }
 
+/// Resolves explicit diary-history references before general food parsing.
+/// It never saves a copied meal directly: the output is the same editable
+/// review draft used for a newly interpreted meal.
+struct PreviousDayMealReferenceService: Sendable {
+    enum Resolution {
+        case notAReference
+        case review(MealAnalysisDraft, sourceDescription: String)
+        case unavailable(message: String)
+    }
+
+    func resolve(
+        _ text: String,
+        currentDay: Day,
+        allDays: [Day],
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> Resolution {
+        let normalized = normalize(text)
+        guard normalized.contains("same"), normalized.contains("yesterday") else {
+            return .notAReference
+        }
+
+        guard let previousDate = calendar.date(byAdding: .day, value: -1, to: currentDay.date),
+              let previousDay = allDays.first(where: { calendar.isDate($0.date, inSameDayAs: previousDate) }) else {
+            return .unavailable(message: "I couldn’t find a diary for yesterday. Log the meal normally this time and I’ll be able to reuse it later.")
+        }
+
+        let requestedPeriod = mealPeriod(in: normalized)
+        let wantsFruit = normalized.contains("fruit")
+        var sourceMeals = previousDay.meals
+
+        if wantsFruit {
+            sourceMeals = sourceMeals.filter { meal in
+                meal.analysis?.detectedItems.contains(where: isFruit) == true
+                    || containsFruitName(meal.title)
+                    || containsFruitName(meal.subtitle)
+            }
+        } else if let requestedPeriod {
+            sourceMeals = sourceMeals.filter { $0.period == requestedPeriod }
+        }
+
+        guard !sourceMeals.isEmpty else {
+            let requested = wantsFruit
+                ? "fruit"
+                : requestedPeriod?.displayName.lowercased() ?? "meal"
+            return .unavailable(message: "I couldn’t find a confirmed \(requested) entry yesterday. Nothing has been added.")
+        }
+
+        let selectedItems: [DetectedFoodItem] = sourceMeals.flatMap { meal in
+            let items = meal.analysis?.detectedItems ?? [legacyItem(from: meal)]
+            return wantsFruit ? items.filter(isFruit) : items
+        }
+        guard !selectedItems.isEmpty else {
+            return .unavailable(message: "I found yesterday’s entry, but not enough confirmed nutrition to copy it safely.")
+        }
+
+        let period = requestedPeriod
+            ?? sourceMeals.map(\.period).allEqual
+            ?? .suggested(for: currentDay.date, calendar: calendar)
+        let sourceLabel = wantsFruit
+            ? "yesterday’s fruit"
+            : "yesterday’s \(period.displayName.lowercased())"
+        let analysisID = UUID()
+        let totals = NutritionValues.total(of: selectedItems.map(\.nutrition))
+        let validation = DefaultNutritionValidationService().validate(rawValues: totals)
+        let visualRequest = MealVisualRequestBuilder().make(
+            mealID: analysisID,
+            items: selectedItems,
+            clarificationQuestions: []
+        )
+        let result = MealAnalysisResult(
+            analysisId: analysisID,
+            imageReference: .transient(),
+            imageType: .noImage,
+            detectedItems: selectedItems,
+            mealTotals: validation.safeValues ?? totals,
+            overallConfidence: .high,
+            assumptions: [
+                "Copied from \(sourceLabel). Review the foods and servings before confirming.",
+                "This creates a new entry; yesterday’s diary remains unchanged."
+            ],
+            clarificationQuestions: [],
+            warnings: validation.isApproved
+                ? ["Confirm that today’s portions match yesterday before saving."]
+                : validation.issues.map(\.message),
+            createdAt: .now,
+            recognitionModelVersion: "confirmed-diary-history",
+            nutritionDatabaseVersion: nil,
+            glycaemicDatabaseVersion: nil,
+            nutritionProvenance: NutritionProvenance(
+                kind: .userCreated,
+                dataSource: "Confirmed diary history",
+                dataVersion: nil,
+                confidence: .high
+            ),
+            nutritionValidation: validation,
+            visualRequest: visualRequest
+        )
+        return .review(
+            MealAnalysisDraft(result: result, mealPeriod: period),
+            sourceDescription: sourceLabel
+        )
+    }
+
+    private func mealPeriod(in text: String) -> MealPeriod? {
+        if text.contains("mid morning") || text.contains("morning snack") { return .midMorningSnack }
+        if text.contains("afternoon snack") { return .afternoonSnack }
+        if text.contains("evening snack") { return .eveningSnack }
+        if text.contains("breakfast") { return .breakfast }
+        if text.contains("lunch") { return .lunch }
+        if text.contains("dinner") || text.contains("supper") { return .dinner }
+        return nil
+    }
+
+    private func isFruit(_ item: DetectedFoodItem) -> Bool {
+        item.category == .fruitOrVegetable
+            && (containsFruitName(item.displayName)
+                || containsFruitName(item.canonicalFoodId)
+                || item.visibleIngredients.contains(where: containsFruitName))
+    }
+
+    private func containsFruitName(_ value: String) -> Bool {
+        let value = normalize(value)
+        return [
+            "apple", "banana", "berry", "berries", "blueberry", "strawberry",
+            "orange", "mango", "grape", "guava", "papaya", "kiwi", "pear",
+            "peach", "pineapple", "watermelon", "pomegranate", "fruit"
+        ].contains(where: value.contains)
+    }
+
+    private func legacyItem(from meal: Meal) -> DetectedFoodItem {
+        let provenance = NutritionProvenance(
+            kind: .userCreated,
+            dataSource: "Confirmed diary history",
+            dataVersion: nil,
+            confidence: .medium
+        )
+        let nutrition = NutritionValues(
+            caloriesKcal: Double(meal.energy),
+            proteinGrams: Double(meal.protein),
+            carbohydrateGrams: Double(meal.carbs),
+            fatGrams: Double(meal.fat)
+        )
+        return DetectedFoodItem(
+            id: UUID(),
+            canonicalFoodId: "history." + normalize(meal.title).replacingOccurrences(of: " ", with: "-"),
+            displayName: meal.title,
+            regionalName: nil,
+            category: .unknown,
+            confidence: .medium,
+            alternatives: [],
+            quantity: 1,
+            servingUnit: .serving,
+            estimatedWeightGrams: 200,
+            visibleIngredients: [],
+            inferredIngredients: [],
+            possibleIngredients: [],
+            preparationMethod: nil,
+            nutrition: nutrition,
+            glycaemicInformation: .unavailable,
+            assumptions: ["Copied from a confirmed legacy diary entry."],
+            warnings: [],
+            boundingRegion: nil,
+            nutritionProvenance: provenance,
+            rawNutrition: nutrition,
+            nutritionValidation: DefaultNutritionValidationService().validate(rawValues: nutrition),
+            matchedAlias: meal.title,
+            confidenceScore: 0.8
+        )
+    }
+
+    private func normalize(_ text: String) -> String {
+        text
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: .current)
+            .lowercased()
+            .components(separatedBy: CharacterSet.alphanumerics.inverted)
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+    }
+}
+
+private extension Array where Element: Equatable {
+    var allEqual: Element? {
+        guard let first else { return nil }
+        return allSatisfy { $0 == first } ? first : nil
+    }
+}
+
 struct LocalNutritionService: NutritionService {
     let analysisEngine: LocalMealAnalysisEngine
 

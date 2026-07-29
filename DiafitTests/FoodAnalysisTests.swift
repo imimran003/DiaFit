@@ -124,6 +124,90 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(invalid.isValid)
     }
 
+    func testNutritionValidationAcceptsARealisticGramQuantity() {
+        let values = NutritionValues(
+            caloriesKcal: 720,
+            proteinGrams: 85,
+            carbohydrateGrams: 15,
+            fatGrams: 42,
+            fibreGrams: 5
+        )
+
+        let report = DefaultNutritionValidationService().validate(
+            rawValues: values,
+            canonicalFoodID: "tofu",
+            quantity: 500,
+            servingUnit: .grams,
+            estimatedWeightGrams: 500
+        )
+
+        XCTAssertTrue(report.isApproved)
+        XCTAssertEqual(report.safeValues, values)
+    }
+
+    func testProviderResolvedTofuRecalculatesFrom100To500Grams() {
+        let recalculator = MealItemNutritionRecalculator(catalog: catalog)
+        let original = providerResolvedTofu()
+        var edited = original
+        edited.quantity = 500
+        edited.servingUnit = .grams
+
+        let result = recalculator.recalculate(edited, previous: original)
+
+        XCTAssertEqual(result.estimatedWeightGrams ?? -1, 500, accuracy: 0.001)
+        XCTAssertEqual(result.nutrition.caloriesKcal ?? -1, 720, accuracy: 0.001)
+        XCTAssertEqual(result.nutrition.proteinGrams ?? -1, 85, accuracy: 0.001)
+        XCTAssertEqual(result.nutrition.carbohydrateGrams ?? -1, 15, accuracy: 0.001)
+        XCTAssertEqual(result.nutrition.fatGrams ?? -1, 42, accuracy: 0.001)
+        XCTAssertTrue(result.nutritionValidation?.isApproved == true)
+    }
+
+    func testProviderNutritionScalingRemainsStableWhenQuantityChangesBeforeUnit() {
+        let recalculator = MealItemNutritionRecalculator(catalog: catalog)
+        let original = providerResolvedTofu()
+        var quantityFirst = original
+        quantityFirst.quantity = 500
+
+        let intermediate = recalculator.recalculate(quantityFirst, previous: original)
+        XCTAssertEqual(intermediate.estimatedWeightGrams ?? -1, 50_000, accuracy: 0.001)
+        XCTAssertNotNil(intermediate.rawNutrition)
+
+        var grams = intermediate
+        grams.servingUnit = .grams
+        let result = recalculator.recalculate(grams, previous: intermediate)
+
+        XCTAssertEqual(result.estimatedWeightGrams ?? -1, 500, accuracy: 0.001)
+        XCTAssertEqual(result.nutrition.caloriesKcal ?? -1, 720, accuracy: 0.001)
+        XCTAssertEqual(result.nutrition.proteinGrams ?? -1, 85, accuracy: 0.001)
+    }
+
+    func testCatalogFoodQuantityRecalculatesFromCanonicalPer100GramValues() {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+        let original = engine.makeAnalysis(
+            description: "1 boiled egg",
+            imageReference: .transient(),
+            imageType: .noImage
+        ).detectedItems[0]
+        var edited = original
+        edited.quantity = 3
+        edited.servingUnit = .wholeEgg
+
+        let result = MealItemNutritionRecalculator(catalog: catalog)
+            .recalculate(edited, previous: original)
+
+        XCTAssertEqual(result.estimatedWeightGrams ?? -1, 150, accuracy: 0.001)
+        XCTAssertEqual(
+            result.nutrition.caloriesKcal ?? -1,
+            (original.nutrition.caloriesKcal ?? 0) * 3,
+            accuracy: 0.001
+        )
+        XCTAssertEqual(
+            result.nutrition.proteinGrams ?? -1,
+            (original.nutrition.proteinGrams ?? 0) * 3,
+            accuracy: 0.001
+        )
+    }
+
     @MainActor
     func testGlucoseReadingRepositoryPersistsEditsAndDeletion() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("diafit-glucose-\(UUID().uuidString)", isDirectory: true)
@@ -2443,6 +2527,127 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(MealPeriod(legacyLabel: "Lunch"), .lunch)
     }
 
+    func testSameBreakfastLikeYesterdayCreatesReviewWithoutSaving() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 29, hour: 9)))
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let breakfast = Meal(
+            id: UUID(), title: "Eggs and roti", subtitle: "confirmed", mealType: "Breakfast",
+            time: yesterday, energy: 360, carbs: 32, protein: 24, fat: 14,
+            artwork: .neutral, confidence: .verified
+        )
+        let previousDay = Day(
+            id: UUID(), date: yesterday,
+            messages: [ThreadItem(id: UUID(), kind: .meal(breakfast))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let currentDay = Day(
+            id: UUID(), date: today, messages: [],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+
+        let resolution = PreviousDayMealReferenceService().resolve(
+            "I had same breakfast like yesterday",
+            currentDay: currentDay,
+            allDays: [previousDay, currentDay],
+            calendar: calendar
+        )
+
+        guard case .review(let draft, let source) = resolution else {
+            return XCTFail("Expected a confirmation draft")
+        }
+        XCTAssertEqual(draft.mealPeriod, .breakfast)
+        XCTAssertEqual(draft.result.detectedItems.map(\.displayName), ["Eggs and roti"])
+        XCTAssertEqual(draft.result.mealTotals.caloriesKcal, 360)
+        XCTAssertTrue(source.contains("breakfast"))
+        XCTAssertTrue(currentDay.meals.isEmpty)
+    }
+
+    func testSameFruitAsYesterdayCanBeAssignedToMidMorningSnack() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 29, hour: 10)))
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let analysis = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "banana and apple")
+        let fruitMeal = Meal(
+            id: UUID(), title: "Banana + Apple", subtitle: "confirmed", mealType: "Breakfast",
+            time: yesterday,
+            energy: Int(analysis.mealTotals.caloriesKcal ?? 0),
+            carbs: Int(analysis.mealTotals.carbohydrateGrams ?? 0),
+            protein: Int(analysis.mealTotals.proteinGrams ?? 0),
+            fat: Int(analysis.mealTotals.fatGrams ?? 0),
+            artwork: .neutral, confidence: .verified, analysis: analysis
+        )
+        let previousDay = Day(
+            id: UUID(), date: yesterday,
+            messages: [ThreadItem(id: UUID(), kind: .meal(fruitMeal))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let currentDay = Day(
+            id: UUID(), date: today, messages: [],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+
+        let resolution = PreviousDayMealReferenceService().resolve(
+            "I had same fruits as yesterday for mid morning snacks",
+            currentDay: currentDay,
+            allDays: [previousDay, currentDay],
+            calendar: calendar
+        )
+
+        guard case .review(let draft, _) = resolution else {
+            return XCTFail("Expected a fruit confirmation draft")
+        }
+        XCTAssertEqual(draft.mealPeriod, .midMorningSnack)
+        XCTAssertEqual(Set(draft.result.detectedItems.map(\.canonicalFoodId)), Set(["banana", "apple"]))
+        XCTAssertFalse(draft.result.mealTotals.isEmpty)
+    }
+
+    func testSameDinnerAsYesterdaySelectsOnlyDinnerMeals() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let today = try XCTUnwrap(calendar.date(from: DateComponents(year: 2026, month: 7, day: 29, hour: 20)))
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: today))
+        let lunch = Meal(
+            id: UUID(), title: "Dal and rice", subtitle: "confirmed", mealType: "Lunch",
+            time: yesterday, energy: 430, carbs: 68, protein: 17, fat: 9,
+            artwork: .neutral, confidence: .verified
+        )
+        let dinner = Meal(
+            id: UUID(), title: "Paneer and roti", subtitle: "confirmed", mealType: "Dinner",
+            time: yesterday, energy: 510, carbs: 48, protein: 29, fat: 22,
+            artwork: .neutral, confidence: .verified
+        )
+        let previousDay = Day(
+            id: UUID(), date: yesterday,
+            messages: [
+                ThreadItem(id: UUID(), kind: .meal(lunch)),
+                ThreadItem(id: UUID(), kind: .meal(dinner))
+            ],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let currentDay = Day(
+            id: UUID(), date: today, messages: [],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+
+        let resolution = PreviousDayMealReferenceService().resolve(
+            "same dinner as yesterday",
+            currentDay: currentDay,
+            allDays: [previousDay, currentDay],
+            calendar: calendar
+        )
+
+        guard case .review(let draft, _) = resolution else {
+            return XCTFail("Expected a dinner confirmation draft")
+        }
+        XCTAssertEqual(draft.mealPeriod, .dinner)
+        XCTAssertEqual(draft.result.detectedItems.map(\.displayName), ["Paneer and roti"])
+        XCTAssertEqual(draft.result.mealTotals.caloriesKcal, 510)
+        XCTAssertTrue(currentDay.meals.isEmpty)
+    }
+
     @MainActor
     func testConfirmedMealKeepsUserSelectedMealPeriod() {
         let result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "2 roti")
@@ -2520,6 +2725,140 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(DailyReviewAvailability.isAvailable(for: yesterday, now: before, calendar: calendar))
     }
 
+    func testUserProfileAgeUsesCalendarYears() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let birthDate = try XCTUnwrap(
+            calendar.date(from: DateComponents(year: 1990, month: 8, day: 12))
+        )
+        let dayBeforeBirthday = try XCTUnwrap(
+            calendar.date(from: DateComponents(year: 2026, month: 8, day: 11))
+        )
+        let birthday = try XCTUnwrap(
+            calendar.date(from: DateComponents(year: 2026, month: 8, day: 12))
+        )
+        var profile = UserProfile.empty
+        profile.dateOfBirth = birthDate
+
+        XCTAssertEqual(profile.age(on: dayBeforeBirthday, calendar: calendar), 35)
+        XCTAssertEqual(profile.age(on: birthday, calendar: calendar), 36)
+    }
+
+    func testUserProfileValidationRejectsMissingNameAndUnsafeValues() {
+        let validator = UserProfileValidator()
+        assertProfileValidationFailure(.missingName, result: validator.validate(.empty))
+
+        var profile = UserProfile.empty
+        profile.preferredName = "Imran"
+        profile.heightCentimeters = 20
+        assertProfileValidationFailure(.invalidHeight, result: validator.validate(profile))
+
+        profile.heightCentimeters = 178
+        profile.weightKilograms = .infinity
+        assertProfileValidationFailure(.invalidWeight, result: validator.validate(profile))
+
+        profile.weightKilograms = 76
+        profile.proteinGoalGrams = 0
+        assertProfileValidationFailure(.invalidGoal, result: validator.validate(profile))
+    }
+
+    func testUserProfilePersistenceRoundTripRetainsProfileAndPreferences() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-profile-\(UUID().uuidString).json")
+        let persistence = FileUserProfilePersistence(
+            fileURL: fileURL,
+            appliesFileProtection: false
+        )
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        var profile = UserProfile.empty
+        profile.preferredName = "Imran Ahmad"
+        profile.sex = .male
+        profile.heightCentimeters = 178
+        profile.weightKilograms = 76.5
+        profile.diabetesContext = .type2
+        profile.allergies = ["Peanuts"]
+        profile.proteinGoalGrams = 120
+        let preferences = UserPreferences(
+            measurementSystem: .imperial,
+            preferredGlucoseUnit: .millimolesPerLiter,
+            hapticsEnabled: false
+        )
+
+        try persistence.save(UserProfileArchive(
+            savedAt: Date(timeIntervalSince1970: 123),
+            profile: profile,
+            preferences: preferences
+        ))
+        let restored = try XCTUnwrap(persistence.load())
+
+        XCTAssertEqual(restored.profile, profile)
+        XCTAssertEqual(restored.preferences, preferences)
+        XCTAssertEqual(restored.schemaVersion, UserProfileArchive.currentVersion)
+    }
+
+    @MainActor
+    func testUserProfileStoreLeavesCorruptArchiveUntouched() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-corrupt-profile-\(UUID().uuidString).json")
+        let corruptData = Data("not-json".utf8)
+        try corruptData.write(to: fileURL)
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        let store = UserProfileStore(
+            persistence: FileUserProfilePersistence(
+                fileURL: fileURL,
+                appliesFileProtection: false
+            )
+        )
+
+        XCTAssertEqual(store.profile, .empty)
+        XCTAssertNotNil(store.persistenceIssue)
+        XCTAssertEqual(try Data(contentsOf: fileURL), corruptData)
+    }
+
+    @MainActor
+    func testResetProfileRetainsPreferencesAndDoesNotTouchDiaryData() throws {
+        let fileURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-reset-profile-\(UUID().uuidString).json")
+        let persistence = FileUserProfilePersistence(
+            fileURL: fileURL,
+            appliesFileProtection: false
+        )
+        defer { try? FileManager.default.removeItem(at: fileURL) }
+
+        var profile = UserProfile.empty
+        profile.preferredName = "Imran"
+        let preferences = UserPreferences(
+            measurementSystem: .imperial,
+            preferredGlucoseUnit: .millimolesPerLiter,
+            hapticsEnabled: false
+        )
+        let store = UserProfileStore(persistence: persistence)
+        guard case .success = store.save(profile: profile, preferences: preferences) else {
+            return XCTFail("Expected the profile to save")
+        }
+
+        guard case .success = store.resetProfile() else {
+            return XCTFail("Expected profile reset to succeed")
+        }
+        XCTAssertEqual(store.profile, .empty)
+        XCTAssertEqual(store.preferences, preferences)
+        XCTAssertEqual(try persistence.load()?.profile, .empty)
+    }
+
+    private func assertProfileValidationFailure(
+        _ expected: UserProfileValidationError,
+        result: Result<Void, UserProfileValidationError>,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        guard case .failure(let actual) = result else {
+            return XCTFail("Expected profile validation to fail", file: file, line: line)
+        }
+        XCTAssertEqual(actual, expected, file: file, line: line)
+    }
+
     private func fixtureFoodImage() -> PreparedFoodImage {
         PreparedFoodImage(
             data: Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5WQAAAABJRU5ErkJggg==")!,
@@ -2527,6 +2866,54 @@ final class FoodAnalysisTests: XCTestCase {
             pixelWidth: 1,
             pixelHeight: 1,
             imageReference: .transient()
+        )
+    }
+
+    private func providerResolvedTofu() -> DetectedFoodItem {
+        let nutrition = NutritionValues(
+            caloriesKcal: 144,
+            proteinGrams: 17,
+            carbohydrateGrams: 3,
+            fatGrams: 8.4,
+            fibreGrams: 1
+        )
+        let provenance = NutritionProvenance(
+            kind: .modelFallback,
+            dataSource: "Test provider estimate",
+            dataVersion: "1",
+            confidence: .low
+        )
+        return DetectedFoodItem(
+            id: UUID(),
+            canonicalFoodId: "interpreted.tofu",
+            displayName: "Tofu",
+            regionalName: nil,
+            category: .dairyOrSide,
+            confidence: .medium,
+            alternatives: [],
+            quantity: 1,
+            servingUnit: .serving,
+            estimatedWeightGrams: 100,
+            visibleIngredients: [],
+            inferredIngredients: ["soybeans"],
+            possibleIngredients: [],
+            preparationMethod: nil,
+            nutrition: nutrition,
+            glycaemicInformation: .unavailable,
+            assumptions: ["Provider estimate for a 100 g serving."],
+            warnings: [],
+            boundingRegion: nil,
+            nutritionProvenance: provenance,
+            rawNutrition: nutrition,
+            nutritionValidation: DefaultNutritionValidationService().validate(
+                rawValues: nutrition,
+                canonicalFoodID: "interpreted.tofu",
+                quantity: 1,
+                servingUnit: .serving,
+                estimatedWeightGrams: 100
+            ),
+            matchedAlias: nil,
+            confidenceScore: 0.8
         )
     }
 }

@@ -568,6 +568,50 @@ struct PhotoAnalysisOrchestrator: Sendable {
 
     func analyse(image: PreparedFoodImage, description: String) async -> MealAnalysisResult {
         let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
+        var remoteFailed = false
+        var remoteIncomplete: MealAnalysisResult?
+
+        // Structured vision owns food identity when it is available. Running
+        // the generic whole-image classifier first added device work and
+        // delayed every successful backend result, even though those broad
+        // labels were discarded afterwards.
+        if let remote {
+            do {
+                let remoteResult = try await remote.analyse(image, dishHint: description)
+                let report = completeness.evaluate(remoteResult)
+                if report.isComplete {
+                    FoodLoggingDiagnostics.record("photo.classification", fields: [
+                        "route": "structured-backend",
+                        "candidateCount": String(remoteResult.detectedItems.count),
+                        "remoteAttempted": "true",
+                        "complete": "true"
+                    ])
+                    return remoteResult
+                }
+                remoteIncomplete = remoteResult
+            } catch {
+                remoteFailed = true
+                FoodLoggingDiagnostics.record("photo.classification", fields: [
+                    "route": "structured-backend-failed",
+                    "reason": safeRemoteFailureReason(error)
+                ])
+            }
+        }
+
+        if var remoteIncomplete, !remoteIncomplete.detectedItems.isEmpty {
+            remoteIncomplete.warnings.insert(
+                "The image was interpreted, but nutrition still needs confirmation before it can be saved.",
+                at: 0
+            )
+            FoodLoggingDiagnostics.record("photo.classification", fields: [
+                "route": "structured-backend-incomplete",
+                "candidateCount": String(remoteIncomplete.detectedItems.count),
+                "remoteAttempted": "true",
+                "complete": "false"
+            ])
+            return remoteIncomplete
+        }
+
         var candidates: [FoodImageCandidate] = []
         if let onDevice {
             candidates = (try? await onDevice.candidates(in: image)) ?? []
@@ -612,46 +656,11 @@ struct PhotoAnalysisOrchestrator: Sendable {
         }
         let localCompleteness = completeness.evaluate(result)
 
-        var remoteFailed = false
-        var remoteIncomplete: MealAnalysisResult?
-        if let remote {
-            do {
-                let remoteResult = try await analyseWithRemoteRetry(
-                    remote,
-                    image: image,
-                    dishHint: description
-                )
-                let report = completeness.evaluate(remoteResult)
-                if report.isComplete {
-                    FoodLoggingDiagnostics.record("photo.classification", fields: [
-                        "route": "structured-backend",
-                        "candidateCount": String(remoteResult.detectedItems.count),
-                        "remoteAttempted": "true",
-                        "complete": "true"
-                    ])
-                    return remoteResult
-                }
-                remoteIncomplete = remoteResult
-            } catch {
-                remoteFailed = true
-                FoodLoggingDiagnostics.record("photo.classification", fields: [
-                    "route": "structured-backend-failed",
-                    "reason": safeRemoteFailureReason(error)
-                ])
-            }
-        }
-
         // A generic whole-image classifier can produce a nutritionally complete
         // but visually wrong list. When structured vision is configured, its
         // component-aware interpretation owns food identity; on-device labels
         // are a private resilience fallback only when the backend fails.
-        if let remoteIncomplete, !remoteIncomplete.detectedItems.isEmpty {
-            result = remoteIncomplete
-            result.warnings.insert(
-                "The image was interpreted, but nutrition still needs confirmation before it can be saved.",
-                at: 0
-            )
-        } else if localCompleteness.isComplete {
+        if localCompleteness.isComplete {
             let liveRecognitionUnavailable = remote == nil || remoteFailed
             if liveRecognitionUnavailable,
                !isSafeFallback(memberDescription: trimmedDescription) {
@@ -733,23 +742,6 @@ struct PhotoAnalysisOrchestrator: Sendable {
         // to auto-confirm an image-only meal. A member-entered description is
         // explicit evidence and may still use the local nutrition path.
         !memberDescription.isEmpty
-    }
-
-    private func analyseWithRemoteRetry(
-        _ remote: any FoodRecognitionService,
-        image: PreparedFoodImage,
-        dishHint: String
-    ) async throws -> MealAnalysisResult {
-        do {
-            return try await remote.analyse(image, dishHint: dishHint)
-        } catch {
-            FoodLoggingDiagnostics.record("photo.classification", fields: [
-                "route": "structured-backend-retrying",
-                "reason": safeRemoteFailureReason(error)
-            ])
-            try? await Task.sleep(for: .milliseconds(550))
-            return try await remote.analyse(image, dishHint: dishHint)
-        }
     }
 
     private func safeRemoteFailureReason(_ error: Error) -> String {
@@ -917,6 +909,240 @@ struct CatalogNutritionLookupService: NutritionLookupService, Sendable {
                 confidence: food.confidence
             )
         )
+    }
+}
+
+/// Rebuilds an edited component from a stable serving basis. Catalog foods are
+/// always recalculated from their per-100 g record. Provider or AI-recognised
+/// foods that are not in the local catalog retain their traceable source and
+/// scale from the previous raw nutrition/weight pair. This keeps edits
+/// responsive without repeatedly scaling already-rounded display totals.
+struct MealItemNutritionRecalculator: Sendable {
+    let catalog: IndianFoodCatalogService
+    let portions: StandardPortionEstimationService
+    let nutrition: CatalogNutritionLookupService
+    let fallback: CuratedNutritionFallbackService
+    let glycaemic: CatalogGlycaemicDataService
+    let validation: any NutritionValidationService
+
+    init(
+        catalog: IndianFoodCatalogService = IndianFoodCatalogService(),
+        portions: StandardPortionEstimationService = .init(),
+        nutrition: CatalogNutritionLookupService = .init(),
+        fallback: CuratedNutritionFallbackService? = nil,
+        glycaemic: CatalogGlycaemicDataService = .init(),
+        validation: any NutritionValidationService = DefaultNutritionValidationService()
+    ) {
+        self.catalog = catalog
+        self.portions = portions
+        self.nutrition = nutrition
+        self.fallback = fallback ?? CuratedNutritionFallbackService(
+            catalog: catalog,
+            portions: portions,
+            validation: validation
+        )
+        self.glycaemic = glycaemic
+        self.validation = validation
+    }
+
+    func recalculate(
+        _ item: DetectedFoodItem,
+        previous: DetectedFoodItem? = nil
+    ) -> DetectedFoodItem {
+        if let definition = catalog.food(canonicalID: item.canonicalFoodId) {
+            return recalculateCatalogItem(item, definition: definition)
+        }
+        return recalculateProviderItem(item, previous: previous ?? item)
+    }
+
+    private func recalculateCatalogItem(
+        _ original: DetectedFoodItem,
+        definition: IndianFoodDefinition
+    ) -> DetectedFoodItem {
+        var item = original
+        let weight = portions.estimatedWeight(
+            quantity: item.quantity,
+            unit: item.servingUnit,
+            food: definition
+        )
+        let catalogLookup = nutrition.nutrition(for: definition, estimatedWeightGrams: weight)
+        let fallbackResolution = catalogLookup.values.isEmpty
+            ? fallback.resolve(
+                item: ParsedFoodItem(
+                    originalText: item.matchedAlias ?? item.displayName,
+                    canonicalSearchName: definition.englishName,
+                    regionalName: item.regionalName,
+                    quantity: item.quantity,
+                    unit: item.servingUnit.rawValue,
+                    estimatedGrams: weight,
+                    preparationMethod: item.preparationMethod,
+                    confidence: item.confidenceScore
+                ),
+                canonical: CanonicalFoodMatch(
+                    food: definition,
+                    matchedAlias: item.matchedAlias ?? item.displayName,
+                    confidence: item.confidenceScore,
+                    source: "member-corrected-canonical"
+                )
+            )
+            : nil
+        let lookup = fallbackResolution?.lookup ?? catalogLookup
+        let resolvedValues = nutritionIncludingShakeBase(
+            lookup.values,
+            profile: item.supplementProfile
+        )
+        let report = validation.validate(
+            rawValues: resolvedValues,
+            canonicalFoodID: definition.canonicalId,
+            quantity: item.quantity,
+            servingUnit: item.servingUnit,
+            estimatedWeightGrams: weight
+        )
+
+        item.estimatedWeightGrams = weight
+        item.rawNutrition = resolvedValues
+        item.nutrition = report.safeValues ?? .unavailable
+        item.nutritionValidation = report
+        item.nutritionProvenance = report.isApproved ? lookup.provenance : .unavailable
+        if let fallbackResolution {
+            item.assumptions = fallbackResolution.assumptions
+        }
+        item.glycaemicInformation = glycaemic.information(
+            for: definition,
+            availableCarbohydrateGrams: report.safeValues?.availableCarbohydrateGrams
+        )
+        item.warnings = nutritionWarnings(from: report, preserving: item.warnings)
+        return item
+    }
+
+    private func recalculateProviderItem(
+        _ original: DetectedFoodItem,
+        previous: DetectedFoodItem
+    ) -> DetectedFoodItem {
+        var item = original
+        let newWeight = estimatedWeight(for: item, previous: previous)
+        let oldWeight = previous.estimatedWeightGrams
+        let oldValues = previous.rawNutrition ?? previous.nutrition
+
+        let multiplier: Double? = {
+            if let oldWeight, oldWeight.isFinite, oldWeight > 0,
+               let newWeight, newWeight.isFinite, newWeight > 0 {
+                return newWeight / oldWeight
+            }
+            guard previous.quantity.isFinite, previous.quantity > 0,
+                  item.quantity.isFinite, item.quantity > 0,
+                  previous.servingUnit == item.servingUnit else { return nil }
+            return item.quantity / previous.quantity
+        }()
+
+        // If no safe conversion is available, preserve the source values and
+        // surface validation instead of silently treating the new amount as
+        // the old serving.
+        let resolvedValues = multiplier.map { oldValues.scaled(by: $0) } ?? oldValues
+        let report = validation.validate(
+            rawValues: resolvedValues,
+            canonicalFoodID: item.canonicalFoodId,
+            quantity: item.quantity,
+            servingUnit: item.servingUnit,
+            estimatedWeightGrams: newWeight
+        )
+
+        item.estimatedWeightGrams = newWeight
+        item.rawNutrition = resolvedValues
+        item.nutrition = report.safeValues ?? .unavailable
+        item.nutritionValidation = report
+        item.warnings = nutritionWarnings(from: report, preserving: item.warnings)
+        return item
+    }
+
+    private func estimatedWeight(
+        for item: DetectedFoodItem,
+        previous: DetectedFoodItem
+    ) -> Double? {
+        switch item.servingUnit {
+        case .grams, .millilitres:
+            return item.quantity
+        case .teaspoon:
+            return item.quantity * 5
+        case .tablespoon:
+            return item.quantity * 15
+        case .katori:
+            return item.quantity * 150
+        case .smallBowl:
+            return item.quantity * 120
+        case .mediumBowl:
+            return item.quantity * 200
+        case .largeBowl:
+            return item.quantity * 300
+        case .cup:
+            return item.quantity * 240
+        case .ladle:
+            return item.quantity * 60
+        case .piece:
+            return item.quantity * 60
+        case .roti:
+            return item.quantity * 35
+        case .naan:
+            return item.quantity * 90
+        case .paratha:
+            return item.quantity * 90
+        case .poori:
+            return item.quantity * 35
+        case .bhatura:
+            return item.quantity * 100
+        case .dosa:
+            return item.quantity * 120
+        case .idli:
+            return item.quantity * 40
+        case .vada:
+            return item.quantity * 55
+        case .slice:
+            return item.quantity * 30
+        case .glass:
+            return item.quantity * 250
+        case .plate:
+            return item.quantity * 300
+        case .wholeEgg:
+            return item.quantity * 50
+        case .scoop:
+            let gramsPerScoop = item.supplementProfile?.gramsPerScoop
+                ?? previous.supplementProfile?.gramsPerScoop
+                ?? 30
+            return item.quantity * gramsPerScoop
+        case .serving:
+            guard previous.servingUnit == .serving,
+                  previous.quantity.isFinite, previous.quantity > 0,
+                  let previousWeight = previous.estimatedWeightGrams else {
+                return item.estimatedWeightGrams
+            }
+            return previousWeight * item.quantity / previous.quantity
+        }
+    }
+
+    private func nutritionIncludingShakeBase(
+        _ powder: NutritionValues,
+        profile: SupplementProductProfile?
+    ) -> NutritionValues {
+        guard profile?.base == .milk,
+              let milk = catalog.normalise("milk") else { return powder }
+        let milkWeight = milk.standardServing?.grams ?? 240
+        let milkValues = nutrition.nutrition(
+            for: milk,
+            estimatedWeightGrams: milkWeight
+        ).values
+        return NutritionValues.total(of: [powder, milkValues])
+    }
+
+    private func nutritionWarnings(
+        from report: NutritionValidationReport,
+        preserving warnings: [String]
+    ) -> [String] {
+        let retained = warnings.filter {
+            !$0.localizedCaseInsensitiveContains("nutrition unavailable")
+                && !$0.localizedCaseInsensitiveContains("serving quantity")
+                && !$0.localizedCaseInsensitiveContains("serving weight")
+        }
+        return retained + report.issues.map(\.message)
     }
 }
 
