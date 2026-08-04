@@ -2,6 +2,43 @@
 
 Date: 2026-07-15
 
+## 2026-08-04 — Meal-period reachability and AI inventory adjudication
+
+The `WHEN` control no longer depends on a horizontal gesture nested inside the
+daily conversation. All seven meal periods are presented in a stable two-row,
+four-column grid, so Breakfast through Dinner remain visible, selectable and
+accessible on a physical-phone-sized viewport. Compact visual labels do not
+change the persisted meal-period values or their full VoiceOver names.
+
+Photo recognition now treats a small multi-label result as incomplete when it
+still contains generic dishes, garnish-sized foods, unresolved terms or weak
+component confidence. The structured backend performs an independent recovery
+pass over the full image. A materially stronger recovery inventory replaces
+the weak hypothesis instead of blindly unioning earlier false labels into the
+meal. If all AI passes remain sparse, the app preserves the photo and exposes
+retry/manual recovery; it does not enable confirmation with misleading totals.
+A specific three- or four-food inventory remains editable even when only a
+serving or recipe assumption lowers aggregate confidence.
+
+Verification completed:
+
+- 138 deterministic iOS unit/integration tests passed with 0 failures.
+- 22 UI tests passed with 0 failures on the iPhone 15 Pro simulator (iOS
+  26.5), including direct selection of Evening snack and Dinner without a
+  horizontal swipe.
+- Backend tests passed (4/4), both JavaScript syntax checks passed, and the
+  fixture-contract evaluator completed.
+- A live Gemini smoke test using a non-private bundled food asset returned a
+  schema-valid three-component inventory through `/v1/meal-parse`; the API key
+  remained in the ignored backend environment file.
+- The Release simulator build succeeded, then the verified Debug build was
+  installed and launched successfully on the iPhone 15 Pro simulator.
+
+Photo interpretation remains probabilistic. Exact portion, hidden oil, sauces
+and recipe composition still require review, and production distribution still
+requires deployed HTTPS, account authentication, managed secrets, provider
+monitoring, nutrition-source licensing and explicit photo-processing consent.
+
 ## 2026-08-04 — End-to-end QA closure
 
 The production-style QA pass covered the food and nutrition pipeline, typed

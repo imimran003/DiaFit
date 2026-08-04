@@ -173,6 +173,28 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(savedMeal.label.contains("Lunch"))
     }
 
+    func testDinnerAndEveningMealPeriodsAreVisibleWithoutHorizontalScrolling() throws {
+        submitFoodNote("black coffee")
+        XCTAssertTrue(app.staticTexts["Black coffee"].waitForExistence(timeout: 4))
+
+        let dinner = app.buttons["Dinner"]
+        let evening = app.buttons["Evening snack"]
+        XCTAssertTrue(dinner.waitForExistence(timeout: 4))
+        XCTAssertTrue(evening.waitForExistence(timeout: 4))
+
+        evening.tap()
+        XCTAssertTrue(evening.isSelected)
+        dinner.tap()
+        XCTAssertTrue(dinner.isSelected)
+
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+        let savedMeal = app.buttons["Saved meal Black coffee"]
+        XCTAssertTrue(savedMeal.waitForExistence(timeout: 4))
+        XCTAssertTrue(savedMeal.label.contains("Dinner"))
+    }
+
     func testMasoorDaalCompoundEntryShowsRotiAndDalBeforeConfirmation() throws {
         submitFoodNote("I had 2 roti and 1 katori masoor daal")
 

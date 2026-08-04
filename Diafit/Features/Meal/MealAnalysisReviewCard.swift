@@ -208,35 +208,55 @@ struct MealAnalysisReviewCard: View {
                 .tracking(1.05)
                 .foregroundStyle(Color.quietInk)
 
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 7) {
-                    ForEach(MealPeriod.allCases) { period in
-                        Button {
-                            guard editableDraft.mealPeriod != period else { return }
-                            editableDraft.mealPeriod = period
-                            onUpdate(editableDraft)
-                        } label: {
-                            Text(period.compactName)
-                                .font(DiafitType.caption.weight(.semibold))
-                                .foregroundStyle(
-                                    editableDraft.mealPeriod == period ? Color.paper : Color.ink
-                                )
-                                .padding(.horizontal, 12)
-                                .frame(minHeight: 40)
-                                .background(
-                                    editableDraft.mealPeriod == period ? Color.ink : Color.mist.opacity(0.72),
-                                    in: Capsule()
-                                )
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(period.displayName)
-                        .accessibilityAddTraits(editableDraft.mealPeriod == period ? .isSelected : [])
+            // Nested horizontal scrolling was unreliable inside the vertical
+            // conversation on a physical device: the parent often won the
+            // gesture before Dinner or Evening could enter the viewport. All
+            // periods are intentionally visible and tappable without a swipe.
+            Grid(horizontalSpacing: 7, verticalSpacing: 7) {
+                GridRow {
+                    ForEach(Array(MealPeriod.allCases.prefix(4))) { period in
+                        mealPeriodButton(period)
                     }
+                }
+
+                GridRow {
+                    ForEach(Array(MealPeriod.allCases.dropFirst(4))) { period in
+                        mealPeriodButton(period)
+                    }
+
+                    // Preserve the four-column rhythm without introducing an
+                    // invisible accessibility control.
+                    Color.clear
+                        .frame(minHeight: 40)
+                        .accessibilityHidden(true)
                 }
             }
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Meal period")
+    }
+
+    private func mealPeriodButton(_ period: MealPeriod) -> some View {
+        Button {
+            guard editableDraft.mealPeriod != period else { return }
+            editableDraft.mealPeriod = period
+            onUpdate(editableDraft)
+        } label: {
+            Text(period.compactName)
+                .font(DiafitType.caption.weight(.semibold))
+                .foregroundStyle(editableDraft.mealPeriod == period ? Color.paper : Color.ink)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+                .frame(maxWidth: .infinity, minHeight: 40)
+                .padding(.horizontal, 3)
+                .background(
+                    editableDraft.mealPeriod == period ? Color.ink : Color.mist.opacity(0.72),
+                    in: Capsule()
+                )
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(period.displayName)
+        .accessibilityAddTraits(editableDraft.mealPeriod == period ? .isSelected : [])
     }
 
     private var header: some View {

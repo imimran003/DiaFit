@@ -286,7 +286,10 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
                text: inventoryVerification.recoveryPrompt(after: selectedParse),
                image: image
            ) {
-            selectedParse = inventoryVerification.preferred(primary: selectedParse, verified: recoveryParse)
+            selectedParse = inventoryVerification.adjudicated(
+                previous: selectedParse,
+                recovery: recoveryParse
+            )
         }
         let parse = integrity.audit(selectedParse)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
@@ -342,13 +345,27 @@ struct PhotoInventoryVerificationService: Sendable {
     }
 
     func needsRecoveryPass(_ parse: MealParseResult) -> Bool {
-        guard parse.detectedItems.count == 1,
-              let item = parse.detectedItems.first else { return false }
-        let key = identityKey(item).replacingOccurrences(of: "-", with: " ")
-        let salientIngredient = ["peanut", "almond", "walnut", "mixed nuts", "nut", "seed"]
-            .contains { key == $0 || key.hasPrefix($0 + " ") }
-        let generic = isReplaceableGeneric(item)
-        return salientIngredient || generic || item.confidence < 0.80
+        guard !parse.detectedItems.isEmpty, parse.detectedItems.count <= 4 else { return false }
+
+        // The previously reported failure returned two nutritionally valid
+        // labels (for example “tomato” + “vegetable soup”) for a multi-serving
+        // plate. Limiting recovery to exactly one item let that hallucinated
+        // pair pass as a complete inventory. Re-audit any small inventory that
+        // still contains a generic dish, garnish-sized identity, unresolved
+        // term, or low-confidence component after the spatial pass.
+        if !parse.unresolvedItems.isEmpty
+            || parse.detectedItems.contains(where: isReplaceableGeneric)
+            || parse.detectedItems.contains(where: { $0.confidence < 0.80 }) {
+            return true
+        }
+
+        // A nut or tomato is suspicious when it is all (or nearly all) that
+        // survived the earlier passes. It is not suspicious beside two or
+        // more independently identified main servings such as eggs + sprouts.
+        // This keeps the recovery pass targeted and avoids a fourth provider
+        // request for an already complete plate.
+        let substantiveCount = parse.detectedItems.filter(isSubstantiveServing).count
+        return substantiveCount < 2 && parse.detectedItems.contains(where: isSalientIngredient)
     }
 
     func prompt(after parse: MealParseResult) -> String {
@@ -391,12 +408,40 @@ struct PhotoInventoryVerificationService: Sendable {
         Perform a fresh component-level inventory of the entire original meal photo. Earlier passes repeatedly
         returned only \(firstPass), which is an incomplete hypothesis, not a conclusion. A single nut, seed,
         garnish, or generic label must never stand in for a plate that contains other visible foods. Scan the full
-        frame and all separate piles, bowls, and containers before answering. Return every visually separable food
+        frame and all separate piles, bowls, and containers before answering. Treat labels such as tomato, soup,
+        curry, salad, nut, or garnish as untrusted until their exact visible serving is verified. Remove earlier
+        labels that are not visibly present; this is a corrected final inventory, not a union of guesses. Return every visually separable food
         exactly once, including eggs, sprouts, nuts, breads, rice, dal, sabzi, curries, sides, and drinks when they
         are present. Count visible units conservatively, preserve regional names, and do not invent anything hidden.
         If the photograph truly contains only one food, explain why in mealDescription; otherwise do not return a
         one-item garnish result.
         """
+    }
+
+    /// The last pass is an adjudication, not another source to union blindly.
+    /// When it supplies a materially stronger component inventory, use it as
+    /// the corrected answer so earlier false labels do not become extra foods.
+    /// If it remains weak, retain the conservative merge and let the outer
+    /// completeness gate withhold confirmation.
+    func adjudicated(previous: MealParseResult, recovery: MealParseResult) -> MealParseResult {
+        guard !recovery.detectedItems.isEmpty else { return previous }
+
+        let previousSubstantive = previous.detectedItems.filter(isSubstantiveServing).count
+        let recoveredSubstantive = recovery.detectedItems.filter(isSubstantiveServing).count
+        let materiallyStronger = recoveredSubstantive >= 2
+            && (recoveredSubstantive > previousSubstantive
+                || recovery.detectedItems.count >= previous.detectedItems.count + 2)
+
+        guard materiallyStronger else {
+            return preferred(primary: previous, verified: recovery)
+        }
+
+        var selected = recovery
+        selected.unresolvedItems = SemanticQuestionDeduplicator.uniqueStrings(recovery.unresolvedItems)
+        selected.clarificationQuestions = SemanticQuestionDeduplicator.uniqueStrings(
+            recovery.clarificationQuestions
+        )
+        return selected
     }
 
     func preferred(primary: MealParseResult, verified: MealParseResult) -> MealParseResult {
@@ -498,6 +543,16 @@ struct PhotoInventoryVerificationService: Sendable {
             key == $0 || key.hasPrefix($0 + " ") || key.contains(" \($0) ")
         }
         return broad && (item.confidence < 0.9 || item.category == .unknown || item.category == .vegetarianCurry)
+    }
+
+    private func isSalientIngredient(_ item: ParsedFoodItem) -> Bool {
+        let key = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        return ["peanut", "almond", "walnut", "mixed nuts", "nut", "seed", "tomato", "garnish"]
+            .contains { key == $0 || key.hasPrefix($0 + " ") }
+    }
+
+    private func isSubstantiveServing(_ item: ParsedFoodItem) -> Bool {
+        !isReplaceableGeneric(item) && !isSalientIngredient(item)
     }
 
     private func evidenceScore(_ item: ParsedFoodItem) -> Double {
@@ -726,30 +781,66 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
     /// applies to any salient garnish/ingredient, not just one named meal.
     func requiresInventoryRecovery(_ result: MealAnalysisResult) -> Bool {
         guard result.imageType == .originalPhoto,
-              result.detectedItems.count == 1,
-              let item = result.detectedItems.first else { return false }
+              !result.detectedItems.isEmpty,
+              result.detectedItems.count <= 4 else { return false }
 
-        if result.overallConfidence == .low || result.overallConfidence == .unknown {
+        // Low aggregate confidence is an inventory problem only when the
+        // parser surfaced too little of the plate. A complete, specific
+        // multi-item inventory can legitimately remain low confidence because
+        // a serving or recipe detail needs review; keep those editable items
+        // instead of discarding the whole result.
+        if result.detectedItems.count <= 2,
+           (result.overallConfidence == .low || result.overallConfidence == .unknown) {
+            FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
+                "reason": "overall-confidence",
+                "itemCount": String(result.detectedItems.count)
+            ])
             return true
         }
 
-        let identity = item.canonicalFoodId
-            .replacingOccurrences(of: "_", with: "-")
-            .lowercased()
-        let source = item.displayName.lowercased()
         let smallVisualIdentities = [
             "peanut", "almond", "walnut", "mixed-nuts", "nut", "seed", "seeds",
-            "garnish", "sprinkle", "topping"
+            "garnish", "sprinkle", "topping", "tomato"
         ]
-        if smallVisualIdentities.contains(where: { identity == $0 || identity.contains($0) || source.contains($0) }) {
-            return true
-        }
+        let genericVisualIdentities = [
+            "vegetable-soup", "soup", "mixed-food", "mixed-dish", "food", "meal", "dish", "curry"
+        ]
 
-        // A one-piece serving with only a gram or two is another useful,
-        // provider-independent signal that the classifier surfaced a garnish
-        // rather than the meal occupying the plate.
-        if item.estimatedWeightGrams.map({ $0 > 0 && $0 <= 5 }) == true {
-            return true
+        for item in result.detectedItems {
+            let identity = item.canonicalFoodId
+                .replacingOccurrences(of: "_", with: "-")
+                .lowercased()
+            let source = item.displayName.lowercased()
+            if genericVisualIdentities.contains(where: { identity == $0 || source == $0.replacingOccurrences(of: "-", with: " ") }) {
+                FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
+                    "reason": "generic-identity",
+                    "canonicalID": identity,
+                    "itemCount": String(result.detectedItems.count)
+                ])
+                return true
+            }
+            if result.detectedItems.count <= 2,
+               smallVisualIdentities.contains(where: { identity == $0 || identity.contains($0) || source.contains($0) }) {
+                FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
+                    "reason": "salient-small-inventory",
+                    "canonicalID": identity,
+                    "itemCount": String(result.detectedItems.count)
+                ])
+                return true
+            }
+
+            // A one-piece serving with only a gram or two is another useful,
+            // provider-independent signal that the classifier surfaced a
+            // garnish rather than the meal occupying the plate.
+            if result.detectedItems.count <= 2,
+               item.estimatedWeightGrams.map({ $0 > 0 && $0 <= 5 }) == true {
+                FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
+                    "reason": "garnish-weight",
+                    "canonicalID": identity,
+                    "itemCount": String(result.detectedItems.count)
+                ])
+                return true
+            }
         }
 
         return false
@@ -848,6 +939,24 @@ struct PhotoAnalysisOrchestrator: Sendable {
                 "remoteAttempted": "true",
                 "complete": "false"
             ])
+
+            // Apple Vision labels are broad classification hints, not an
+            // independent component inventory. Once structured AI has
+            // exhausted its full-frame, verification, spatial, and recovery
+            // passes, never replace its rejected result with an equally
+            // plausible-looking local pair. Preserve the photo and expose a
+            // retry/manual recovery state instead of enabling confirmation.
+            var unresolved = local.makeAnalysis(
+                description: "",
+                imageReference: image.imageReference,
+                imageType: .originalPhoto
+            )
+            unresolved.recognitionModelVersion = "Structured AI inventory withheld after independent review"
+            unresolved.warnings.insert(
+                "AI couldn’t complete the full plate inventory safely. Retry recognition or name the visible foods before saving.",
+                at: 0
+            )
+            return unresolved
         }
 
         var candidates: [FoodImageCandidate] = []
@@ -899,30 +1008,6 @@ struct PhotoAnalysisOrchestrator: Sendable {
         // Keep the photo and route the member to the recoverable retry state;
         // a wrong one-item total is more harmful than an explicit unavailable
         // result, especially for diabetes-focused carbohydrate tracking.
-        if remoteNeedsInventoryRecovery,
-           let remoteIncomplete,
-           !remoteIncomplete.detectedItems.isEmpty,
-           result.detectedItems.count <= 1,
-           localCompleteness.isComplete || !candidates.isEmpty {
-            var unresolved = local.makeAnalysis(
-                description: "",
-                imageReference: image.imageReference,
-                imageType: .originalPhoto
-            )
-            unresolved.recognitionModelVersion = "Structured vision returned a sparse plate inventory"
-            unresolved.warnings.insert(
-                "I could verify one visible item, but the photo may contain more foods. Retry AI recognition before saving.",
-                at: 0
-            )
-            FoodLoggingDiagnostics.record("photo.classification", fields: [
-                "route": "sparse-inventory-withheld",
-                "candidateCount": String(candidates.count),
-                "remoteAttempted": "true",
-                "remoteFailed": String(remoteFailed)
-            ])
-            return unresolved
-        }
-
         // A generic whole-image classifier can produce a nutritionally complete
         // but visually wrong list. When structured vision is configured, its
         // component-aware interpretation owns food identity; on-device labels

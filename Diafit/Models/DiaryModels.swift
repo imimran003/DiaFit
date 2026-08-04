@@ -26,8 +26,8 @@ enum MealPeriod: String, Codable, CaseIterable, Identifiable, Hashable, Sendable
     var compactName: String {
         switch self {
         case .midMorningSnack: return "Mid-morning"
-        case .afternoonSnack: return "Afternoon snack"
-        case .eveningSnack: return "Evening snack"
+        case .afternoonSnack: return "Afternoon"
+        case .eveningSnack: return "Evening"
         default: return displayName
         }
     }
