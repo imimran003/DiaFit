@@ -63,7 +63,11 @@ struct MealAnalysisReviewCard: View {
     }
 
     private var nutritionIsSafeToConfirm: Bool {
-        result.nutritionValidation?.isApproved ?? false
+        (result.nutritionValidation?.isApproved ?? false) && !photoNeedsInventoryRecovery
+    }
+
+    private var photoNeedsInventoryRecovery: Bool {
+        PhotoAnalysisCompletenessEvaluator().requiresInventoryRecovery(result)
     }
 
     var body: some View {
@@ -87,6 +91,14 @@ struct MealAnalysisReviewCard: View {
                             .background(.black.opacity(0.42), in: Capsule())
                             .padding(10)
                     }
+            }
+
+            if photoNeedsInventoryRecovery {
+                PhotoInventoryRecoveryNotice(
+                    itemCount: result.detectedItems.count,
+                    retry: retryAnalysis,
+                    isRetrying: isRetryingAnalysis
+                )
             }
 
             if let request = result.visualRequest, editableDraft.transientImageData == nil {
@@ -789,6 +801,52 @@ private struct EmptyAnalysisState: View {
         }
         .padding(13)
         .background(Color.mist, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+    }
+}
+
+private struct PhotoInventoryRecoveryNotice: View {
+    let itemCount: Int
+    let retry: () -> Void
+    let isRetrying: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            HStack(spacing: 8) {
+                Image(systemName: "viewfinder")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Color.lime.opacity(0.55), in: Circle())
+                Text(itemCount == 1 ? "I found one visible item, but the plate may contain more." : "The photo inventory still needs a wider check.")
+                    .font(.system(.caption, design: .rounded, weight: .semibold))
+                    .foregroundStyle(Color.ink)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Text("I won’t save a partial plate as if it were the whole meal. Retry recognition to scan every bowl and pile.")
+                .font(DiafitType.caption)
+                .foregroundStyle(Color.quietInk)
+                .lineSpacing(2)
+            Button(action: retry) {
+                HStack(spacing: 7) {
+                    if isRetrying { ProgressView().tint(Color.paper) }
+                    else { Image(systemName: "arrow.clockwise") }
+                    Text(isRetrying ? "Scanning the full plate…" : "Retry AI recognition")
+                }
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .foregroundStyle(Color.paper)
+                .frame(maxWidth: .infinity, minHeight: 42)
+                .background(Color.ink, in: Capsule())
+            }
+            .buttonStyle(.plain)
+            .disabled(isRetrying)
+            .accessibilityLabel(isRetrying ? "Scanning the full plate" : "Retry AI recognition")
+        }
+        .padding(12)
+        .background(Color.mist, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 17, style: .continuous)
+                .stroke(Color.lime.opacity(0.55), lineWidth: 1)
+        }
     }
 }
 

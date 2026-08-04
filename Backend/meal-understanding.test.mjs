@@ -73,6 +73,7 @@ assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('quanti
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('packagedLabelEvidence'), true);
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('top-to-bottom and left-to-right'), true);
 assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('separate containers'), true);
+assert.equal(geminiImageRequest.systemInstruction.parts[0].text.includes('lone nut, seed, garnish'), true);
 
 const packagedProduct = sanitizeMealParseResult({
   ...parsed,

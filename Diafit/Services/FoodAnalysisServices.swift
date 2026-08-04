@@ -274,6 +274,20 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
            ) {
             selectedParse = inventoryVerification.preferred(primary: selectedParse, verified: spatialParse)
         }
+
+        // A provider can repeat the same salient garnish across the full-frame
+        // and montage passes. One short, fresh recovery pass prevents that
+        // repeated answer from becoming the meal inventory. It is only used
+        // when the result is still sparse after the spatial review, so normal
+        // single-food photographs keep the fast path and do not pay for an
+        // extra request.
+        if inventoryVerification.needsRecoveryPass(selectedParse),
+           let recoveryParse = try? await understanding.parse(
+               text: inventoryVerification.recoveryPrompt(after: selectedParse),
+               image: image
+           ) {
+            selectedParse = inventoryVerification.preferred(primary: selectedParse, verified: recoveryParse)
+        }
         let parse = integrity.audit(selectedParse)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
 
@@ -327,6 +341,16 @@ struct PhotoInventoryVerificationService: Sendable {
         }
     }
 
+    func needsRecoveryPass(_ parse: MealParseResult) -> Bool {
+        guard parse.detectedItems.count == 1,
+              let item = parse.detectedItems.first else { return false }
+        let key = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        let salientIngredient = ["peanut", "almond", "walnut", "mixed nuts", "nut", "seed"]
+            .contains { key == $0 || key.hasPrefix($0 + " ") }
+        let generic = isReplaceableGeneric(item)
+        return salientIngredient || generic || item.confidence < 0.80
+    }
+
     func prompt(after parse: MealParseResult) -> String {
         let firstPass = parse.detectedItems
             .map { $0.regionalName ?? $0.originalText }
@@ -356,6 +380,22 @@ struct PhotoInventoryVerificationService: Sendable {
         lentils and vegetable preparations. A generic label such as soup, curry, food or peanut is not sufficient \
         when a more specific visible serving is supported. Return each physical serving once, preserve visible \
         counts, and use a concise clarification only for genuinely hidden or ambiguous details.
+        """
+    }
+
+    func recoveryPrompt(after parse: MealParseResult) -> String {
+        let firstPass = parse.detectedItems
+            .map { $0.regionalName ?? $0.originalText }
+            .joined(separator: ", ")
+        return """
+        Perform a fresh component-level inventory of the entire original meal photo. Earlier passes repeatedly
+        returned only \(firstPass), which is an incomplete hypothesis, not a conclusion. A single nut, seed,
+        garnish, or generic label must never stand in for a plate that contains other visible foods. Scan the full
+        frame and all separate piles, bowls, and containers before answering. Return every visually separable food
+        exactly once, including eggs, sprouts, nuts, breads, rice, dal, sabzi, curries, sides, and drinks when they
+        are present. Count visible units conservatively, preserve regional names, and do not invent anything hidden.
+        If the photograph truly contains only one food, explain why in mealDescription; otherwise do not return a
+        one-item garnish result.
         """
     }
 
@@ -677,6 +717,43 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
         let unique = Array(NSOrderedSet(array: missing)) as? [String] ?? missing
         return PhotoAnalysisCompletenessReport(isComplete: unique.isEmpty, missingRequirements: unique)
     }
+
+    /// A photo can have valid nutrition for one item and still be an unsafe
+    /// inventory. This is the failure mode behind a plate containing eggs,
+    /// sprouts and nuts being reduced to one peanut: the one item is valid in
+    /// isolation, but it is not enough evidence that the whole photograph was
+    /// inspected. Keep the rule deliberately conservative and semantic so it
+    /// applies to any salient garnish/ingredient, not just one named meal.
+    func requiresInventoryRecovery(_ result: MealAnalysisResult) -> Bool {
+        guard result.imageType == .originalPhoto,
+              result.detectedItems.count == 1,
+              let item = result.detectedItems.first else { return false }
+
+        if result.overallConfidence == .low || result.overallConfidence == .unknown {
+            return true
+        }
+
+        let identity = item.canonicalFoodId
+            .replacingOccurrences(of: "_", with: "-")
+            .lowercased()
+        let source = item.displayName.lowercased()
+        let smallVisualIdentities = [
+            "peanut", "almond", "walnut", "mixed-nuts", "nut", "seed", "seeds",
+            "garnish", "sprinkle", "topping"
+        ]
+        if smallVisualIdentities.contains(where: { identity == $0 || identity.contains($0) || source.contains($0) }) {
+            return true
+        }
+
+        // A one-piece serving with only a gram or two is another useful,
+        // provider-independent signal that the classifier surfaced a garnish
+        // rather than the meal occupying the plate.
+        if item.estimatedWeightGrams.map({ $0 > 0 && $0 <= 5 }) == true {
+            return true
+        }
+
+        return false
+    }
 }
 
 struct PhotoAnalysisOrchestrator: Sendable {
@@ -701,6 +778,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
         let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
         var remoteFailed = false
         var remoteIncomplete: MealAnalysisResult?
+        var remoteNeedsInventoryRecovery = false
 
         // Structured vision owns food identity when it is available. Running
         // the generic whole-image classifier first added device work and
@@ -723,8 +801,13 @@ struct PhotoAnalysisOrchestrator: Sendable {
                     ])
                     throw FoodAnalysisError.malformedProviderResponse
                 }
+                // Inventory coverage is a separate gate from nutrition
+                // completeness. A single valid peanut (or other tiny
+                // garnish) can have perfectly plausible nutrition while
+                // still being an unsafe representation of a full plate.
+                let needsInventoryRecovery = completeness.requiresInventoryRecovery(remoteResult)
                 let report = completeness.evaluate(remoteResult)
-                if report.isComplete {
+                if report.isComplete && !needsInventoryRecovery {
                     FoodLoggingDiagnostics.record("photo.classification", fields: [
                         "route": "structured-backend",
                         "candidateCount": String(remoteResult.detectedItems.count),
@@ -734,6 +817,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
                     return remoteResult
                 }
                 remoteIncomplete = remoteResult
+                remoteNeedsInventoryRecovery = needsInventoryRecovery
             } catch {
                 remoteFailed = true
                 FoodLoggingDiagnostics.record("photo.classification", fields: [
@@ -743,7 +827,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
             }
         }
 
-        if var remoteIncomplete, !remoteIncomplete.detectedItems.isEmpty {
+        if var remoteIncomplete, !remoteIncomplete.detectedItems.isEmpty, !remoteNeedsInventoryRecovery {
             remoteIncomplete.warnings.insert(
                 "The image was interpreted, but nutrition still needs confirmation before it can be saved.",
                 at: 0
@@ -755,6 +839,15 @@ struct PhotoAnalysisOrchestrator: Sendable {
                 "complete": "false"
             ])
             return remoteIncomplete
+        }
+
+        if remoteNeedsInventoryRecovery {
+            FoodLoggingDiagnostics.record("photo.classification", fields: [
+                "route": "structured-backend-sparse-inventory",
+                "candidateCount": String(remoteIncomplete?.detectedItems.count ?? 0),
+                "remoteAttempted": "true",
+                "complete": "false"
+            ])
         }
 
         var candidates: [FoodImageCandidate] = []
@@ -800,6 +893,35 @@ struct PhotoAnalysisOrchestrator: Sendable {
             )
         }
         let localCompleteness = completeness.evaluate(result)
+
+        // If the structured provider and the private classifier agree only on
+        // one tiny/salient item, do not turn that agreement into a saved meal.
+        // Keep the photo and route the member to the recoverable retry state;
+        // a wrong one-item total is more harmful than an explicit unavailable
+        // result, especially for diabetes-focused carbohydrate tracking.
+        if remoteNeedsInventoryRecovery,
+           let remoteIncomplete,
+           !remoteIncomplete.detectedItems.isEmpty,
+           result.detectedItems.count <= 1,
+           localCompleteness.isComplete || !candidates.isEmpty {
+            var unresolved = local.makeAnalysis(
+                description: "",
+                imageReference: image.imageReference,
+                imageType: .originalPhoto
+            )
+            unresolved.recognitionModelVersion = "Structured vision returned a sparse plate inventory"
+            unresolved.warnings.insert(
+                "I could verify one visible item, but the photo may contain more foods. Retry AI recognition before saving.",
+                at: 0
+            )
+            FoodLoggingDiagnostics.record("photo.classification", fields: [
+                "route": "sparse-inventory-withheld",
+                "candidateCount": String(candidates.count),
+                "remoteAttempted": "true",
+                "remoteFailed": String(remoteFailed)
+            ])
+            return unresolved
+        }
 
         // A generic whole-image classifier can produce a nutritionally complete
         // but visually wrong list. When structured vision is configured, its

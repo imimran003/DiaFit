@@ -88,3 +88,21 @@
 - Member-uploaded photos remain the first-choice meal visual. The vector
   composition is a truthful fallback for manual entries when generated imagery
   is disabled or unavailable; it is not presented as a photo of the portion.
+
+## 2026-08-04 — Sparse photo inventory guard
+
+- Reproduced the reported plate failure where structured vision returned only
+  `Peanut` for a photograph that visibly contains eggs, sprouts and nuts. The
+  old route treated nutritionally valid one-item output as a complete meal and
+  sent it straight to the review card.
+- Added a provider-independent inventory-coverage gate. Small salient items,
+  generic labels, low-confidence one-item results and tiny gram estimates now
+  trigger a fresh full-frame recovery prompt. A result cannot be confirmed or
+  saved as the whole plate until the inventory is accounted for.
+- Added a visible retry/recovery state for sparse photo results and preserved
+  the original photo for manual correction. Added strict regressions for
+  recovery-pass merging and for withholding a sparse remote plate.
+- Verification: Backend Node tests passed (4/4), FoodAnalysisTests passed
+  (132/132) on the iPhone 15 Pro simulator, and the simulator build passed.
+  The opt-in live provider smoke test was not run because uploading the private
+  user photo to an external provider requires explicit destination consent.

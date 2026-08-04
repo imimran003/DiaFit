@@ -1272,6 +1272,76 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems.contains { $0.canonicalFoodId == "mixed-nuts" || $0.displayName.localizedCaseInsensitiveContains("nut") })
     }
 
+    func testStructuredVisionUsesRecoveryPassWhenSpatialReviewStillReturnsOneTinyIngredient() async throws {
+        let peanut = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Peanut",
+                    canonicalSearchName: "peanut",
+                    category: .breakfastOrSnack,
+                    quantity: 1,
+                    unit: "piece",
+                    estimatedGrams: 1,
+                    confidence: 0.79
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Peanut",
+            clarificationQuestions: [],
+            confidence: 0.79
+        )
+        let recovered = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Boiled eggs", canonicalSearchName: "hard-boiled egg", category: .egg, quantity: 2, unit: "whole eggs", quantityEvidence: "four halves equal two eggs", estimatedGrams: 100, preparationMethod: "boiled", confidence: 0.93),
+                ParsedFoodItem(originalText: "Mixed sprouts", canonicalSearchName: "mixed sprouts", category: .sprouts, quantity: 1, unit: "small bowl", quantityEvidence: "one visible pile", estimatedGrams: 150, confidence: 0.9),
+                ParsedFoodItem(originalText: "Peanuts", canonicalSearchName: "peanut", category: .breakfastOrSnack, quantity: 1, unit: "serving", quantityEvidence: "visible peanut cluster", estimatedGrams: 20, confidence: 0.88)
+            ],
+            unresolvedItems: [],
+            mealDescription: "Boiled eggs, mixed sprouts and peanuts",
+            clarificationQuestions: [],
+            confidence: 0.88
+        )
+        let understanding = SequentialMealUnderstanding(results: [peanut, peanut, peanut, recovered])
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router),
+            catalog: catalog
+        )
+
+        let result = try await remote.analyse(try largeFixtureFoodImage(), dishHint: Optional<String>.none)
+
+        let callCount = await understanding.callCount
+        XCTAssertEqual(callCount, 4)
+        XCTAssertTrue(result.detectedItems.contains { $0.category == .egg })
+        XCTAssertTrue(result.detectedItems.contains { $0.category == .sprouts })
+        XCTAssertTrue(result.detectedItems.contains { $0.canonicalFoodId == "peanut" })
+    }
+
+    func testSparseRemotePlateIsNotPresentedAsAConfirmableOneItemMeal() async {
+        let orchestrator = PhotoAnalysisOrchestrator(
+            remote: SparseRemoteFoodRecognitionService(catalog: catalog),
+            onDevice: StubFoodImageClassificationService(candidates: [
+                FoodImageCandidate(canonicalFoodId: "peanut", sourceLabel: "peanut", confidence: 0.79)
+            ]),
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        )
+
+        let result = await orchestrator.analyse(image: fixtureFoodImage(), description: "")
+
+        XCTAssertTrue(result.detectedItems.isEmpty)
+        XCTAssertTrue(result.mealTotals.isEmpty)
+        XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("plate") || $0.localizedCaseInsensitiveContains("more foods") })
+        XCTAssertTrue(PhotoAnalysisCompletenessEvaluator().requiresInventoryRecovery(
+            LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "peanut", imageType: .originalPhoto)
+        ))
+    }
+
     func testRemoteFailureDoesNotPresentMultipleWholeImageLabelsAsACompletePlate() async {
         let orchestrator = PhotoAnalysisOrchestrator(
             remote: FailingFoodRecognitionService(),
@@ -3349,6 +3419,17 @@ private struct FixedFoodRecognitionService: FoodRecognitionService {
 
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         result
+    }
+}
+
+private struct SparseRemoteFoodRecognitionService: FoodRecognitionService {
+    let catalog: IndianFoodCatalogService
+
+    func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
+        var result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "peanut", imageType: .originalPhoto)
+        result.imageReference = image.imageReference
+        return result
     }
 }
 
