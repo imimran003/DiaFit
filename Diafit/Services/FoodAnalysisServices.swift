@@ -224,24 +224,55 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
     let understanding: any FoodUnderstandingService
     let coordinator: HybridMealAnalysisCoordinator
     let integrity = PhotoParseIntegrityService()
-    let inventoryVerification = PhotoInventoryVerificationService()
+    let inventoryVerification: PhotoInventoryVerificationService
     let spatialReview = SpatialPlateReviewImageService()
+
+    init(
+        understanding: any FoodUnderstandingService,
+        coordinator: HybridMealAnalysisCoordinator,
+        catalog: IndianFoodCatalogService = IndianFoodCatalogService()
+    ) {
+        self.understanding = understanding
+        self.coordinator = coordinator
+        self.inventoryVerification = PhotoInventoryVerificationService(catalog: catalog)
+    }
 
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         let trimmedHint = dishHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // A typed hint is evidence, not an inventory. Older builds passed the
+        // hint as the entire prompt, which encouraged the provider to return
+        // only the named dish and silently omit the rest of the plate.
         let instruction = trimmedHint.isEmpty
             ? "Inspect the entire meal photo and identify every distinct physical food serving exactly once. Preserve regional Indian names, include breads, rice, dal, sabji, curries and sides when visible, and never list alternative guesses as separate foods."
-            : trimmedHint
+            : "The member described this meal as \(trimmedHint). Use that as a hint, but inspect the entire photo and return every distinct visible serving exactly once."
         let primaryParse = try await understanding.parse(text: instruction, image: image)
-        let selectedParse: MealParseResult
+        var selectedParse = primaryParse
         if inventoryVerification.needsIndependentCheck(primaryParse),
            let verifiedParse = try? await understanding.parse(
                text: inventoryVerification.prompt(after: primaryParse),
-               image: spatialReview.make(from: image) ?? image
+               // Keep the original composition for the first independent
+               // pass. A collage can make a bowl look like a different dish
+               // and was the source of the recurring stale “vegetable soup”
+               // result in otherwise unrelated photos.
+               image: image
            ) {
             selectedParse = inventoryVerification.preferred(primary: primaryParse, verified: verifiedParse)
         } else {
             selectedParse = primaryParse
+        }
+
+        // A single broad label is not a safe inventory for a plate photo. If
+        // both full-frame passes still collapse the image to a generic dish or
+        // a small garnish/ingredient, spend one additional pass on spatial
+        // crops. This is deliberately quality-gated, so ordinary single-food
+        // photos do not incur an unnecessary third request.
+        if inventoryVerification.needsExpandedInventory(selectedParse),
+           let montage = spatialReview.make(from: image),
+           let spatialParse = try? await understanding.parse(
+               text: inventoryVerification.spatialPrompt(after: selectedParse),
+               image: montage
+           ) {
+            selectedParse = inventoryVerification.preferred(primary: selectedParse, verified: spatialParse)
         }
         let parse = integrity.audit(selectedParse)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
@@ -266,8 +297,34 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
 /// independent inventory check. The second pass must return the complete plate
 /// and is reconciled with the first rather than blindly replacing it.
 struct PhotoInventoryVerificationService: Sendable {
+    let catalog: IndianFoodCatalogService
+
+    init(catalog: IndianFoodCatalogService = IndianFoodCatalogService()) {
+        self.catalog = catalog
+    }
+
     func needsIndependentCheck(_ parse: MealParseResult) -> Bool {
-        (1...4).contains(parse.detectedItems.count)
+        // A six-component plate is still small enough to audit, and is where
+        // a single broad label is most likely to hide a side or flatbread.
+        (1...6).contains(parse.detectedItems.count)
+    }
+
+    func needsExpandedInventory(_ parse: MealParseResult) -> Bool {
+        guard !parse.detectedItems.isEmpty else { return true }
+
+        // Do not gate this on a one-item result. The recurring failure was a
+        // photo reduced to two plausible labels (for example rice + soup)
+        // while the roti, dal, or dry sabzi on the same plate disappeared.
+        // Any generic label, garnish-sized ingredient, or low-confidence
+        // component warrants the spatial pass even when other components look
+        // complete.
+        return parse.detectedItems.contains { item in
+            let key = identityKey(item)
+            let smallIngredient = ["peanut", "almond", "walnut", "mixed nuts", "nut"].contains {
+                key == $0 || key.hasPrefix($0 + " ")
+            }
+            return isReplaceableGeneric(item) || smallIngredient || item.confidence < 0.80
+        }
     }
 
     func prompt(after parse: MealParseResult) -> String {
@@ -275,7 +332,8 @@ struct PhotoInventoryVerificationService: Sendable {
             .map { $0.regionalName ?? $0.originalText }
             .joined(separator: ", ")
         return """
-        Re-inspect the entire food photograph independently. The first inventory found: \(firstPass). \
+        Re-inspect the entire food photograph independently. The first inventory is an untrusted hypothesis: \(firstPass). \
+        Do not anchor on it or repeat a generic label just because it was suggested. \
         The supplied image may be a spatial review montage containing overlapping views of the same original \
         photograph. Do not count a food twice merely because it appears in more than one panel. Return a complete \
         corrected inventory, not only additions. Scan the main plate and every separate bowl \
@@ -286,35 +344,74 @@ struct PhotoInventoryVerificationService: Sendable {
         """
     }
 
+    func spatialPrompt(after parse: MealParseResult) -> String {
+        let firstPass = parse.detectedItems
+            .map { $0.regionalName ?? $0.originalText }
+            .joined(separator: ", ")
+        return """
+        This is a four-panel spatial review of the same meal photograph. The current pass only found the following \
+        untrusted hypothesis: \(firstPass). Do not anchor on it or repeat a generic label without visual evidence. \
+        Reconstruct one complete inventory of the original plate, not four separate meals. Inspect every panel and \
+        merge overlapping views. Look for separate bowls, piles, stacked flatbreads, eggs, sprouts, nuts, rice, \
+        lentils and vegetable preparations. A generic label such as soup, curry, food or peanut is not sufficient \
+        when a more specific visible serving is supported. Return each physical serving once, preserve visible \
+        counts, and use a concise clarification only for genuinely hidden or ambiguous details.
+        """
+    }
+
     func preferred(primary: MealParseResult, verified: MealParseResult) -> MealParseResult {
         guard !verified.detectedItems.isEmpty else { return primary }
 
         let primaryKeys = Set(primary.detectedItems.map(identityKey))
         let verifiedKeys = Set(verified.detectedItems.map(identityKey))
         let hasSharedIdentity = !primaryKeys.intersection(verifiedKeys).isEmpty
-        var selected: MealParseResult
 
-        if !hasSharedIdentity, primary.detectedItems.allSatisfy(isReplaceableGeneric) {
-            selected = verified
-        } else if !hasSharedIdentity {
-            // Spatially separated bowls and breads are often noticed on
-            // different passes. A disjoint inventory is additive evidence,
-            // not a reason to discard the first visible serving.
-            selected = verified
-            selected.detectedItems = deduplicatedItems(primary.detectedItems + verified.detectedItems)
-            selected.mealDescription = [primary.mealDescription, verified.mealDescription]
-                .filter { !$0.isEmpty }
-                .joined(separator: ", ")
-            selected.confidence = min(primary.confidence, verified.confidence)
-        } else if verified.detectedItems.count > primary.detectedItems.count {
-            selected = verified
-        } else if verified.detectedItems.count >= primary.detectedItems.count {
-            // With an overlapping anchor, the independent full inventory is
-            // authoritative and can correct a generic first-pass label.
-            selected = verified
-        } else {
-            selected = primary
+        // Never throw away a physical serving merely because the second pass
+        // saw a different region. Merge both inventories, deduplicating by a
+        // canonical catalog identity and preferring the better-evidenced item.
+        // The previous count-based replacement was why roti or dal vanished
+        // when another pass returned only kadhi/soup.
+        var merged = deduplicatedItems(primary.detectedItems + verified.detectedItems)
+
+        // A generic label from one pass is often the wrong name for a serving
+        // that the other pass identified specifically. Drop only that generic
+        // candidate; never drop a specific item from either inventory.
+        let primaryGenericKeys = Set(primary.detectedItems.filter(isReplaceableGeneric).map(identityKey))
+        let verifiedGenericKeys = Set(verified.detectedItems.filter(isReplaceableGeneric).map(identityKey))
+        if hasSharedIdentity, verified.detectedItems.count >= primary.detectedItems.count {
+            merged.removeAll { item in
+                primaryGenericKeys.contains(identityKey(item))
+                    && !verifiedKeys.contains(identityKey(item))
+            }
         }
+        if !hasSharedIdentity {
+            merged.removeAll { item in
+                let key = identityKey(item)
+                let fromVerifiedGeneric = verifiedGenericKeys.contains(key)
+                let fromPrimaryGeneric = primaryGenericKeys.contains(key)
+                guard fromVerifiedGeneric || fromPrimaryGeneric else { return false }
+                let other = fromVerifiedGeneric ? primary.detectedItems : verified.detectedItems
+                // A generic curry/soup label should not replace any specific
+                // serving found by the other pass. This is intentionally not
+                // limited to a shared category: the recurring failures were a
+                // soup label replacing a kadhi bowl, roti stack, eggs or nuts
+                // that the spatial pass could see. Generic-only single-food
+                // photos remain untouched because there is no specific item
+                // to justify removal.
+                return other.contains { hasIdentity($0) && !isReplaceableGeneric($0) }
+            }
+        }
+
+        // The fallback above intentionally remains conservative. If a future
+        // provider returns an empty merge after filtering, preserve the more
+        // complete response rather than showing a blank review.
+        if merged.isEmpty { merged = verified.detectedItems }
+        var selected = verified
+        selected.detectedItems = merged
+        selected.mealDescription = [primary.mealDescription, verified.mealDescription]
+            .filter { !$0.isEmpty }
+            .joined(separator: ", ")
+        selected.confidence = min(primary.confidence, verified.confidence)
 
         selected.unresolvedItems = SemanticQuestionDeduplicator.uniqueStrings(
             primary.unresolvedItems + verified.unresolvedItems
@@ -326,22 +423,53 @@ struct PhotoInventoryVerificationService: Sendable {
     }
 
     private func identityKey(_ item: ParsedFoodItem) -> String {
-        let source = item.canonicalSearchName.isEmpty
-            ? (item.regionalName ?? item.originalText)
-            : item.canonicalSearchName
+        let candidates = [item.canonicalSearchName, item.regionalName, item.originalText]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        if let canonical = candidates.compactMap({ catalog.normalise($0)?.canonicalId }).first {
+            return canonical
+        }
+        let source = candidates.first ?? ""
         return SemanticQuestionDeduplicator.normalizedKey(source)
     }
 
     private func deduplicatedItems(_ items: [ParsedFoodItem]) -> [ParsedFoodItem] {
-        var seen: Set<String> = []
-        return items.filter { seen.insert(identityKey($0)).inserted }
+        var indexByKey: [String: Int] = [:]
+        var result: [ParsedFoodItem] = []
+        for item in items {
+            let key = identityKey(item)
+            guard !key.isEmpty else { continue }
+            if let index = indexByKey[key] {
+                if evidenceScore(item) > evidenceScore(result[index]) {
+                    result[index] = item
+                }
+            } else {
+                indexByKey[key] = result.count
+                result.append(item)
+            }
+        }
+        return result
     }
 
     private func isReplaceableGeneric(_ item: ParsedFoodItem) -> Bool {
-        guard item.confidence < 0.8 else { return false }
-        let key = identityKey(item)
-        return ["food", "meal", "dish", "vegetable soup", "mixed food", "mixed dish"]
-            .contains(where: { key == $0 || key.hasPrefix($0 + " ") })
+        let key = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        let genericWords = ["food", "meal", "dish", "soup", "vegetable soup", "mixed food", "mixed dish", "curry", "salad"]
+        let broad = genericWords.contains {
+            key == $0 || key.hasPrefix($0 + " ") || key.contains(" \($0) ")
+        }
+        return broad && (item.confidence < 0.9 || item.category == .unknown || item.category == .vegetarianCurry)
+    }
+
+    private func evidenceScore(_ item: ParsedFoodItem) -> Double {
+        item.confidence
+            + (item.quantityEvidence == nil ? 0 : 0.12)
+            + (item.estimatedGrams == nil ? 0 : 0.06)
+            + (item.preparationMethod == nil ? 0 : 0.03)
+    }
+
+    private func hasIdentity(_ item: ParsedFoodItem) -> Bool {
+        !item.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            || !(item.regionalName ?? item.originalText).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 }
 
@@ -408,7 +536,10 @@ struct SpatialPlateReviewImageService: Sendable {
             mimeType: "image/jpeg",
             pixelWidth: canvasSide,
             pixelHeight: canvasSide,
-            imageReference: image.imageReference
+            // A montage is a distinct provider request. Reusing the original
+            // reference made diagnostics and any intermediary cache unable to
+            // distinguish the verification pass from the user's photo.
+            imageReference: .transient()
         )
     }
 
@@ -578,6 +709,20 @@ struct PhotoAnalysisOrchestrator: Sendable {
         if let remote {
             do {
                 let remoteResult = try await remote.analyse(image, dishHint: description)
+                // A late response from a previous photo is valid JSON, but it
+                // is not valid for this review. Every remote implementation
+                // must carry the image identity through its result so the
+                // orchestrator can reject cross-request contamination before
+                // completeness or persistence is evaluated.
+                guard remoteResult.imageReference == image.imageReference else {
+                    remoteFailed = true
+                    FoodLoggingDiagnostics.record("photo.classification", fields: [
+                        "route": "structured-backend-stale-result",
+                        "expectedReference": image.imageReference.identifier,
+                        "responseReference": remoteResult.imageReference.identifier
+                    ])
+                    throw FoodAnalysisError.malformedProviderResponse
+                }
                 let report = completeness.evaluate(remoteResult)
                 if report.isComplete {
                     FoodLoggingDiagnostics.record("photo.classification", fields: [

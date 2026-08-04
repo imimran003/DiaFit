@@ -997,6 +997,281 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })
     }
 
+    func testStructuredVisionUsesSpatialPassWhenBothFullFramePassesReturnGenericSoup() async throws {
+        let generic = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Vegetable soup",
+                    canonicalSearchName: "vegetable soup",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "cup",
+                    confidence: 0.74
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Vegetable soup",
+            clarificationQuestions: [],
+            confidence: 0.74
+        )
+        let spatialInventory = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Kadhi",
+                    canonicalSearchName: "kadhi",
+                    regionalName: "kadhi",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "katori",
+                    quantityEvidence: "one separate bowl",
+                    confidence: 0.92
+                ),
+                ParsedFoodItem(
+                    originalText: "Two rotis",
+                    canonicalSearchName: "whole wheat flatbread",
+                    regionalName: "roti",
+                    category: .bread,
+                    quantity: 2,
+                    unit: "pieces",
+                    quantityEvidence: "two stacked flatbreads",
+                    preparationMethod: "pan-cooked",
+                    confidence: 0.94
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Kadhi and two rotis",
+            clarificationQuestions: [],
+            confidence: 0.92
+        )
+        let understanding = SequentialMealUnderstanding(results: [generic, generic, spatialInventory])
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router),
+            catalog: catalog
+        )
+
+        let result = try await remote.analyse(largeFixtureFoodImage(), dishHint: nil)
+        let callCount = await understanding.callCount
+
+        XCTAssertEqual(callCount, 3)
+        XCTAssertTrue(result.detectedItems.contains { $0.canonicalFoodId == "kadhi" })
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 2)
+        XCTAssertFalse(result.detectedItems.contains { $0.displayName.localizedCaseInsensitiveContains("soup") })
+    }
+
+    func testStructuredVisionExpandsAPlatefulResultWhenOneOfSeveralLabelsIsGeneric() async throws {
+        let sparse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Steamed rice",
+                    canonicalSearchName: "steamed white rice",
+                    category: .rice,
+                    quantity: 1,
+                    unit: "cup",
+                    confidence: 0.93
+                ),
+                ParsedFoodItem(
+                    originalText: "Vegetable soup",
+                    canonicalSearchName: "vegetable soup",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "cup",
+                    confidence: 0.76
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Rice and soup",
+            clarificationQuestions: [],
+            confidence: 0.76
+        )
+        let complete = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Steamed rice",
+                    canonicalSearchName: "steamed white rice",
+                    category: .rice,
+                    quantity: 1,
+                    unit: "cup",
+                    confidence: 0.91
+                ),
+                ParsedFoodItem(
+                    originalText: "Vegetable soup",
+                    canonicalSearchName: "vegetable soup",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "cup",
+                    confidence: 0.74
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Rice and soup",
+            clarificationQuestions: [],
+            confidence: 0.74
+        )
+        let spatialInventory = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Toor dal",
+                    canonicalSearchName: "toor dal",
+                    regionalName: "arhar dal",
+                    category: .lentilOrLegume,
+                    quantity: 1,
+                    unit: "katori",
+                    quantityEvidence: "one separate bowl",
+                    confidence: 0.91
+                ),
+                ParsedFoodItem(
+                    originalText: "Two rotis",
+                    canonicalSearchName: "whole wheat flatbread",
+                    regionalName: "roti",
+                    category: .bread,
+                    quantity: 2,
+                    unit: "pieces",
+                    quantityEvidence: "two stacked flatbreads",
+                    confidence: 0.93
+                ),
+                ParsedFoodItem(
+                    originalText: "Okra sabzi",
+                    canonicalSearchName: "okra stir fry",
+                    regionalName: "bhindi sabzi",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "serving",
+                    quantityEvidence: "one separate dry vegetable serving",
+                    confidence: 0.88
+                ),
+                ParsedFoodItem(
+                    originalText: "Steamed rice",
+                    canonicalSearchName: "steamed white rice",
+                    category: .rice,
+                    quantity: 1,
+                    unit: "cup",
+                    quantityEvidence: "one rice portion",
+                    confidence: 0.94
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Rice, dal, okra sabzi and two rotis",
+            clarificationQuestions: [],
+            confidence: 0.88
+        )
+        let understanding = SequentialMealUnderstanding(results: [sparse, complete, spatialInventory])
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router),
+            catalog: catalog
+        )
+
+        let result = try await remote.analyse(largeFixtureFoodImage(), dishHint: nil)
+        let callCount = await understanding.callCount
+
+        XCTAssertEqual(callCount, 3)
+        XCTAssertTrue(result.detectedItems.contains { $0.canonicalFoodId == "toor-dal" })
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 2)
+        XCTAssertTrue(result.detectedItems.contains { $0.canonicalFoodId == "bhindi-masala" })
+        XCTAssertEqual(result.detectedItems.filter { $0.category == .rice }.count, 1)
+        XCTAssertFalse(result.detectedItems.contains { $0.displayName.localizedCaseInsensitiveContains("soup") })
+    }
+
+    func testStructuredVisionAddsEggsSproutsAndNutsWhenFirstPassOnlySeesPeanut() async throws {
+        let peanut = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Peanut",
+                    canonicalSearchName: "peanut",
+                    category: .breakfastOrSnack,
+                    quantity: 1,
+                    unit: "piece",
+                    confidence: 0.79
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Peanut",
+            clarificationQuestions: [],
+            confidence: 0.79
+        )
+        let completePlate = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Two boiled eggs",
+                    canonicalSearchName: "hard-boiled egg",
+                    regionalName: "boiled eggs",
+                    category: .egg,
+                    quantity: 2,
+                    unit: "whole eggs",
+                    quantityEvidence: "four visible halves equal two eggs",
+                    preparationMethod: "boiled",
+                    confidence: 0.94
+                ),
+                ParsedFoodItem(
+                    originalText: "Mixed sprouts",
+                    canonicalSearchName: "mixed sprouts",
+                    regionalName: "sprouts",
+                    category: .sprouts,
+                    quantity: 1,
+                    unit: "small bowl",
+                    quantityEvidence: "one pile of sprouted legumes",
+                    confidence: 0.9
+                ),
+                ParsedFoodItem(
+                    originalText: "Walnuts and almonds",
+                    canonicalSearchName: "mixed nuts",
+                    category: .breakfastOrSnack,
+                    quantity: 1,
+                    unit: "serving",
+                    quantityEvidence: "visible walnuts and almonds",
+                    confidence: 0.89
+                ),
+                ParsedFoodItem(
+                    originalText: "Peanuts",
+                    canonicalSearchName: "peanut",
+                    category: .breakfastOrSnack,
+                    quantity: 1,
+                    unit: "serving",
+                    quantityEvidence: "visible peanuts",
+                    confidence: 0.9
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Boiled eggs, mixed sprouts, walnuts, almonds and peanuts",
+            clarificationQuestions: [],
+            confidence: 0.89
+        )
+        let understanding = SequentialMealUnderstanding(results: [peanut, peanut, completePlate])
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let remote = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router),
+            catalog: catalog
+        )
+
+        let result = try await remote.analyse(largeFixtureFoodImage(), dishHint: nil)
+        let callCount = await understanding.callCount
+
+        XCTAssertEqual(callCount, 3)
+        XCTAssertTrue(result.detectedItems.contains { $0.category == .egg && $0.quantity == 2 })
+        XCTAssertTrue(result.detectedItems.contains { $0.category == .sprouts })
+        XCTAssertTrue(result.detectedItems.contains { $0.canonicalFoodId == "peanut" })
+        XCTAssertTrue(result.detectedItems.contains { $0.canonicalFoodId == "mixed-nuts" || $0.displayName.localizedCaseInsensitiveContains("nut") })
+    }
+
     func testRemoteFailureDoesNotPresentMultipleWholeImageLabelsAsACompletePlate() async {
         let orchestrator = PhotoAnalysisOrchestrator(
             remote: FailingFoodRecognitionService(),
@@ -1028,6 +1303,20 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(result.detectedItems.isEmpty)
         XCTAssertFalse(result.nutritionValidation?.isApproved == true)
         XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("live recognition") })
+    }
+
+    func testPhotoOrchestratorRejectsAValidButStaleRemoteResult() async {
+        let stale = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "peanut", imageType: .originalPhoto)
+        let result = await PhotoAnalysisOrchestrator(
+            remote: FixedFoodRecognitionService(result: stale),
+            onDevice: nil,
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        ).analyse(image: fixtureFoodImage(), description: "")
+
+        XCTAssertTrue(result.detectedItems.isEmpty)
+        XCTAssertTrue(result.warnings.contains { $0.localizedCaseInsensitiveContains("secure ai recognition") })
+        XCTAssertFalse(result.imageReference == stale.imageReference)
     }
 
     func testIndependentPhotoInventoryCanCorrectTwoWrongLabelsWithoutAddingItems() {
@@ -1143,7 +1432,7 @@ final class FoodAnalysisTests: XCTestCase {
         )
     }
 
-    func testSpatialPlateReviewCreatesOverlappingMontageWithoutChangingImageIdentity() throws {
+    func testSpatialPlateReviewCreatesOverlappingMontageWithIndependentImageIdentity() throws {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 480))
         let sourceData = try XCTUnwrap(renderer.image { context in
             UIColor.systemBackground.setFill()
@@ -1160,8 +1449,77 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(montage.pixelWidth, 2_048)
         XCTAssertEqual(montage.pixelHeight, 2_048)
         XCTAssertEqual(montage.mimeType, "image/jpeg")
-        XCTAssertEqual(montage.imageReference, prepared.imageReference)
+        XCTAssertNotEqual(montage.imageReference, prepared.imageReference)
         XCTAssertNotEqual(montage.data, prepared.data)
+    }
+
+    func testInventoryMergeKeepsKadhiAndRotiWhenOnePassSaysGenericSoup() {
+        let primary = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Kadhi",
+                    canonicalSearchName: "kadhi",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "katori",
+                    confidence: 0.91
+                ),
+                ParsedFoodItem(
+                    originalText: "Two rotis",
+                    canonicalSearchName: "roti",
+                    regionalName: "roti",
+                    category: .bread,
+                    quantity: 2,
+                    unit: "piece",
+                    quantityEvidence: "two stacked flatbreads",
+                    confidence: 0.94
+                )
+            ],
+            unresolvedItems: [], mealDescription: "Kadhi and roti", clarificationQuestions: [], confidence: 0.91
+        )
+        let verified = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Vegetable soup",
+                    canonicalSearchName: "vegetable soup",
+                    category: .vegetarianCurry,
+                    quantity: 1,
+                    unit: "cup",
+                    confidence: 0.72
+                )
+            ],
+            unresolvedItems: [], mealDescription: "Soup", clarificationQuestions: [], confidence: 0.72
+        )
+
+        let selected = PhotoInventoryVerificationService(catalog: catalog).preferred(primary: primary, verified: verified)
+
+        XCTAssertEqual(Set(selected.detectedItems.map { $0.regionalName ?? $0.originalText }), Set(["Kadhi", "roti"]))
+        XCTAssertFalse(selected.detectedItems.contains { $0.originalText.localizedCaseInsensitiveContains("soup") })
+    }
+
+    func testInventoryMergeKeepsAllSpecificPlateComponentsAndDoesNotDuplicateRice() {
+        let primary = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Peanut", canonicalSearchName: "peanut", category: .breakfastOrSnack, quantity: 1, unit: "piece", confidence: 0.8),
+                ParsedFoodItem(originalText: "Boiled eggs", canonicalSearchName: "hard-boiled egg", category: .egg, quantity: 2, unit: "whole egg", quantityEvidence: "four halves = two eggs", confidence: 0.9)
+            ],
+            unresolvedItems: [], mealDescription: "Peanut and eggs", clarificationQuestions: [], confidence: 0.8
+        )
+        let verified = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Two eggs", canonicalSearchName: "hard-boiled egg", category: .egg, quantity: 2, unit: "whole egg", quantityEvidence: "four halves = two eggs", confidence: 0.94),
+                ParsedFoodItem(originalText: "Mixed sprouts", canonicalSearchName: "mixed sprouts", category: .sprouts, quantity: 1, unit: "medium bowl", confidence: 0.9),
+                ParsedFoodItem(originalText: "Peanuts", canonicalSearchName: "peanut", category: .breakfastOrSnack, quantity: 1, unit: "piece", confidence: 0.84)
+            ],
+            unresolvedItems: [], mealDescription: "Eggs, sprouts and peanuts", clarificationQuestions: [], confidence: 0.84
+        )
+
+        let selected = PhotoInventoryVerificationService(catalog: catalog).preferred(primary: primary, verified: verified)
+        let keys = selected.detectedItems.map { $0.canonicalSearchName }
+
+        XCTAssertEqual(keys.filter { $0 == "hard-boiled egg" }.count, 1)
+        XCTAssertTrue(keys.contains("mixed sprouts"))
+        XCTAssertTrue(keys.contains("peanut"))
     }
 
     func testQuestionDeduplicationPrefersTheActionableAnsweredQuestion() {
@@ -2869,6 +3227,19 @@ final class FoodAnalysisTests: XCTestCase {
         )
     }
 
+    private func largeFixtureFoodImage() throws -> PreparedFoodImage {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 320, height: 480))
+        let data = try XCTUnwrap(renderer.image { context in
+            UIColor.systemBackground.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 320, height: 480))
+            UIColor.systemOrange.setFill()
+            context.fill(CGRect(x: 12, y: 12, width: 140, height: 180))
+            UIColor.systemGreen.setFill()
+            context.fill(CGRect(x: 168, y: 280, width: 140, height: 188))
+        }.jpegData(compressionQuality: 0.9))
+        return try AppleImagePreparationService().prepare(imageData: data)
+    }
+
     private func providerResolvedTofu() -> DetectedFoodItem {
         let nutrition = NutritionValues(
             caloriesKcal: 144,
@@ -2970,6 +3341,14 @@ private struct StubFoodImageClassificationService: FoodImageClassificationServic
 private struct FailingFoodRecognitionService: FoodRecognitionService {
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         throw FoodAnalysisError.endpointUnavailable
+    }
+}
+
+private struct FixedFoodRecognitionService: FoodRecognitionService {
+    let result: MealAnalysisResult
+
+    func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
+        result
     }
 }
 

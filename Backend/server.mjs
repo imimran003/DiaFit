@@ -69,7 +69,15 @@ createServer(async (request, response) => {
         throw error;
       }
       validateMealParseResult(result);
-      const responseBody = { ...result, requestId, parserModel: parserModelName() };
+      // Echo the photo reference so the iOS client can reject a delayed or
+      // cross-request response before it reaches the meal review. This is
+      // transport metadata beside (not inside) the strict provider schema.
+      const responseBody = {
+        ...result,
+        imageReference: input.imageReference,
+        requestId,
+        parserModel: parserModelName()
+      };
       if (cacheKey) {
         // Keep retries safe without allowing an in-memory cache to grow without bound.
         if (mealParseCache.size >= 512) mealParseCache.delete(mealParseCache.keys().next().value);

@@ -7,7 +7,7 @@ The current iOS build supports a complete **image-first local review path**:
 1. The member opens the camera or photo library from the conversation composer.
 2. The app validates, orientation-normalizes, resizes (maximum 2048 px), recompresses (maximum 2 MB), and creates a fresh JPEG representation. That representation deliberately drops EXIF metadata, including location metadata.
 3. Selecting the photo immediately starts analysis; a description and a second “upload” action are not required. When a schema-constrained backend is configured, its component-aware interpretation owns photo identity. The private `VNClassifyImageRequest` path collects local fallback labels at 0.20 or above and admits only labels that map to the canonical catalog, but it is used only when live interpretation is unavailable. `PhotoAnalysisCompletenessEvaluator` still checks identity, serving conversion, core nutrition, provenance and validation before anything can be confirmed.
-   A sparse two-component structured result receives one independent full-inventory pass over the same metadata-stripped image. The second pass scans every plate, bowl, pile and visible edge, and replaces the first result only when it finds more distinct servings. This specifically prevents a visually incomplete but nutritionally valid result such as “rice + vegetable soup” from hiding dal, dry sabzi or stacked rotis.
+   A one-to-six-component structured result receives an independent full-inventory pass over the same metadata-stripped image. The two inventories are canonicalised, merged, and de-duplicated rather than allowing the second response to erase a serving found by the first. If both full-frame passes collapse a plate to one generic dish or small garnish, a third, spatially cropped review scans overlapping regions and keeps only the specific servings it can support. This specifically prevents a visually incomplete but nutritionally valid result such as “rice + vegetable soup” or “peanut” from hiding dal, dry sabzi, stacked rotis, eggs, sprouts, or nuts.
 4. Image recognition proposes food identities only. Canonical records and the nutrition-resolution layer calculate the editable estimate; classifier output is never used as nutrition data. Exact portions, cooking fat, sauces, and hidden ingredients remain reviewable assumptions.
 5. The draft appears inside the day thread, exposes components, quantities and serving units, asks only applicable high-impact questions, and recalculates supported values after correction. A compound correction such as “carrots with blueberries” resolves every supported component instead of silently failing an exact-string lookup.
 6. Only an explicit confirmation replaces the draft with a logged meal. The resulting meal is immediately available to the existing meal atlas. A confirmed analysis can be reopened for refinement or deleted through an explicit destructive confirmation.
@@ -56,13 +56,17 @@ The bundle is not presented as IFCT data and should not be expanded with copied 
 - It has `GET /health`, a versioned `POST /v1/meal-analysis`, request timeouts, strict result validation, and redacted audit events. Raw photo bytes and bearer tokens are not logged or written to disk.
 - Fixture mode is an explicit development-only provider. It exercises the structural response, mixed-meal fixtures, and low-confidence situations; it is not computer vision and publishes no accuracy claim.
 - `BackendFoodUnderstandingService` calls `/v1/meal-parse`; `StructuredPhotoRecognitionService` converts its schema-constrained food identities into canonical matches and validated nutrition. The runtime constructs this path only when `DIAFIT_BACKEND_URL` and `DIAFIT_BACKEND_ACCESS_TOKEN` (or the legacy local `DIAFIT_DEVELOPMENT_TOKEN`) are supplied through the Xcode launch environment. In DEBUG builds, a configured launch stores only that temporary backend URL and app-to-backend access token in the device Keychain using `AfterFirstUnlockThisDeviceOnly`; this lets a developer reopen the installed app from the Home Screen without silently losing live recognition. A later configured launch replaces stale tunnel details. Release builds do not use this development persistence path and must obtain an authenticated backend session through the production account flow.
-- The phone allows 35 seconds for a structured vision request while the backend
-  provider deadline defaults to 25 seconds. The client retries one transient
-  upload/network interruption with the same idempotency key. This ordering is
+- The phone bounds a structured vision request to 14 seconds for an image (8
+  seconds for text) while the backend provider deadline remains configurable.
+  The client retries one transient upload/network interruption with the same
+  idempotency key. This ordering is
   intentional: the backend must finish or reject the request before the phone
   considers private on-device recovery. Response metadata is decoded through a
-  separate envelope, and development diagnostics record only status, byte
-  count, component count, and a safe coding path—never photo bytes or meal text.
+  separate envelope and must echo the exact prepared-image reference; a late
+  response for another photo is rejected before it can reach the review. The
+  independent spatial pass receives its own transient reference. Development
+  diagnostics record only status, byte count, component count, and a safe
+  coding path—never photo bytes or meal text.
 - Prepared JPEGs are capped at 1.9 MB. Base64 expansion therefore remains under
   the backend's 2.8 MB JSON-body limit; accepted device photos cannot cross the
   transport boundary and then fail solely because of encoding overhead.

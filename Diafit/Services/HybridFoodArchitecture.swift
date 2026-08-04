@@ -223,6 +223,20 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         }
         do {
             let result = try Self.decodeResponse(data)
+            // The backend echoes the request's image reference. A response
+            // from an older request must never be allowed to populate the
+            // current photo review, even if its JSON is otherwise valid.
+            if let image {
+                let metadata = try JSONDecoder().decode(ResponseMetadata.self, from: data)
+                guard metadata.imageReference == image.imageReference.identifier else {
+                    FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
+                        "status": "stale-image-response",
+                        "expectedReference": image.imageReference.identifier,
+                        "responseReference": metadata.imageReference ?? "missing"
+                    ])
+                    throw FoodAnalysisError.malformedProviderResponse
+                }
+            }
             FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
                 "status": "decoded",
                 "componentCount": String(result.detectedItems.count),
@@ -327,6 +341,10 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         let mealDescription: String
         let clarificationQuestions: [String]
         let confidence: Double
+    }
+
+    private struct ResponseMetadata: Decodable {
+        let imageReference: String?
     }
 }
 

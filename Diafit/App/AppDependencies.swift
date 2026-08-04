@@ -74,7 +74,7 @@ struct AppDependencies: Sendable {
         )
         let coordinator = HybridMealAnalysisCoordinator(router: router)
         let photoRemote: (any FoodRecognitionService)? = backendUnderstanding.map {
-            StructuredPhotoRecognitionService(understanding: $0, coordinator: coordinator)
+            StructuredPhotoRecognitionService(understanding: $0, coordinator: coordinator, catalog: catalog)
         }
         let healthActivity: any HealthActivityProviding
         #if DEBUG
