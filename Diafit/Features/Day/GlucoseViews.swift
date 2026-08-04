@@ -421,7 +421,11 @@ struct GlucoseHistoryView: View {
                         }
                         .padding(.horizontal, 15)
                         .padding(.vertical, 5)
-                        .background(.white.opacity(0.6), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .background(Color.surface, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                                .stroke(Color.surfaceStroke.opacity(0.72), lineWidth: 0.8)
+                        }
                     }
                 }
                 .padding(20)

@@ -1200,7 +1200,7 @@ private struct ThinkingBubble: View {
                 HStack(spacing: 4) {
                     ForEach(0..<3, id: \.self) { index in
                         Circle()
-                            .fill(Color.quietInk.opacity(index == 1 ? 0.9 : 0.25))
+                            .fill(Color.ink.opacity(index == 1 ? 0.9 : 0.32))
                             .frame(width: 5, height: 5)
                             .offset(y: index == 1 ? -2 : 0)
                     }
@@ -1211,7 +1211,7 @@ private struct ThinkingBubble: View {
                     HStack(spacing: 4) {
                         ForEach(0..<3, id: \.self) { index in
                             Circle()
-                                .fill(Color.quietInk.opacity(index == phase ? 0.9 : 0.25))
+                                .fill(Color.ink.opacity(index == phase ? 0.9 : 0.32))
                                 .frame(width: 5, height: 5)
                                 .offset(y: index == phase ? -2 : 0)
                         }
@@ -1220,11 +1220,12 @@ private struct ThinkingBubble: View {
             }
             Text(label)
                 .font(DiafitType.caption)
-                .foregroundStyle(Color.quietInk)
+                .foregroundStyle(Color.ink)
         }
         .padding(.horizontal, 15)
         .padding(.vertical, 12)
-        .background(.white.opacity(0.65), in: Capsule())
+        .background(Color.surface, in: Capsule())
+        .overlay(Capsule().stroke(Color.surfaceStroke.opacity(0.72), lineWidth: 0.8))
         .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
@@ -1248,7 +1249,12 @@ private struct Composer: View {
                 .buttonStyle(PressableStyle(pressedScale: 0.88))
                 .accessibilityLabel("Add meal photo")
 
-                TextField("Tell me what you ate", text: $text)
+                TextField(
+                    text: $text,
+                    prompt: Text("Tell me what you ate").foregroundStyle(Color.quietInk)
+                ) {
+                    EmptyView()
+                }
                     .font(DiafitType.body)
                     .foregroundStyle(Color.ink)
                     .focused(isFocused)
@@ -1270,7 +1276,7 @@ private struct Composer: View {
         .padding(.leading, 18)
         .padding(.trailing, 7)
         .padding(.vertical, 7)
-        .background(Color.mist.opacity(0.82), in: Capsule())
+        .background(Color.mist.opacity(0.92), in: Capsule())
         .overlay(Capsule().stroke(Color.rule.opacity(0.58), lineWidth: 0.8))
         .padding(.horizontal, 20)
         .padding(.top, 9)

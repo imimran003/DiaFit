@@ -263,8 +263,8 @@ private struct QuietActionStyle: ButtonStyle {
             .foregroundStyle(Color.ink)
             .padding(.horizontal, 12)
             .padding(.vertical, 12)
-            .background(.white.opacity(configuration.isPressed ? 0.45 : 0.74), in: Capsule())
-            .overlay(Capsule().stroke(Color.rule.opacity(0.72), lineWidth: 0.8))
+            .background(configuration.isPressed ? Color.mist : Color.surface, in: Capsule())
+            .overlay(Capsule().stroke(Color.surfaceStroke.opacity(0.82), lineWidth: 0.8))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)
     }
 }

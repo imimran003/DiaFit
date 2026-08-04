@@ -18,12 +18,12 @@ struct TinyLabel: View {
     var body: some View {
         Label(title, systemImage: symbol)
             .font(DiafitType.caption)
-            .foregroundStyle(Color.quietInk)
+            .foregroundStyle(Color.ink)
             .lineLimit(1)
             .padding(.horizontal, 10)
             .padding(.vertical, 7)
-            .background(Color.white.opacity(0.66), in: Capsule())
-            .overlay(Capsule().stroke(Color.rule.opacity(0.46), lineWidth: 0.8))
+            .background(Color.surface, in: Capsule())
+            .overlay(Capsule().stroke(Color.surfaceStroke.opacity(0.82), lineWidth: 0.8))
     }
 }
 

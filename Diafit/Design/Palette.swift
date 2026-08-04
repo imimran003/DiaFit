@@ -11,6 +11,12 @@ extension Color {
     static let lavender = Color(red: 0.72, green: 0.67, blue: 0.96)
     static let saffron = Color(red: 0.96, green: 0.74, blue: 0.25)
     static let mist = adaptive(light: (0.91, 0.91, 0.86), dark: (0.16, 0.165, 0.15))
+    /// A readable elevated surface for controls that sit on `paper`.
+    /// Fixed `.white.opacity(...)` surfaces become the same luminance as
+    /// `quietInk` in dark mode, which makes status chips and loading bubbles
+    /// look disabled even when they are actionable.
+    static let surface = adaptive(light: (1.0, 0.995, 0.98), dark: (0.17, 0.18, 0.16))
+    static let surfaceStroke = adaptive(light: (0.84, 0.83, 0.78), dark: (0.34, 0.35, 0.31))
 
     private static func adaptive(
         light: (red: CGFloat, green: CGFloat, blue: CGFloat),
@@ -34,21 +40,21 @@ enum DiafitType {
 
 struct PaperCard: ViewModifier {
     var radius: CGFloat = 28
-    var fill: Color = .white.opacity(0.72)
+    var fill: Color = .surface
 
     func body(content: Content) -> some View {
         content
             .background(fill, in: RoundedRectangle(cornerRadius: radius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: radius, style: .continuous)
-                    .stroke(.white.opacity(0.72), lineWidth: 1)
+                    .stroke(Color.surfaceStroke.opacity(0.78), lineWidth: 1)
             }
             .shadow(color: .black.opacity(0.06), radius: 22, y: 11)
     }
 }
 
 extension View {
-    func paperCard(radius: CGFloat = 28, fill: Color = .white.opacity(0.72)) -> some View {
+    func paperCard(radius: CGFloat = 28, fill: Color = .surface) -> some View {
         modifier(PaperCard(radius: radius, fill: fill))
     }
 }
