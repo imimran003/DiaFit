@@ -34,17 +34,33 @@ struct GlucoseSummaryStrip: View {
                 }
             }
         }
-        .padding(.top, 2)
+        .padding(14)
+        .background(Color.surface.opacity(0.62), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.surfaceStroke.opacity(0.62), lineWidth: 1)
+        }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Daily blood glucose")
     }
 
     private var summaryHeader: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 12) {
-            Text("GLUCOSE")
-                .font(.system(size: 10, weight: .bold, design: .rounded))
-                .tracking(1.2)
-                .foregroundStyle(Color.quietInk)
+        HStack(spacing: 9) {
+            Image(systemName: "drop.fill")
+                .font(.system(size: 11, weight: .bold))
+                .foregroundStyle(Color.ink)
+                .frame(width: 28, height: 28)
+                .background(Color.lime.opacity(0.44), in: Circle())
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("GLUCOSE")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1.2)
+                    .foregroundStyle(Color.quietInk)
+                Text("Latest readings")
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk.opacity(0.84))
+            }
             Spacer(minLength: 8)
             Button("History", action: openHistory)
                 .font(DiafitType.caption.weight(.semibold))
@@ -62,8 +78,10 @@ struct GlucoseSummaryStrip: View {
                 .foregroundStyle(Color.ink)
                 .lineLimit(2)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal, 12)
                 .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil)
+                .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : 96)
                 .frame(minHeight: 44)
                 .background(Color.lime.opacity(0.42), in: Capsule())
         }

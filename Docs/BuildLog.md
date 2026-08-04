@@ -1,5 +1,12 @@
 # Build log
 
+## 2026-08-04 — Today experience refinement
+
+- Reworked the Today hierarchy into a calmer daily pulse: a compact date/status header, one intake hero for calories/carbohydrates/protein, adaptive movement and glucose strips, and a clear meal-stream heading.
+- Replaced the empty-day divider with an intentional first-entry surface while preserving the existing text, camera, Apple Health, glucose, atlas, and accessibility actions.
+- Kept all totals, meal routing, persistence, and existing accessibility identifiers unchanged. Adaptive `surface`, `mist`, and `rule` colors keep the same hierarchy legible in light and dark mode.
+- Verified a clean build and the focused Today UI flows on the iPhone 15 Pro simulator. The existing delete-meal UI regression still has a long XCTest swipe timeout; the existing unit bundle retains three unrelated profile/backend fixture failures.
+
 ## 2026-07-14 — foundation
 
 - Initialized the repository.

@@ -40,7 +40,7 @@ struct DayThreadView: View {
                                 logGlucose: { showsGlucoseEntry = true },
                                 openGlucoseHistory: { showsGlucoseHistory = true }
                             )
-                                .padding(.bottom, day.meals.isEmpty ? 0 : 4)
+                                .padding(.bottom, day.meals.isEmpty ? 0 : 2)
                                 // Preserve a large accessibility presentation
                                 // without allowing editorial display type to
                                 // consume the entire viewport at AX5.
@@ -52,6 +52,8 @@ struct DayThreadView: View {
                                     openPhoto: { showsPhotoInput = true }
                                 )
                                 .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+                            } else {
+                                MealStreamHeader(day: day)
                             }
 
                             ForEach(day.messages) { item in
@@ -518,13 +520,29 @@ private struct DayHeader: View {
     private var dateTitle: String {
         if Calendar.current.isDateInToday(day.date) { return "Today" }
         if Calendar.current.isDateInYesterday(day.date) { return "Yesterday" }
-        return day.date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day())
+        return day.date.formatted(.dateTime.weekday(.wide))
+    }
+
+    private var dateEyebrow: String {
+        if Calendar.current.isDateInToday(day.date) { return "YOUR DAY" }
+        if Calendar.current.isDateInYesterday(day.date) { return "RECENTLY" }
+        return day.date.formatted(.dateTime.month(.abbreviated).day()).uppercased()
+    }
+
+    private var dayPulse: String {
+        if day.meals.isEmpty { return "A clear slate" }
+        let mealLabel = day.meals.count == 1 ? "meal" : "meals"
+        return "\(day.meals.count) \(mealLabel) logged"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 17) {
-            HStack(alignment: .firstTextBaseline) {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 16) {
                 VStack(alignment: .leading, spacing: 3) {
+                    Text(dateEyebrow)
+                        .font(.system(size: 10, weight: .bold, design: .rounded))
+                        .tracking(1.7)
+                        .foregroundStyle(Color.quietInk)
                     Text(dateTitle)
                         .font(DiafitType.display)
                         .foregroundStyle(Color.ink)
@@ -548,6 +566,24 @@ private struct DayHeader: View {
                 }
             }
 
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(Color.lime)
+                    .frame(width: 7, height: 7)
+                    .accessibilityHidden(true)
+                Text(dayPulse)
+                    .font(DiafitType.caption.weight(.semibold))
+                    .foregroundStyle(Color.ink)
+                Spacer(minLength: 8)
+                Text(day.meals.isEmpty ? "Ready when you are" : "\(day.totalEnergy) kcal so far")
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+            }
+            .accessibilityElement(children: .combine)
+            .accessibilityLabel(day.meals.isEmpty ? "No meals logged yet" : "\(day.meals.count) meals logged, \(day.totalEnergy) kilocalories so far")
+
             DailyRhythm(day: day)
             EnergyAndMovementSection(
                 intakeKilocalories: day.totalEnergy,
@@ -563,6 +599,31 @@ private struct DayHeader: View {
             )
         }
         .padding(.top, 8)
+    }
+}
+
+private struct MealStreamHeader: View {
+    let day: Day
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 10) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("MEALS")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1.8)
+                    .foregroundStyle(Color.quietInk)
+                Text("Your day in plates")
+                    .font(DiafitType.title)
+                    .foregroundStyle(Color.ink)
+            }
+            Spacer(minLength: 8)
+            Text(day.meals.count == 1 ? "1 entry" : "\(day.meals.count) entries")
+                .font(DiafitType.caption.weight(.semibold))
+                .foregroundStyle(Color.quietInk)
+        }
+        .padding(.top, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Meals, \(day.meals.count) \(day.meals.count == 1 ? "entry" : "entries")")
     }
 }
 
@@ -738,11 +799,22 @@ private struct EnergyAndMovementSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
-            HStack {
-                Text("ENERGY & MOVEMENT")
-                    .font(DiafitType.caption.weight(.bold))
-                    .tracking(1.8)
-                    .foregroundStyle(Color.quietInk)
+            HStack(spacing: 9) {
+                Image(systemName: "figure.walk")
+                    .font(.system(size: 13, weight: .bold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 28, height: 28)
+                    .background(Color.lime.opacity(0.46), in: Circle())
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("ENERGY & MOVEMENT")
+                        .font(DiafitType.caption.weight(.bold))
+                        .tracking(1.6)
+                        .foregroundStyle(Color.quietInk)
+                    Text("A quiet read on today’s balance")
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk.opacity(0.84))
+                }
                 Spacer()
                 trailingAction
             }
@@ -760,18 +832,19 @@ private struct EnergyAndMovementSection: View {
                 failure(message)
             }
         }
-        .padding(.vertical, 3)
+        .padding(15)
+        .background(Color.mist.opacity(0.34), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.rule.opacity(0.52), lineWidth: 1)
+        }
     }
 
     @ViewBuilder
     private var trailingAction: some View {
         switch state {
         case .disconnected:
-            Button("Connect Health", action: connect)
-                .font(DiafitType.caption.weight(.semibold))
-                .foregroundStyle(Color.ink)
-                .frame(minHeight: 44)
-                .accessibilityHint("Choose which activity information Diafit may read")
+            EmptyView()
         case .ready, .failed:
             Button(action: refresh) {
                 Image(systemName: "arrow.clockwise")
@@ -1023,18 +1096,47 @@ private struct DailyRhythm: View {
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
 
     var body: some View {
-        Group {
-            if dynamicTypeSize.isAccessibilitySize {
-                VStack(spacing: 0) {
-                    metricRows
+        VStack(alignment: .leading, spacing: 15) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                Text("TODAY'S INTAKE")
+                    .font(.system(size: 10, weight: .bold, design: .rounded))
+                    .tracking(1.7)
+                    .foregroundStyle(Color.quietInk)
+                Spacer(minLength: 8)
+                if !day.meals.isEmpty {
+                    Text(day.proteinTotalIsComplete ? "Known totals" : "Partial totals")
+                        .font(DiafitType.caption.weight(.semibold))
+                        .foregroundStyle(day.proteinTotalIsComplete ? Color.quietInk : Color.saffron)
                 }
-            } else {
-                HStack(alignment: .top, spacing: 0) {
-                    metricColumns
+            }
+
+            Group {
+                if dynamicTypeSize.isAccessibilitySize {
+                    VStack(spacing: 0) {
+                        metricRows
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 0) {
+                        metricColumns
+                    }
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.horizontal, 16)
+        .padding(.vertical, 17)
+        .background(Color.surface.opacity(0.82), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 25, style: .continuous)
+                .stroke(Color.surfaceStroke.opacity(0.75), lineWidth: 1)
+        }
+        .overlay(alignment: .leading) {
+            Capsule()
+                .fill(Color.lime)
+                .frame(width: 3, height: 33)
+                .padding(.leading, 1)
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Today’s nutrition intake")
     }
 
     @ViewBuilder
@@ -1145,14 +1247,22 @@ private struct EmptyMealState: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text("No meals logged yet")
-                    .font(DiafitType.title)
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "fork.knife")
+                    .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.ink)
-                Text("Add what you ate when you’re ready.")
-                    .font(DiafitType.body)
-                    .foregroundStyle(Color.quietInk)
-                    .padding(.top, 5)
+                    .frame(width: 36, height: 36)
+                    .background(Color.lime.opacity(0.58), in: Circle())
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("No meals logged yet")
+                        .font(DiafitType.title)
+                        .foregroundStyle(Color.ink)
+                    Text("Start your day with one simple note or a photo.")
+                        .font(DiafitType.body)
+                        .foregroundStyle(Color.quietInk)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             HStack(spacing: 12) {
@@ -1178,11 +1288,11 @@ private struct EmptyMealState: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.vertical, 16)
-        .overlay(alignment: .bottom) {
-            Rectangle()
-                .fill(Color.rule.opacity(0.58))
-                .frame(height: 1)
+        .padding(17)
+        .background(Color.mist.opacity(0.3), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 24, style: .continuous)
+                .stroke(Color.rule.opacity(0.5), lineWidth: 1)
         }
     }
 }
