@@ -73,6 +73,30 @@ final class DiafitUITests: XCTestCase {
         XCTAssertFalse(app.staticTexts["The day in plates"].waitForExistence(timeout: 1))
     }
 
+    func testDiaryMealRowOpensFullDetailsAndDayPagerIsVisible() throws {
+        submitFoodNote("Pasta for dinner")
+
+        let diaryTab = app.tabBars.buttons["Diary"]
+        XCTAssertTrue(diaryTab.waitForExistence(timeout: 3))
+        diaryTab.tap()
+
+        let mealRow = app.buttons["Diary meal Tomato basil pasta"]
+        XCTAssertTrue(mealRow.waitForExistence(timeout: 4))
+        XCTAssertTrue(app.buttons["Newer day"].exists)
+        XCTAssertTrue(app.buttons["Older day"].exists)
+        XCTAssertTrue(app.staticTexts["1 of 1"].exists)
+        attachScreenshot(named: "diary-day-page")
+
+        mealRow.tap()
+        XCTAssertTrue(app.navigationBars["Meal details"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["Tomato basil pasta"].exists)
+        XCTAssertTrue(app.staticTexts["SOURCE & ASSUMPTIONS"].exists)
+        XCTAssertTrue(app.buttons["Done"].exists)
+        attachScreenshot(named: "diary-meal-details")
+        app.buttons["Done"].tap()
+        XCTAssertFalse(app.navigationBars["Meal details"].waitForExistence(timeout: 2))
+    }
+
     func testQuickFoodNoteAddsAnAgentMeal() throws {
         submitFoodNote("Pasta for dinner")
 

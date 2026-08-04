@@ -377,76 +377,468 @@ struct SettingsView: View {
 
 struct DiaryOverviewView: View {
     @EnvironmentObject private var store: DiaryStore
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var selectedDayID: Day.ID?
+    @State private var selectedMeal: Meal?
+    @State private var selectedMealDay: Day?
+
+    /// The diary opens on the most recent day and keeps that same order for
+    /// both the pager and the explicit previous/next controls. A single day
+    /// per page makes historical review a gesture rather than a long scroll.
+    private var orderedDays: [Day] {
+        store.days.sorted { $0.date > $1.date }
+    }
+
+    private var selectedDayIndex: Int? {
+        guard let selectedDayID else { return nil }
+        return orderedDays.firstIndex { $0.id == selectedDayID }
+    }
 
     var body: some View {
         NavigationStack {
-            ScrollView(showsIndicators: false) {
-                VStack(alignment: .leading, spacing: 24) {
-                    ScreenTitle(
-                        eyebrow: "YOUR DAYS",
-                        title: "Diary",
-                        detail: "Meals and readings, in the order they happened."
-                    )
-
-                    ForEach(store.days.reversed()) { day in
-                        VStack(alignment: .leading, spacing: 12) {
-                            HStack(alignment: .firstTextBaseline) {
-                                VStack(alignment: .leading, spacing: 3) {
-                                    Text(day.date.formatted(.dateTime.weekday(.wide)))
-                                        .font(DiafitType.title)
-                                        .foregroundStyle(Color.ink)
-                                    Text(day.date.formatted(.dateTime.month(.wide).day()))
-                                        .font(DiafitType.caption)
-                                        .foregroundStyle(Color.quietInk)
-                                }
-                                Spacer()
-                                Text("\(day.meals.count) \(day.meals.count == 1 ? "meal" : "meals")")
-                                    .font(DiafitType.caption)
-                                    .foregroundStyle(Color.quietInk)
-                            }
-
-                            if day.meals.isEmpty {
-                                Text("No meals logged")
-                                    .font(DiafitType.body)
-                                    .foregroundStyle(Color.quietInk)
-                                    .padding(.vertical, 7)
-                            } else {
-                                ForEach(day.meals.sorted(by: { $0.time < $1.time })) { meal in
-                                    HStack(spacing: 12) {
-                                        FoodArtwork(meal: meal, treatment: .thread)
-                                            .frame(width: 58, height: 58)
-                                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-                                        VStack(alignment: .leading, spacing: 3) {
-                                            Text(meal.title)
-                                                .font(DiafitType.body.weight(.semibold))
-                                                .foregroundStyle(Color.ink)
-                                                .lineLimit(1)
-                                            Text("\(meal.period.displayName) · \(meal.energy) kcal")
-                                                .font(DiafitType.caption)
-                                                .foregroundStyle(Color.quietInk)
-                                        }
-                                        Spacer()
-                                        Text(meal.time.formatted(.dateTime.hour().minute()))
-                                            .font(DiafitType.caption)
-                                            .foregroundStyle(Color.quietInk)
-                                    }
-                                    .accessibilityElement(children: .combine)
-                                }
-                            }
-                        }
-                        .padding(.bottom, 18)
-                        .overlay(alignment: .bottom) {
-                            Rectangle().fill(Color.rule.opacity(0.65)).frame(height: 0.7)
-                        }
-                    }
-                }
+            VStack(alignment: .leading, spacing: 0) {
+                ScreenTitle(
+                    eyebrow: "YOUR DAYS",
+                    title: "Diary",
+                    detail: "Swipe through your days. Tap a meal to open its full log."
+                )
                 .padding(.horizontal, 20)
                 .padding(.top, 18)
-                .padding(.bottom, 28)
+                .padding(.bottom, 16)
+
+                if orderedDays.isEmpty {
+                    DiaryEmptyState()
+                        .padding(.horizontal, 20)
+                        .frame(maxHeight: .infinity, alignment: .top)
+                } else {
+                    TabView(selection: $selectedDayID) {
+                        ForEach(orderedDays) { day in
+                            DiaryDayPage(day: day) { meal in
+                                selectedMealDay = day
+                                withAnimation(reduceMotion ? .easeOut(duration: 0.18) : .spring(response: 0.42, dampingFraction: 0.86)) {
+                                    selectedMeal = meal
+                                }
+                            }
+                            .tag(Optional(day.id))
+                        }
+                    }
+                    .tabViewStyle(.page(indexDisplayMode: .never))
+                    .accessibilityLabel("Diary days")
+
+                    DiaryDayPager(
+                        dayCount: orderedDays.count,
+                        selectedIndex: selectedDayIndex ?? 0,
+                        selectedDay: orderedDays.first { $0.id == selectedDayID } ?? orderedDays[0],
+                        move: moveDay
+                    )
+                    .padding(.horizontal, 20)
+                    .padding(.top, 4)
+                    .padding(.bottom, 12)
+                }
             }
             .background(Color.paper)
             .navigationBarHidden(true)
         }
+        .sheet(item: $selectedMeal, onDismiss: { selectedMealDay = nil }) { meal in
+            DiaryMealDetailSheet(meal: meal, day: selectedMealDay)
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        .onAppear {
+            selectedDayID = selectedDayID ?? orderedDays.first?.id
+        }
+        .onChange(of: store.days) { _, _ in
+            let ids = Set(orderedDays.map(\.id))
+            if let selectedDayID, ids.contains(selectedDayID) {
+                return
+            }
+            selectedDayID = orderedDays.first?.id
+        }
+    }
+
+    private func moveDay(by offset: Int) {
+        guard let selectedDayIndex else { return }
+        let destination = selectedDayIndex + offset
+        guard orderedDays.indices.contains(destination) else { return }
+        withAnimation(reduceMotion ? .easeOut(duration: 0.18) : .spring(response: 0.45, dampingFraction: 0.86)) {
+            selectedDayID = orderedDays[destination].id
+        }
+    }
+}
+
+private struct DiaryDayPage: View {
+    let day: Day
+    let selectMeal: (Meal) -> Void
+
+    private var meals: [Meal] {
+        day.meals.sorted { $0.time < $1.time }
+    }
+
+    var body: some View {
+        ScrollView(showsIndicators: false) {
+            VStack(alignment: .leading, spacing: 18) {
+                HStack(alignment: .firstTextBaseline) {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text(day.date.formatted(.dateTime.weekday(.wide)))
+                            .font(DiafitType.title)
+                            .foregroundStyle(Color.ink)
+                        Text(day.date.formatted(.dateTime.month(.wide).day()))
+                            .font(DiafitType.caption)
+                            .foregroundStyle(Color.quietInk)
+                    }
+                    Spacer()
+                    Text("\(meals.count) \(meals.count == 1 ? "meal" : "meals")")
+                        .font(DiafitType.caption.weight(.semibold))
+                        .foregroundStyle(Color.quietInk)
+                }
+
+                DiaryDaySummary(day: day)
+
+                if meals.isEmpty {
+                    DiaryEmptyState()
+                } else {
+                    LazyVStack(spacing: 10) {
+                        ForEach(meals) { meal in
+                            Button {
+                                selectMeal(meal)
+                            } label: {
+                                DiaryMealRow(meal: meal)
+                            }
+                            .buttonStyle(PressableStyle(pressedScale: 0.985))
+                            .accessibilityIdentifier("Diary meal \(meal.title)")
+                            .accessibilityLabel("Open \(meal.mealType), \(meal.title), \(meal.energy) kilocalories")
+                            .accessibilityHint("Shows the complete meal log")
+                        }
+                    }
+                }
+
+                if !day.glucoseReadings.isEmpty {
+                    DiaryReadingsSection(readings: day.glucoseReadings)
+                }
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 4)
+            .padding(.bottom, 18)
+        }
+    }
+}
+
+private struct DiaryDaySummary: View {
+    let day: Day
+
+    var body: some View {
+        HStack(spacing: 0) {
+            DiarySummaryMetric(value: "\(day.totalEnergy)", unit: "kcal", label: "Energy")
+            Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
+            DiarySummaryMetric(value: "\(day.totalCarbs)g", unit: "", label: "Carbs")
+            Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
+            DiarySummaryMetric(value: "\(day.totalProtein)g", unit: "", label: "Protein")
+        }
+        .padding(.vertical, 14)
+        .paperCard(radius: 22, fill: Color.surface.opacity(0.68))
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("Day summary, \(day.totalEnergy) kilocalories, \(day.totalCarbs) grams carbohydrates, \(day.totalProtein) grams protein")
+    }
+}
+
+private struct DiarySummaryMetric: View {
+    let value: String
+    let unit: String
+    let label: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(label.uppercased())
+                .font(.system(size: 9, weight: .bold, design: .rounded))
+                .tracking(1)
+                .foregroundStyle(Color.quietInk)
+            Text(value)
+                .font(DiafitType.metric)
+                .foregroundStyle(Color.ink)
+            if !unit.isEmpty {
+                Text(unit)
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.quietInk)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.horizontal, 14)
+    }
+}
+
+private struct DiaryMealRow: View {
+    let meal: Meal
+
+    var body: some View {
+        HStack(spacing: 13) {
+            FoodArtwork(meal: meal, treatment: .thread)
+                .frame(width: 76, height: 76)
+                .clipShape(RoundedRectangle(cornerRadius: 22, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 5) {
+                Text(meal.title)
+                    .font(DiafitType.title)
+                    .foregroundStyle(Color.ink)
+                    .lineLimit(2)
+                    .multilineTextAlignment(.leading)
+                HStack(spacing: 6) {
+                    Text(meal.period.compactName)
+                    Circle().fill(Color.rule).frame(width: 3, height: 3)
+                    Text("\(meal.energy) kcal")
+                }
+                .font(DiafitType.caption)
+                .foregroundStyle(Color.quietInk)
+            }
+
+            Spacer(minLength: 4)
+
+            VStack(alignment: .trailing, spacing: 7) {
+                Text(meal.time.formatted(.dateTime.hour().minute()))
+                    .font(DiafitType.caption.weight(.semibold))
+                    .foregroundStyle(Color.quietInk)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(Color.quietInk.opacity(0.72))
+            }
+        }
+        .padding(10)
+        .background(Color.surface.opacity(0.56), in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay {
+            RoundedRectangle(cornerRadius: 26, style: .continuous)
+                .stroke(Color.surfaceStroke.opacity(0.52), lineWidth: 1)
+        }
+        .contentShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+    }
+}
+
+private struct DiaryDayPager: View {
+    let dayCount: Int
+    let selectedIndex: Int
+    let selectedDay: Day
+    let move: (Int) -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            pagerButton(direction: -1, label: "Newer day")
+            VStack(spacing: 2) {
+                Text(selectedDay.date.formatted(.dateTime.month(.abbreviated).day()))
+                    .font(DiafitType.caption.weight(.semibold))
+                    .foregroundStyle(Color.ink)
+                Text("\(selectedIndex + 1) of \(dayCount)")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.quietInk)
+            }
+            .frame(maxWidth: .infinity)
+            pagerButton(direction: 1, label: "Older day")
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Day navigation, \(selectedDay.date.formatted(.dateTime.weekday(.wide).month(.wide).day()))")
+    }
+
+    private func pagerButton(direction: Int, label: String) -> some View {
+        Button {
+            move(direction)
+        } label: {
+            Image(systemName: direction < 0 ? "chevron.left" : "chevron.right")
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(Color.ink)
+                .frame(width: 44, height: 44)
+                .background(Color.surface.opacity(0.72), in: Circle())
+                .overlay(Circle().stroke(Color.surfaceStroke.opacity(0.65), lineWidth: 1))
+        }
+        .buttonStyle(PressableStyle(pressedScale: 0.88))
+        .disabled(direction < 0 ? selectedIndex == 0 : selectedIndex == dayCount - 1)
+        .opacity((direction < 0 ? selectedIndex == 0 : selectedIndex == dayCount - 1) ? 0.35 : 1)
+        .accessibilityLabel(label)
+    }
+}
+
+private struct DiaryEmptyState: View {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text("No meals logged")
+                .font(DiafitType.title)
+                .foregroundStyle(Color.ink)
+            Text("This day is quiet. Your next meal will appear here.")
+                .font(DiafitType.body)
+                .foregroundStyle(Color.quietInk)
+                .lineSpacing(3)
+        }
+        .padding(20)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .paperCard(radius: 24, fill: Color.surface.opacity(0.48))
+    }
+}
+
+private struct DiaryReadingsSection: View {
+    let readings: [GlucoseReading]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("READINGS")
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .tracking(1.4)
+                .foregroundStyle(Color.quietInk)
+            ForEach(readings) { reading in
+                HStack(spacing: 10) {
+                    Image(systemName: "drop")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 30, height: 30)
+                        .background(Color.lime.opacity(0.58), in: Circle())
+                    Text(reading.type.displayName)
+                        .font(DiafitType.caption.weight(.semibold))
+                        .foregroundStyle(Color.ink)
+                    Spacer()
+                    Text("\(reading.formattedValue) \(reading.unit.shortName)")
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.ink)
+                    Text(reading.measuredAt.formatted(.dateTime.hour().minute()))
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                }
+                .padding(.vertical, 7)
+                .overlay(alignment: .bottom) {
+                    Rectangle().fill(Color.rule.opacity(0.55)).frame(height: 0.7)
+                }
+            }
+        }
+        .padding(.top, 5)
+    }
+}
+
+private struct DiaryMealDetailSheet: View {
+    let meal: Meal
+    let day: Day?
+    @Environment(\.dismiss) private var dismiss
+
+    private var associatedReadings: [GlucoseReading] {
+        day?.glucoseReadings.filter { $0.mealId == meal.id } ?? []
+    }
+
+    var body: some View {
+        NavigationStack {
+            ScrollView(showsIndicators: false) {
+                VStack(alignment: .leading, spacing: 20) {
+                    FoodArtwork(meal: meal, treatment: .detail)
+                        .frame(height: 210)
+                        .clipShape(RoundedRectangle(cornerRadius: 28, style: .continuous))
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(meal.title)
+                            .font(DiafitType.display)
+                            .foregroundStyle(Color.ink)
+                        Text("\(meal.period.displayName) · \(meal.time.formatted(.dateTime.weekday(.wide).month(.wide).day().hour().minute()))")
+                            .font(DiafitType.caption)
+                            .foregroundStyle(Color.quietInk)
+                        Text(meal.subtitle)
+                            .font(DiafitType.body)
+                            .foregroundStyle(Color.quietInk)
+                            .lineSpacing(3)
+                    }
+
+                    HStack(spacing: 8) {
+                        DiaryDetailMetric(value: "\(meal.energy)", label: "kcal", tint: .ink)
+                        DiaryDetailMetric(value: "\(meal.carbs)g", label: "carbs", tint: .coral)
+                        DiaryDetailMetric(value: "\(meal.protein)g", label: "protein", tint: .lime)
+                        DiaryDetailMetric(value: "\(meal.fat)g", label: "fat", tint: .saffron)
+                    }
+
+                    if let analysis = meal.analysis, !analysis.detectedItems.isEmpty {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Text("WHAT WAS RECOGNIZED")
+                                .font(.system(size: 10, weight: .bold, design: .rounded))
+                                .tracking(1.4)
+                                .foregroundStyle(Color.quietInk)
+                            ForEach(analysis.detectedItems) { item in
+                                HStack(alignment: .firstTextBaseline, spacing: 10) {
+                                    Text(item.displayName)
+                                        .font(DiafitType.body.weight(.semibold))
+                                        .foregroundStyle(Color.ink)
+                                    Spacer()
+                                    Text(servingDescription(for: item))
+                                        .font(DiafitType.caption)
+                                        .foregroundStyle(Color.quietInk)
+                                }
+                                .padding(.vertical, 8)
+                                .overlay(alignment: .bottom) {
+                                    Rectangle().fill(Color.rule.opacity(0.5)).frame(height: 0.7)
+                                }
+                            }
+                        }
+                    }
+
+                    VStack(alignment: .leading, spacing: 7) {
+                        Text("SOURCE & ASSUMPTIONS")
+                            .font(.system(size: 10, weight: .bold, design: .rounded))
+                            .tracking(1.4)
+                            .foregroundStyle(Color.quietInk)
+                        Text(sourceDescription)
+                            .font(DiafitType.caption)
+                            .foregroundStyle(Color.quietInk)
+                            .lineSpacing(3)
+                        if let assumptions = meal.analysis?.assumptions, !assumptions.isEmpty {
+                            Text(assumptions.joined(separator: " · "))
+                                .font(DiafitType.caption)
+                                .foregroundStyle(Color.quietInk)
+                                .lineSpacing(3)
+                        }
+                    }
+
+                    if !associatedReadings.isEmpty {
+                        DiaryReadingsSection(readings: associatedReadings)
+                    }
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 10)
+                .padding(.bottom, 28)
+            }
+            .background(Color.paper)
+            .navigationTitle("Meal details")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Done") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var sourceDescription: String {
+        if let analysis = meal.analysis {
+            return "\(analysis.nutritionProvenance.dataSource) · \(analysis.overallConfidence.displayName)"
+        }
+        return "\(meal.confidence.rawValue) · saved with your diary"
+    }
+
+    private func servingDescription(for item: DetectedFoodItem) -> String {
+        let quantity = item.quantity.rounded() == item.quantity
+            ? String(Int(item.quantity))
+            : item.quantity.formatted(.number.precision(.fractionLength(0...1)))
+        let unit = item.servingUnit.rawValue
+            .replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression)
+            .lowercased()
+        return "\(quantity) \(unit)"
+    }
+}
+
+private struct DiaryDetailMetric: View {
+    let value: String
+    let label: String
+    let tint: Color
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Text(value)
+                .font(.system(size: 16, weight: .bold, design: .rounded))
+                .foregroundStyle(tint)
+            Text(label)
+                .font(.system(size: 10, weight: .bold, design: .rounded))
+                .foregroundStyle(Color.quietInk)
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.vertical, 11)
+        .background(tint.opacity(0.1), in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
