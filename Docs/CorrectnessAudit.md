@@ -2,6 +2,56 @@
 
 Date: 2026-07-15
 
+## 2026-08-04 — End-to-end QA closure
+
+The production-style QA pass covered the food and nutrition pipeline, typed
+clarifications, photo recovery, meal-period selection, glucose logging,
+persistence, diary/day navigation, profile/settings, and critical destructive
+actions. The following defects were fixed during the pass:
+
+- Replaced the daily conversation's finite `LazyVStack` with a regular stack to
+  prevent a SwiftUI placement-cache/CPU loop when deleting a meal during a
+  context-menu transition.
+- Normalised mass-specific shorthand before the generic quantity cap, so
+  `500 gm` resolves to 500 g and `1 kg` resolves to 1,000 g and scales
+  nutrition correctly.
+- Added data-driven typed clarification questions for chai, tea, paratha,
+  rice, sprouts, cooking fat, coffee, sweetened drinks, and whey instead of
+  flattening those questions into non-interactive text.
+- Preserved known components when an offline compound note contains an
+  unresolved term; the unresolved phrase remains explicit and confirmation is
+  blocked until it is clarified.
+- Added whole-wheat bread and milk-tea canonical aliases and mapped whole-wheat
+  flatbread to roti so compound notes retain all visible foods.
+- Added stable render identity for draft-to-saved meal transitions, preventing
+  the review editor from remaining onscreen after confirmation or an edited
+  serving.
+- Updated sparse-photo correction copy and made an explicit manual correction
+  raise confidence so the user can recover safely without bypassing nutrition
+  validation.
+
+Verification completed:
+
+- 136 deterministic XCTest cases passed (0 failures).
+- 21 UI tests passed on the iPhone 15 Pro simulator (iOS 26.5), including
+  fresh empty state, food entry, quantity editing, compound meals, whey,
+  glucose flows, meal periods, photo recovery, persistence, diary navigation,
+  and meal deletion.
+- Backend Node tests passed (4/4), syntax/contract checks passed, and the
+  fixture evaluator completed.
+- Release simulator build succeeded and the app installed/launched on the
+  iPhone 15 Pro simulator.
+
+The deterministic evaluator is parser-only: food detection and compound
+decomposition were 83.6% over 165 fixtures. Its 40.6% blank/fallback rate is
+inflated by intentionally unresolved and invalid cases; it does not measure
+nutrition-provider resolution. A live photo/provider call was not made because
+the supplied photos are private and external upload requires explicit consent.
+Real HealthKit data and physical-device signing were also outside this local
+simulator pass. Production release still requires authenticated provider
+credentials, privacy/consent review, real-device QA, and a nutrition-provider
+integration run.
+
 ## Observed failures and root causes
 
 `chai and paratha` was not an image-generation race or a cache collision. The legacy conversational path sent every unmatched note through `NutritionService.estimate(for:)`, whose generic fallback assigned a full meal's nutrients and the `.bowl` bundled editorial image. The bowl asset could read as a salad, despite neither component being a salad.

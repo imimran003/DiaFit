@@ -1213,7 +1213,9 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         }
 
         let trace = FoodUnderstandingPipeline(catalog: catalog).parse(text)
-        if !trace.components.isEmpty, trace.components.allSatisfy({ $0.confidenceScore >= 0.8 }) {
+        if !trace.components.isEmpty,
+           trace.unresolvedTokens.isEmpty,
+           trace.components.allSatisfy({ $0.confidenceScore >= 0.8 }) {
             let resolved = await resolveLocal(trace.components)
             let completenessReport = completeness.evaluate(resolved)
             if completenessReport.isComplete {
@@ -1236,7 +1238,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         // the span parser cannot safely attach quantities to. It is only used
         // when every selected match clears the conservative 0.78 threshold.
         let fuzzyMatches = normalisation.matches(in: text)
-        if !fuzzyMatches.isEmpty {
+        if !fuzzyMatches.isEmpty, trace.unresolvedTokens.isEmpty {
             let resolved = await resolveMatches(fuzzyMatches, input: text, route: .localFuzzy)
             let completeness = completeness.evaluate(resolved)
             if resolved.allSatisfy({ ($0.canonical?.confidence ?? 0) >= 0.78 }) && completeness.isComplete {
@@ -1256,6 +1258,28 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
             } catch {
                 FoodLoggingDiagnostics.record("resolution.ai", fields: ["status": "unavailable", "reason": "provider-error"])
             }
+        }
+
+        // Offline mode still has a useful, safe partial result. Preserve every
+        // confidently recognized component and carry the unresolved phrase as
+        // an explicit clarification instead of dropping the whole meal. This
+        // keeps known foods visible while preventing an incomplete candidate
+        // from being treated as a confirmed nutrition resolution.
+        if !trace.components.isEmpty {
+            let partial = await resolveLocal(trace.components)
+            let fallbackItems = partial.map { completeWithCuratedFallback($0) }
+            let unresolvedPhrase = trace.unresolvedTokens.joined(separator: " ")
+            let questions = unresolvedPhrase.isEmpty
+                ? localQuestions(for: fallbackItems, input: normalized)
+                : ["I found part of this meal, but couldn't identify \(unresolvedPhrase) safely. What should I use?"]
+            return result(
+                text: text,
+                normalized: normalized,
+                items: fallbackItems,
+                unresolved: unresolvedPhrase.isEmpty ? [] : [unresolvedPhrase],
+                extraQuestions: questions,
+                attemptedAI: true
+            )
         }
 
         return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [text], clarificationQuestions: ["I couldn't identify that safely. What food or product should I use?"], overallConfidence: 0.1, state: .unavailable(.unknownFood))
@@ -1443,10 +1467,16 @@ struct HybridMealAnalysisCoordinator: Sendable {
         let items = resolution.items.map(makeDetectedItem)
         let totals = NutritionValues.total(of: items.map(\.nutrition))
         let validation = DefaultNutritionValidationService().validate(rawValues: totals)
-        let questions = SemanticQuestionDeduplicator.uniqueStrings(resolution.clarificationQuestions).map {
-            ClarificationQuestion(id: UUID(), relatedFoodItemId: nil, question: $0,
-                                  answerType: .freeText, options: [], impactLevel: .high, answer: nil)
-        }
+        // The provider-independent router intentionally transports question
+        // text, but the review UI still needs the semantic contract (answer
+        // type, options, impact and related component) to render an editable
+        // choice. Treating every question as free text made the questions
+        // disappear from the visible quick-check UI and left users unable to
+        // resolve common compound meals such as chai + paratha.
+        let questions = ClarificationQuestionFactory.make(
+            resolution.clarificationQuestions,
+            items: items
+        )
         let analysisID = UUID()
         let visualRequest = MealVisualRequestBuilder().make(mealID: analysisID, items: items, clarificationQuestions: questions)
         let provenance = items.first?.nutritionProvenance ?? .unavailable
@@ -1529,5 +1559,135 @@ struct HybridMealAnalysisCoordinator: Sendable {
     private func confidenceOrder(_ lhs: ConfidenceLevel, _ rhs: ConfidenceLevel) -> Bool {
         let rank: [ConfidenceLevel: Int] = [.high: 4, .medium: 3, .low: 2, .unknown: 1]
         return rank[lhs, default: 0] < rank[rhs, default: 0]
+    }
+}
+
+/// Rehydrates the small, stable clarification vocabulary at the boundary
+/// between the provider-independent router and the existing editable review
+/// model. Unknown provider questions remain free text so malformed or novel
+/// prompts are never silently presented with the wrong answer choices.
+enum ClarificationQuestionFactory {
+    static func make(_ values: [String], items: [DetectedFoodItem]) -> [ClarificationQuestion] {
+        SemanticQuestionDeduplicator.uniqueStrings(values).map { question in
+            let normalized = question.folding(
+                options: [.caseInsensitive, .diacriticInsensitive],
+                locale: .current
+            ).lowercased()
+
+            if normalized.contains("chai sweetened") {
+                return choice(
+                    question,
+                    relatedTo: itemID(containing: ["chai"], in: items),
+                    options: ["No milk or sugar", "Milk, no sugar", "Milk + sugar"],
+                    impact: .high
+                )
+            }
+            if normalized.contains("tea plain") {
+                return choice(
+                    question,
+                    relatedTo: itemID(containing: ["tea"], in: items),
+                    options: ["Plain", "Milk, no sugar", "Milk + sugar"],
+                    impact: .high
+                )
+            }
+            if normalized.contains("paratha plain") {
+                return choice(
+                    question,
+                    relatedTo: itemID(containing: ["paratha"], in: items),
+                    options: ["Plain", "Aloo / stuffed", "Buttered"],
+                    impact: .high
+                )
+            }
+            if normalized.contains("rice a small") {
+                return choice(
+                    question,
+                    relatedTo: itemID(category: .rice, in: items),
+                    options: ["Small", "Medium", "Large"],
+                    impact: .high
+                )
+            }
+            if normalized.contains("sprouts serving") {
+                return choice(
+                    question,
+                    relatedTo: itemID(category: .sprouts, in: items),
+                    options: ["Small", "Medium", "Large"],
+                    impact: .low
+                )
+            }
+            if normalized.contains("oil ghee butter or cream") {
+                return choice(
+                    question,
+                    relatedTo: itemID(category: [.vegetarianCurry, .nonVegetarian, .lentilOrLegume], in: items),
+                    options: ["No / very little", "Some", "A generous amount"],
+                    impact: .high
+                )
+            }
+            if normalized.contains("how many scoops") {
+                return choice(
+                    question,
+                    relatedTo: itemID(category: .supplement, in: items),
+                    options: ["1 scoop + water", "1 scoop + milk", "2 scoops + water", "2 scoops + milk"],
+                    impact: .high
+                )
+            }
+            if normalized.contains("plain black coffee") {
+                return choice(
+                    question,
+                    relatedTo: itemID(containing: ["coffee"], in: items),
+                    options: ["Black", "Milk", "Milk + sugar"],
+                    impact: .high
+                )
+            }
+            if normalized.contains("drink or dessert sweetened") {
+                return choice(
+                    question,
+                    relatedTo: itemID(category: .dessertOrDrink, in: items),
+                    options: ["No", "Yes", "Not sure"],
+                    impact: .high,
+                    answerType: .yesNo
+                )
+            }
+            if normalized.contains("live recognition is unavailable") {
+                return choice(
+                    question,
+                    relatedTo: nil,
+                    options: ["Yes", "No — I’ll edit them"],
+                    impact: .high,
+                    answerType: .yesNo
+                )
+            }
+            return ClarificationQuestion(
+                id: UUID(), relatedFoodItemId: nil, question: question,
+                answerType: .freeText, options: [], impactLevel: .high, answer: nil
+            )
+        }
+    }
+
+    private static func choice(
+        _ question: String,
+        relatedTo itemID: UUID?,
+        options: [String],
+        impact: ClarificationImpact,
+        answerType: ClarificationAnswerType = .singleChoice
+    ) -> ClarificationQuestion {
+        ClarificationQuestion(
+            id: UUID(), relatedFoodItemId: itemID, question: question,
+            answerType: answerType, options: options, impactLevel: impact, answer: nil
+        )
+    }
+
+    private static func itemID(containing terms: [String], in items: [DetectedFoodItem]) -> UUID? {
+        items.first { item in
+            let haystack = "\(item.canonicalFoodId) \(item.displayName)".lowercased()
+            return terms.allSatisfy(haystack.contains)
+        }?.id
+    }
+
+    private static func itemID(category: FoodCategory, in items: [DetectedFoodItem]) -> UUID? {
+        items.first { $0.category == category }?.id
+    }
+
+    private static func itemID(category categories: [FoodCategory], in items: [DetectedFoodItem]) -> UUID? {
+        items.first { categories.contains($0.category) }?.id
     }
 }

@@ -357,6 +357,11 @@ struct MealAnalysisReviewCard: View {
             editableDraft.result.clarificationQuestions
         )
         editableDraft.result.assumptions.append("Food names were corrected by you; servings remain editable estimates.")
+        // An explicit member correction is stronger evidence than the
+        // low-confidence image-only hypothesis that opened this state. Keep
+        // the original photo, but release the sparse-photo confirmation gate
+        // so a corrected item can be reviewed and saved immediately.
+        editableDraft.result.overallConfidence = .medium
         componentQuery = ""
         componentError = nil
         recalculate()
@@ -737,7 +742,10 @@ private struct EmptyAnalysisState: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text(hasPhoto ? "Live recognition didn’t finish" : "Name the food to finish the estimate")
+            // Keep the recovery action obvious even when secure recognition is
+            // unavailable: the member can retry AI or name the food manually.
+            // This wording is also stable for VoiceOver and UI automation.
+            Text("Name the food to finish the estimate")
                 .font(.system(.body, design: .rounded, weight: .semibold))
                 .foregroundStyle(Color.ink)
             if hasPhoto {

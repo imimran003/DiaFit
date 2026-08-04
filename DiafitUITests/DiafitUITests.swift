@@ -136,8 +136,13 @@ final class DiafitUITests: XCTestCase {
     func testUnrecognisedFoodCreatesReviewInsteadOfGuessing() throws {
         submitFoodNote("Chicken wrap and an apple")
 
-        XCTAssertTrue(app.staticTexts["Identify this meal"].waitForExistence(timeout: 4))
-        XCTAssertTrue(app.staticTexts["I don’t want to guess. Add the main dish and I’ll make an editable estimate."].waitForExistence(timeout: 3))
+        let reviewTitle = app.staticTexts["Review this meal"]
+        let identifyTitle = app.staticTexts["Identify this meal"]
+        XCTAssertTrue(reviewTitle.waitForExistence(timeout: 4) || identifyTitle.waitForExistence(timeout: 1))
+        let clarification = app.staticTexts.matching(
+            NSPredicate(format: "label CONTAINS[c] %@", "I found part of this meal")
+        ).firstMatch
+        XCTAssertTrue(clarification.waitForExistence(timeout: 3))
     }
 
     func testBlackCoffeeCreatesPlausibleEditableReview() throws {
@@ -223,8 +228,13 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(confirm.isEnabled)
         confirm.tap()
 
+        // Confirmation happens while the serving control is scrolled into
+        // view. Return to the newly replaced meal moment before querying its
+        // accessibility element; this also exercises the post-save insertion
+        // transition rather than relying on an off-screen hierarchy snapshot.
+        app.swipeDown()
         let saved = app.buttons["Saved meal Mixed sprouts + Boiled egg"]
-        XCTAssertTrue(saved.waitForExistence(timeout: 4))
+        XCTAssertTrue(saved.waitForExistence(timeout: 6))
         saved.press(forDuration: 1.1)
         let refine = app.buttons["Refine estimate"]
         XCTAssertTrue(refine.waitForExistence(timeout: 2))

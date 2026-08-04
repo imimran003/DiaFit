@@ -30,7 +30,12 @@ struct DayThreadView: View {
             if let day {
                 ScrollViewReader { proxy in
                     ScrollView(.vertical, showsIndicators: false) {
-                        LazyVStack(spacing: 18) {
+                        // A day is intentionally a finite conversation (not an
+                        // unbounded feed). A regular stack keeps insert/delete
+                        // transitions deterministic; LazyVStack can repeatedly
+                        // invalidate its placement cache when a contextual meal
+                        // action removes an item while the scroll view is moving.
+                        VStack(spacing: 18) {
                             DayHeader(
                                 day: day,
                                 healthActivityState: healthActivityState,
@@ -96,7 +101,7 @@ struct DayThreadView: View {
                                         return []
                                     }()
                                 )
-                                .id(item.id)
+                                .id(item.renderIdentity)
                             }
 
                             DailyNutritionReviewSection(

@@ -161,6 +161,29 @@ struct ThreadItem: Identifiable, Codable, Hashable {
 
     let id: UUID
     var kind: Kind
+
+    /// SwiftUI must receive a new view identity when a review draft is
+    /// replaced by its confirmed meal. Keeping only the thread item's UUID
+    /// lets a stateful review card survive that enum-case change, leaving the
+    /// old editor on screen even though the diary has already been updated.
+    /// The identity remains stable for ordinary edits and changes only at the
+    /// semantic boundary between a draft and a saved item.
+    var renderIdentity: String {
+        switch kind {
+        case .mealAnalysis(let draft):
+            return "\(id.uuidString)-analysis-\(draft.id.uuidString)"
+        case .meal(let meal):
+            return "\(id.uuidString)-meal-\(meal.id.uuidString)"
+        case .agent:
+            return "\(id.uuidString)-agent"
+        case .person:
+            return "\(id.uuidString)-person"
+        case .glucose(let reading):
+            return "\(id.uuidString)-glucose-\(reading.id.uuidString)"
+        case .checkpoint(let checkpoint):
+            return "\(id.uuidString)-checkpoint-\(checkpoint.id.uuidString)"
+        }
+    }
 }
 
 struct GlucoseCheckpoint: Identifiable, Codable, Hashable {

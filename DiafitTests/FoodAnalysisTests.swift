@@ -522,6 +522,69 @@ final class FoodAnalysisTests: XCTestCase {
         }
     }
 
+    func testQuantityParserNormalisesCommonGramAndKilogramShorthand() throws {
+        let engine = LocalMealAnalysisEngine(catalog: catalog)
+
+        let grams = try XCTUnwrap(
+            engine.makeAnalysis(description: "500 gm cooked rice").detectedItems.first
+        )
+        XCTAssertEqual(grams.quantity, 500, accuracy: 0.001)
+        XCTAssertEqual(grams.servingUnit, .grams)
+        XCTAssertEqual(grams.estimatedWeightGrams ?? -1, 500, accuracy: 0.001)
+        XCTAssertFalse(grams.nutrition.isEmpty)
+
+        let kilograms = try XCTUnwrap(
+            engine.makeAnalysis(description: "1 kg cooked rice").detectedItems.first
+        )
+        XCTAssertEqual(kilograms.quantity, 1_000, accuracy: 0.001)
+        XCTAssertEqual(kilograms.servingUnit, .grams)
+        XCTAssertEqual(kilograms.estimatedWeightGrams ?? -1, 1_000, accuracy: 0.001)
+        XCTAssertFalse(kilograms.nutrition.isEmpty)
+    }
+
+    func testPartialLocalMatchDoesNotDiscardAnUnresolvedCompoundFood() async throws {
+        let router = DefaultFoodResolutionRouter(understanding: nil)
+        let result = await router.resolve(text: "chicken wrap and an apple")
+
+        XCTAssertEqual(result.items.map { $0.canonical?.food.canonicalId }, ["apple"])
+        XCTAssertTrue(result.unresolvedTerms.contains("chicken wrap"))
+        XCTAssertTrue(result.requiresClarification)
+        XCTAssertEqual(result.state, .clarificationRequired)
+    }
+
+    func testOfflinePartialCompoundKeepsKnownFoodsVisibleAndNutritionUsable() async throws {
+        let router = DefaultFoodResolutionRouter(understanding: nil)
+        let result = await router.resolve(text: "sprouts with 2 walnut and 2 almonds and 2 whole boiled eggs with 2 whole wheat bread slice and 1 milk tea without sugar")
+
+        let IDs = Set(result.items.compactMap { $0.canonical?.food.canonicalId })
+        XCTAssertTrue(IDs.contains("mixed-sprouts"))
+        XCTAssertTrue(IDs.contains("walnut"))
+        XCTAssertTrue(IDs.contains("almond"))
+        XCTAssertTrue(IDs.contains("boiled-egg"))
+        XCTAssertTrue(IDs.contains("whole-wheat-bread"))
+        XCTAssertTrue(IDs.contains("chai-with-milk"))
+        XCTAssertTrue(result.items.allSatisfy { !$0.nutrition.lookup.values.isEmpty })
+        XCTAssertFalse(result.requiresClarification)
+        XCTAssertTrue(result.unresolvedTerms.isEmpty)
+        XCTAssertEqual(result.state, .readyForReview)
+    }
+
+    func testHybridCoordinatorPreservesInteractiveChaiAndParathaQuestions() async throws {
+        let coordinator = HybridMealAnalysisCoordinator(
+            router: DefaultFoodResolutionRouter(understanding: nil)
+        )
+        let result = await coordinator.analyse(text: "chai and paratha")
+
+        let chai = try XCTUnwrap(result.clarificationQuestions.first { $0.question.contains("chai sweetened") })
+        let paratha = try XCTUnwrap(result.clarificationQuestions.first { $0.question.contains("paratha plain") })
+        XCTAssertEqual(chai.answerType, .singleChoice)
+        XCTAssertEqual(chai.options, ["No milk or sugar", "Milk, no sugar", "Milk + sugar"])
+        XCTAssertEqual(paratha.answerType, .singleChoice)
+        XCTAssertEqual(paratha.options, ["Plain", "Aloo / stuffed", "Buttered"])
+        XCTAssertNotNil(chai.relatedFoodItemId)
+        XCTAssertNotNil(paratha.relatedFoodItemId)
+    }
+
     func testCompoundMealsRemainDecomposedAcrossConnectors() {
         let engine = LocalMealAnalysisEngine(catalog: catalog)
         let fixtures: [(String, Set<String>)] = [
@@ -3220,7 +3283,15 @@ final class FoodAnalysisTests: XCTestCase {
         ))
         let restored = try XCTUnwrap(persistence.load())
 
-        XCTAssertEqual(restored.profile, profile)
+        // Profile timestamps are persisted at millisecond precision. Compare the
+        // user-facing fields exactly and allow the metadata timestamp to make the
+        // documented precision round trip without making this test timing-flaky.
+        assertProfileFieldsEqual(restored.profile, profile)
+        XCTAssertEqual(
+            restored.profile.updatedAt.timeIntervalSince1970,
+            profile.updatedAt.timeIntervalSince1970,
+            accuracy: 0.001
+        )
         XCTAssertEqual(restored.preferences, preferences)
         XCTAssertEqual(restored.schemaVersion, UserProfileArchive.currentVersion)
     }
@@ -3240,7 +3311,7 @@ final class FoodAnalysisTests: XCTestCase {
             )
         )
 
-        XCTAssertEqual(store.profile, .empty)
+        assertProfileFieldsEqual(store.profile, .empty)
         XCTAssertNotNil(store.persistenceIssue)
         XCTAssertEqual(try Data(contentsOf: fileURL), corruptData)
     }
@@ -3270,9 +3341,20 @@ final class FoodAnalysisTests: XCTestCase {
         guard case .success = store.resetProfile() else {
             return XCTFail("Expected profile reset to succeed")
         }
-        XCTAssertEqual(store.profile, .empty)
+        assertProfileFieldsEqual(store.profile, .empty)
+        XCTAssertEqual(
+            store.profile.updatedAt.timeIntervalSince1970,
+            UserProfile.empty.updatedAt.timeIntervalSince1970,
+            accuracy: 0.001
+        )
         XCTAssertEqual(store.preferences, preferences)
-        XCTAssertEqual(try persistence.load()?.profile, .empty)
+        let persistedProfile = try XCTUnwrap(persistence.load()?.profile)
+        assertProfileFieldsEqual(persistedProfile, .empty)
+        XCTAssertEqual(
+            persistedProfile.updatedAt.timeIntervalSince1970,
+            UserProfile.empty.updatedAt.timeIntervalSince1970,
+            accuracy: 0.001
+        )
     }
 
     private func assertProfileValidationFailure(
@@ -3285,6 +3367,29 @@ final class FoodAnalysisTests: XCTestCase {
             return XCTFail("Expected profile validation to fail", file: file, line: line)
         }
         XCTAssertEqual(actual, expected, file: file, line: line)
+    }
+
+    private func assertProfileFieldsEqual(
+        _ actual: UserProfile,
+        _ expected: UserProfile,
+        file: StaticString = #filePath,
+        line: UInt = #line
+    ) {
+        XCTAssertEqual(actual.preferredName, expected.preferredName, file: file, line: line)
+        XCTAssertEqual(actual.dateOfBirth, expected.dateOfBirth, file: file, line: line)
+        XCTAssertEqual(actual.sex, expected.sex, file: file, line: line)
+        XCTAssertEqual(actual.genderIdentity, expected.genderIdentity, file: file, line: line)
+        XCTAssertEqual(actual.heightCentimeters, expected.heightCentimeters, file: file, line: line)
+        XCTAssertEqual(actual.weightKilograms, expected.weightKilograms, file: file, line: line)
+        XCTAssertEqual(actual.diabetesContext, expected.diabetesContext, file: file, line: line)
+        XCTAssertEqual(actual.activityLevel, expected.activityLevel, file: file, line: line)
+        XCTAssertEqual(actual.dietaryPattern, expected.dietaryPattern, file: file, line: line)
+        XCTAssertEqual(actual.allergies, expected.allergies, file: file, line: line)
+        XCTAssertEqual(actual.calorieGoal, expected.calorieGoal, file: file, line: line)
+        XCTAssertEqual(actual.carbohydrateGoalGrams, expected.carbohydrateGoalGrams, file: file, line: line)
+        XCTAssertEqual(actual.proteinGoalGrams, expected.proteinGoalGrams, file: file, line: line)
+        XCTAssertEqual(actual.stepGoal, expected.stepGoal, file: file, line: line)
+        XCTAssertEqual(actual.avatarJPEGData, expected.avatarJPEGData, file: file, line: line)
     }
 
     private func fixtureFoodImage() -> PreparedFoodImage {

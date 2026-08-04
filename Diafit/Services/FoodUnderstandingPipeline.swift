@@ -9,6 +9,12 @@ struct FoodUnderstandingTrace: Hashable, Sendable {
     let tokens: [String]
     let entities: [FoodEntityCandidate]
     let components: [ParsedFoodComponent]
+    /// Tokens that were not explained by a canonical food span or harmless
+    /// meal-language structure. Keeping this signal prevents a partial local
+    /// match (for example, `chicken wrap and an apple` becoming only `apple`)
+    /// from being treated as a complete meal before the AI fallback gets a
+    /// chance to decompose the unknown component.
+    let unresolvedTokens: [String]
 
     var containsSupplement: Bool {
         components.contains { $0.food.category == .supplement }
@@ -114,12 +120,52 @@ struct FoodUnderstandingPipeline: Sendable {
             "components": components.map { "\($0.food.canonicalId):\($0.quantity) \($0.servingUnit.rawValue)" }.joined(separator: ",")
         ])
 
+        let coveredTokenIndices = candidates.reduce(into: Set<Int>()) { covered, candidate in
+            covered.formUnion(candidate.tokenStart..<candidate.tokenEnd)
+        }
+        let unresolvedTokens: [String] = normalized.tokens.enumerated().compactMap { entry in
+            let index = entry.offset
+            let token = entry.element
+            let isShakeBase = token == "milk"
+                && candidates.contains { candidate in
+                    catalog.food(canonicalID: candidate.canonicalFoodID)?.category == .supplement
+                }
+            guard !coveredTokenIndices.contains(index), !Self.isStructuralToken(token), !isShakeBase else { return nil }
+            return token
+        }
+        FoodLoggingDiagnostics.record("entities.unresolved", fields: [
+            "tokens": unresolvedTokens.joined(separator: ","),
+            "count": String(unresolvedTokens.count)
+        ])
+
         return FoodUnderstandingTrace(
             normalizedInput: normalized.text,
             tokens: normalized.tokens,
             entities: candidates,
-            components: components
+            components: components,
+            unresolvedTokens: unresolvedTokens
         )
+    }
+
+    /// Words that describe how a meal was logged rather than what was eaten.
+    /// This list is intentionally limited to syntax, quantities, units and
+    /// preparation modifiers; unknown food nouns must remain unresolved.
+    private static func isStructuralToken(_ token: String) -> Bool {
+        let structural: Set<String> = [
+            "i", "me", "my", "had", "have", "has", "ate", "eat", "eating", "with", "and", "plus",
+            "along", "alongside", "served", "together", "accompanied", "by", "a", "an", "the", "some",
+            "for", "as", "of", "today", "yesterday", "same", "breakfast", "lunch", "dinner", "supper",
+            "snack", "snacks", "morning", "afternoon", "evening", "mid", "before", "after", "at", "in",
+            "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "half",
+            "quarter", "pair", "couple", "scoop", "scoops", "serving", "servings", "bowl", "bowls",
+            "katori", "katoris", "cup", "cups", "glass", "glasses", "piece", "pieces", "slice", "slices",
+            "tablespoon", "tablespoons", "tbsp", "teaspoon", "teaspoons", "tsp", "gram", "grams", "gm",
+            "gms", "g", "kilogram", "kilograms", "kg", "kgs", "ml", "millilitre", "millilitres",
+            "milliliter", "milliliters", "litre", "litres", "liter", "liters", "boiled", "hard", "soft",
+        "poached", "scrambled", "fried", "cooked", "raw", "plain", "whole", "unsweetened", "sugarless", "sugar",
+            "without", "no", "less", "low", "reduced"
+        ]
+        return structural.contains(token) || Double(token) != nil
     }
 
     private func lexiconMatches(in tokens: [String]) -> [FoodEntityCandidate] {
@@ -297,7 +343,11 @@ private enum QuantityExtractor {
         "tbsp": .tablespoon,
         "teaspoon": .teaspoon, "teaspoons": .teaspoon,
         "tsp": .teaspoon,
-        "gram": .grams, "grams": .grams, "g": .grams,
+        // Accept the common shorthand users type in the composer. Keeping
+        // these aliases at the quantity layer means every food (including
+        // provider-backed foods such as tofu) receives the same conversion.
+        "gram": .grams, "grams": .grams, "gm": .grams, "gms": .grams, "g": .grams,
+        "kilogram": .grams, "kilograms": .grams, "kg": .grams, "kgs": .grams,
         "ml": .millilitres, "millilitre": .millilitres, "millilitres": .millilitres,
         "milliliter": .millilitres, "milliliters": .millilitres,
         "litre": .millilitres, "litres": .millilitres,
@@ -338,13 +388,18 @@ private enum QuantityExtractor {
             let precedingToken = unitIndex > 0 ? context[unitIndex - 1] : context[unitIndex]
             let unitToken = context[unitIndex]
             let isVolume = ["ml", "millilitre", "millilitres", "milliliter", "milliliters", "litre", "litres", "liter", "liters"].contains(unitToken)
-            let quantity = (isVolume ? Double(precedingToken) : nil)
+            let isKilogram = ["kilogram", "kilograms", "kg", "kgs"].contains(unitToken)
+            let isMass = unitWords[unitToken] == .grams
+            let quantity = ((isVolume || isMass) ? Double(precedingToken) : nil)
                 ?? number(in: Array(context[..<unitIndex]))
                 ?? impliedNumber(precedingToken)
             if let quantity {
-                let normalizedQuantity = ["litre", "litres", "liter", "liters"].contains(unitToken)
-                    ? quantity * 1_000
-                    : quantity
+                let normalizedQuantity: Double
+                if ["litre", "litres", "liter", "liters"].contains(unitToken) || isKilogram {
+                    normalizedQuantity = quantity * 1_000
+                } else {
+                    normalizedQuantity = quantity
+                }
                 return ParsedQuantity(
                     quantity: normalizedQuantity,
                     unit: unitWords[context[unitIndex]] ?? defaultUnit,
