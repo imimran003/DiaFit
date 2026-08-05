@@ -3632,6 +3632,11 @@ final class FoodAnalysisTests: XCTestCase {
         let repository = FileUserFoodMemoryRepository(store: FileUserFoodMemoryStore(fileURL: fileURL, appliesFileProtection: false))
         let matches = await repository.rankedMatches(for: "whey")
         XCTAssertTrue(matches.isEmpty)
+        await repository.save(UserFoodMemory(
+            id: UUID(), alias: "my whey", canonicalFoodID: "whey-protein-powder",
+            servingGrams: 30, servingUnit: "scoop", preparation: "with water",
+            productID: nil, lastConfirmedAt: .now
+        ))
         XCTAssertEqual(try Data(contentsOf: fileURL), original)
     }
 }

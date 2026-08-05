@@ -631,16 +631,19 @@ enum FoodMemoryPersistenceError: Error, Equatable {
 actor FileUserFoodMemoryRepository: UserFoodMemoryRepository {
     private var records: [UserFoodMemory]
     private let store: FileUserFoodMemoryStore
+    private var canPersist: Bool
 
     init(store: FileUserFoodMemoryStore = .live()) {
         self.store = store
         do {
             records = try store.load()
+            canPersist = true
         } catch {
             // A corrupt or newer file must not be replaced with an empty
             // archive. The repository remains usable for reads and exposes a
             // diagnostic in development; the original file stays untouched.
             records = []
+            canPersist = false
             FoodLoggingDiagnostics.record("food-memory.load", fields: ["status": "failed"])
         }
     }
@@ -654,6 +657,10 @@ actor FileUserFoodMemoryRepository: UserFoodMemoryRepository {
     }
 
     func save(_ memory: UserFoodMemory) async {
+        guard canPersist else {
+            FoodLoggingDiagnostics.record("food-memory.save", fields: ["status": "blocked-storage-unavailable"])
+            return
+        }
         let previous = records
         records.removeAll { $0.alias.caseInsensitiveCompare(memory.alias) == .orderedSame }
         records.append(memory)
@@ -661,6 +668,7 @@ actor FileUserFoodMemoryRepository: UserFoodMemoryRepository {
             try store.save(records)
         } catch {
             records = previous
+            canPersist = false
             FoodLoggingDiagnostics.record("food-memory.save", fields: ["status": "failed"])
         }
     }
@@ -770,13 +778,16 @@ struct FilePackagedFoodStore: Sendable {
 actor FilePackagedFoodRepository: PackagedFoodRepository {
     private var records: [PackagedFoodRecord]
     private let store: FilePackagedFoodStore
+    private var canPersist: Bool
 
     init(store: FilePackagedFoodStore = .live()) {
         self.store = store
         do {
             records = try store.load()
+            canPersist = true
         } catch {
             records = []
+            canPersist = false
             FoodLoggingDiagnostics.record("packaged-foods.load", fields: ["status": "failed"])
         }
     }
@@ -793,6 +804,10 @@ actor FilePackagedFoodRepository: PackagedFoodRepository {
     }
 
     func save(_ record: PackagedFoodRecord) async {
+        guard canPersist else {
+            FoodLoggingDiagnostics.record("packaged-foods.save", fields: ["status": "blocked-storage-unavailable"])
+            return
+        }
         let previous = records
         records.removeAll { $0.id == record.id }
         records.append(record)
@@ -800,6 +815,7 @@ actor FilePackagedFoodRepository: PackagedFoodRepository {
             try store.save(records)
         } catch {
             records = previous
+            canPersist = false
             FoodLoggingDiagnostics.record("packaged-foods.save", fields: ["status": "failed"])
         }
     }
