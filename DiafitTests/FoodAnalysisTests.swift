@@ -3639,6 +3639,54 @@ final class FoodAnalysisTests: XCTestCase {
         ))
         XCTAssertEqual(try Data(contentsOf: fileURL), original)
     }
+
+    func testBackendVerifiedNutritionResponseDecodesSourceRecordAndVersion() throws {
+        let lookup = try BackendVerifiedNutritionProvider.decodeResponse(Data("""
+        {
+          "apiVersion":"v1",
+          "sourceRecordID":"fdc:12345",
+          "serving":{"amount":150,"unit":"g","grams":150},
+          "nutrients":{"caloriesKcal":232.5,"proteinGrams":18.9,"carbohydrateGrams":1.65,"availableCarbohydrateGrams":1.65,"fatGrams":15.9,"fibreGrams":0,"totalSugarGrams":1.1,"addedSugarGrams":null,"sodiumMilligrams":186,"cholesterolMilligrams":558},
+          "provenance":{"kind":"verifiedDatabase","dataSource":"USDA FoodData Central","dataVersion":"2026-08","confidence":"high"}
+        }
+        """.utf8))
+        XCTAssertEqual(lookup.values.caloriesKcal, 232.5)
+        XCTAssertEqual(lookup.provenance.kind, .verifiedDatabase)
+        XCTAssertEqual(lookup.provenance.sourceRecordID, "fdc:12345")
+        XCTAssertEqual(lookup.provenance.dataVersion, "2026-08")
+    }
+
+    func testVerifiedNutritionProviderPrecedesCuratedFallback() async {
+        let values = NutritionValues(caloriesKcal: 77.5, proteinGrams: 6.3, carbohydrateGrams: 0.55, fatGrams: 5.3, fibreGrams: 0)
+        let provenance = NutritionProvenance(
+            kind: .verifiedDatabase,
+            dataSource: "USDA FoodData Central",
+            dataVersion: "2026-08",
+            confidence: .high,
+            sourceRecordID: "fdc:egg"
+        )
+        let service = HybridNutritionResolutionService(
+            catalog: catalog,
+            verifiedProvider: StubVerifiedNutritionProvider(lookupResult: NutritionLookup(values: values, provenance: provenance))
+        )
+        let item = ParsedFoodItem(
+            originalText: "boiled egg",
+            canonicalSearchName: "boiled egg",
+            category: .egg,
+            quantity: 1,
+            unit: "wholeEgg",
+            estimatedGrams: 50,
+            confidence: 1
+        )
+        let canonical = catalog.normalise("boiled egg").map {
+            CanonicalFoodMatch(food: $0, matchedAlias: "boiled egg", confidence: 1, source: "test")
+        }
+        let result = await service.resolve(item: item, canonical: canonical)
+        XCTAssertEqual(result.lookup.provenance.kind, .verifiedDatabase)
+        XCTAssertEqual(result.sourceRecordID, "fdc:egg")
+        XCTAssertEqual(result.estimatedGrams, 50)
+        XCTAssertEqual(result.lookup.values.proteinGrams, 6.3)
+    }
 }
 
 private struct StubMealUnderstanding: FoodUnderstandingService {
@@ -3646,6 +3694,15 @@ private struct StubMealUnderstanding: FoodUnderstandingService {
 
     func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult {
         result
+    }
+}
+
+private struct StubVerifiedNutritionProvider: VerifiedNutritionProvider {
+    let lookupResult: NutritionLookup
+    var identifier: String { "test-verified-provider" }
+
+    func lookup(canonicalSearchName: String, estimatedGrams: Double?) async throws -> NutritionLookup? {
+        lookupResult
     }
 }
 

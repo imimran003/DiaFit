@@ -16,6 +16,16 @@ Set `DIAFIT_MEAL_PARSER_MODE=mock` for deterministic offline parsing, `gemini` w
 
 The Gemini free tier is suitable for development and personal testing, subject to Google's current quotas and data-use terms. It is not an unlimited production service. Keep the key out of the iOS target and Git, and obtain explicit consent before uploading a meal photo. For a local free-tier run, copy `.env.example` to the ignored `.env`, set `DIAFIT_MEAL_PARSER_MODE=gemini`, and add `GEMINI_API_KEY` there.
 
+`POST /v1/nutrition-lookup` is the server-owned verified nutrition boundary. It
+accepts a canonical food name and an optional gram amount and returns only a
+complete, provenance-bearing record or an explicit unavailable response. Set
+`DIAFIT_NUTRITION_PROVIDER_MODE=usda` and provide `USDA_FDC_API_KEY` in the
+backend's secret environment to enable the FoodData Central adapter. The key is
+never sent to iOS. Results retain the FDC record ID, provider, data version,
+serving grams, and confidence. If the provider is disabled, unreachable, or
+incomplete, the app keeps its editable curated fallback rather than treating a
+blank result as success.
+
 `POST /v1/meal-visual` is the optional provider-independent visual endpoint for
 text-only meals. Set `DIAFIT_MEAL_VISUAL_MODE=gemini` to enable it. It uses
 `GEMINI_IMAGE_MODEL` and returns a validated, association-bound image payload;
@@ -41,7 +51,7 @@ Run `npm run evaluate:food-resolution` for the checked-in 165-input development 
 - Terminate TLS at managed ingress; restrict origins/network access; use managed rate limiting and WAF controls.
 - Store vision, image-generation, and nutrition keys only in a managed secret store. Do not put them in Xcode settings, app resources, or `.env.example`.
 - Use `GeminiMealParser` or `OpenAIMealParser` behind the `/v1/meal-parse` seam. Both send images only from the backend, request strict JSON, validate every field, and retain model/version provenance at the API boundary. Keep canonical matching, nutrition lookup, recipe calculation, and plausibility validation in separate server services; never accept model-generated nutrition as authoritative.
-- Query an authoritative nutrition source server-side. The Indian Food Composition Tables 2017 are a useful food-composition reference, but mixed recipes need a provider or ingredient calculation with serving provenance. See the [official IFCT PDF](https://www.nin.res.in/ebooks/IFCT2017_16122024.pdf).
+- Query an authoritative nutrition source server-side. FoodData Central exposes food-search and food-detail endpoints and requires a server-side API key; retain the returned record ID with each result. See the [official FoodData Central API specification](https://fdc.nal.usda.gov/api-spec/fdc_api.html) and [official data documentation](https://fdc.nal.usda.gov/data-documentation/). The Indian Food Composition Tables 2017 are a useful food-composition reference, but mixed recipes need a provider or ingredient calculation with serving provenance. See the [official IFCT PDF](https://www.nin.res.in/ebooks/IFCT2017_16122024.pdf).
 - Make retention opt-in, delete temporary objects on timeout, redact sensitive data from logs, establish data-processing agreements, and complete privacy/App Store disclosure review.
 - Add load testing, persistent rate limiting, tracing, error budgets, cost limits, retries with idempotency keys, and a dead-letter/error workflow before serving real accounts.
 
@@ -57,3 +67,8 @@ invalid provider output is rejected rather than coerced. The legacy
 photo flow while it is migrated to the same provider hierarchy.
 
 The response treats all food analysis as an estimate. It does not calculate glycaemic load unless a source supplies both GI and available carbohydrate, and it does not provide diagnostic or medication guidance.
+
+Nutrition provider responses are not model nutrition. A model may identify a
+food or suggest recipe ingredients, but only a provider, a user-confirmed label,
+or a curated/calculated fallback may supply values used by the app. The iOS
+client sends only canonical names and serving grams to the nutrition endpoint.

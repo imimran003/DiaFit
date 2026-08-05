@@ -43,8 +43,6 @@ struct AppDependencies: Sendable {
             packaged = FilePackagedFoodRepository()
         }
         let normalisation = HybridFoodNormalisationService(catalog: catalog)
-        let nutrition = HybridNutritionResolutionService(catalog: catalog, packaged: packaged)
-        let localUnderstanding = LocalStructuredMealUnderstandingService(catalog: catalog)
         let backendConfiguration: RuntimeBackendConfiguration?
         if arguments.contains("UITestMode") {
             backendConfiguration = nil
@@ -57,6 +55,18 @@ struct AppDependencies: Sendable {
             backendConfiguration = RuntimeBackendConfiguration(environment: environment)
             #endif
         }
+        let verifiedNutrition: (any VerifiedNutritionProvider)? = backendConfiguration.map {
+            BackendVerifiedNutritionProvider(
+                endpoint: $0.endpoint,
+                tokenProvider: RuntimeBackendAccessTokenProvider(token: $0.accessToken)
+            )
+        }
+        let nutrition = HybridNutritionResolutionService(
+            catalog: catalog,
+            packaged: packaged,
+            verifiedProvider: verifiedNutrition
+        )
+        let localUnderstanding = LocalStructuredMealUnderstandingService(catalog: catalog)
         let backendUnderstanding: BackendFoodUnderstandingService? = backendConfiguration.map {
             BackendFoodUnderstandingService(
                 endpoint: $0.endpoint,
@@ -115,7 +125,7 @@ struct AppDependencies: Sendable {
             normalisation: normalisation,
             nutritionResolution: nutrition,
             recipeCalculation: CatalogRecipeCalculationService(
-                resolver: HybridNutritionResolutionService(catalog: catalog, packaged: packaged)
+                resolver: nutrition
             ),
             clarification: DefaultMealClarificationService(),
             userFoodMemory: memory,

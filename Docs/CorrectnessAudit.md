@@ -2,6 +2,19 @@
 
 Date: 2026-07-15
 
+## 2026-08-05 — verified nutrition provider boundary
+
+Nutrition resolution now has a server-owned `POST /v1/nutrition-lookup`
+contract. A verified record must include core nutrients, serving grams, source,
+record ID, data version, confidence, and finite non-negative values. The iOS
+client sends only canonical names and serving grams; provider credentials stay
+on the backend. Disabled, unavailable, or incomplete provider responses fall
+back to the existing editable curated path and never become a blank success.
+
+The backend includes an injected USDA FoodData Central adapter and a
+deterministic mock provider. No live provider credential is checked into this
+repository, so the contract tests do not make network calls.
+
 ## 2026-08-05 — confirmed food memory survives relaunch
 
 Normal runtime no longer keeps confirmed food aliases and packaged-product

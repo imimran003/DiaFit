@@ -38,11 +38,13 @@ provider hierarchy -> recipe calculation (when needed) -> validation -> review
 * `NutritionResolutionService` separates product labels and verified provider
   records from local curated fallback. Every result carries source, record ID,
   serving amount/unit, grams, assumptions and verification state. Its injected
-  provider seams follow the order confirmed label → verified database → local
-  canonical record → ingredient calculation → explicitly labelled model
-  estimate. Every candidate passes `NutritionValidationService`; rejected
-  values become unavailable with a review reason rather than silently reaching
-  diary totals.
+  provider seams follow the order confirmed label → server-owned verified
+  database → local canonical record → ingredient calculation → explicitly
+  labelled model estimate. Every candidate passes
+  `NutritionValidationService`; rejected values become unavailable with a
+  review reason rather than silently reaching diary totals. The backend's
+  `/v1/nutrition-lookup` contract requires core nutrients and a source/version
+  before a record can be called verified.
 * `RecipeCalculationService` calculates a dish from independently resolved
   ingredients; the language model may propose ingredients, but does not supply
   their nutrition.
@@ -63,6 +65,12 @@ Corrupt or newer archives are left untouched and produce an explicit
 development diagnostic rather than being replaced with an empty store. A
 production account repository can later persist the same records behind the
 protocol; only user-confirmed preferences and labels are retained.
+
+The current server adapter targets USDA FoodData Central. Enable it only in the
+backend secret environment with `DIAFIT_NUTRITION_PROVIDER_MODE=usda` and
+`USDA_FDC_API_KEY`; never place that key in Xcode or the iOS bundle. The
+`MockNutritionProvider` and contract tests are deterministic and never call the
+network.
 
 ## Completeness gate
 

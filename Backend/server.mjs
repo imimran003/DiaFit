@@ -5,6 +5,13 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { GeminiMealParser, OpenAIMealParser, MockMealParser, validateMealParseResult } from './meal-understanding.mjs';
 import { DisabledMealVisualGenerator, GeminiMealVisualGenerator, validateMealVisualRequest } from './meal-visual.mjs';
+import {
+  DisabledNutritionProvider,
+  USDAFoodDataCentralProvider,
+  cacheKeyForNutrition,
+  validateNutritionLookupRequest,
+  validateNutritionLookupResponse
+} from './nutrition-provider.mjs';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const config = {
@@ -13,6 +20,8 @@ const config = {
   mode: process.env.DIAFIT_ANALYSIS_MODE ?? 'disabled',
   mealParserMode: process.env.DIAFIT_MEAL_PARSER_MODE ?? 'disabled',
   mealVisualMode: process.env.DIAFIT_MEAL_VISUAL_MODE ?? 'disabled',
+  nutritionProviderMode: process.env.DIAFIT_NUTRITION_PROVIDER_MODE ?? 'disabled',
+  nutritionDataVersion: process.env.NUTRITION_DATA_VERSION ?? 'FoodData Central API',
   developmentToken: process.env.DIAFIT_DEVELOPMENT_TOKEN ?? '',
   rateLimit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 20),
   timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 25_000)
@@ -49,7 +58,7 @@ createServer(async (request, response) => {
   setHeaders(response, requestId);
   try {
     if (request.method === 'GET' && request.url === '/health') {
-      return send(response, 200, { status: 'ok', apiVersion: 'v1', mode: config.mode, mealParserMode: config.mealParserMode, mealVisualMode: config.mealVisualMode, fixtureVersion: fixtures.version });
+      return send(response, 200, { status: 'ok', apiVersion: 'v1', mode: config.mode, mealParserMode: config.mealParserMode, mealVisualMode: config.mealVisualMode, nutritionProviderMode: config.nutritionProviderMode, fixtureVersion: fixtures.version });
     }
     if (request.method === 'POST' && request.url === '/v1/meal-parse') {
       const principal = authenticate(request);
@@ -85,6 +94,31 @@ createServer(async (request, response) => {
       }
       audit('meal_parse_completed', { requestId, principal, componentCount: result.detectedItems.length, unresolvedCount: result.unresolvedItems.length });
       return send(response, 200, responseBody);
+    }
+    if (request.method === 'POST' && request.url === '/v1/nutrition-lookup') {
+      const principal = authenticate(request);
+      if (!principal) return send(response, 401, { error: 'unauthorized', requestId });
+      if (!limiter.take(`${principal}:nutrition-lookup`)) return send(response, 429, { error: 'rate_limited', requestId });
+      const input = validateNutritionLookupRequest(await readJSON(request));
+      const cacheKey = cacheKeyForNutrition(principal, input);
+      const cached = nutritionCache.get(cacheKey);
+      if (cached && cached.expiresAt > Date.now()) return send(response, 200, cached.body);
+      if (cached) nutritionCache.delete(cacheKey);
+      const controller = new AbortController();
+      let result;
+      try {
+        result = await withTimeout(nutritionProvider.lookup(input, { signal: controller.signal }), Math.min(config.timeoutMs, 10_000));
+      } catch (error) {
+        controller.abort();
+        throw error;
+      }
+      if (!result) throw appError(404, 'nutrition_unavailable', 'No complete verified nutrition record matched this food.', true);
+      validateNutritionLookupResponse(result);
+      const body = { ...result, requestId };
+      if (nutritionCache.size >= 512) nutritionCache.delete(nutritionCache.keys().next().value);
+      nutritionCache.set(cacheKey, { body, expiresAt: Date.now() + 24 * 60 * 60_000 });
+      audit('nutrition_lookup_completed', { requestId, principal, sourceRecordID: result.sourceRecordID, provider: result.provenance.dataSource });
+      return send(response, 200, body);
     }
     if (request.method === 'POST' && request.url === '/v1/meal-visual') {
       const principal = authenticate(request);
@@ -328,9 +362,17 @@ const mealParser = config.mealParserMode === 'openai'
     : new DisabledMealParser();
 const mealParseCache = new Map();
 const mealVisualCache = new Map();
+const nutritionCache = new Map();
 const mealVisualGenerator = config.mealVisualMode === 'gemini'
   ? new GeminiMealVisualGenerator()
   : new DisabledMealVisualGenerator();
+const nutritionProvider = config.nutritionProviderMode === 'usda'
+  ? new USDAFoodDataCentralProvider({
+      apiKey: process.env.USDA_FDC_API_KEY,
+      dataVersion: config.nutritionDataVersion,
+      timeoutMs: Math.min(config.timeoutMs, 10_000)
+    })
+  : new DisabledNutritionProvider();
 
 function parserModelName() {
   if (config.mealParserMode === 'openai') return process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini';
@@ -338,6 +380,9 @@ function parserModelName() {
   return 'development-mock';
 }
 
-class DisabledMealParser {
-  async parse() { throw appError(503, 'provider_unavailable', 'Meal understanding is not configured.', true); }
-}
+// Function declarations are hoisted so the disabled parser can be selected
+// during module initialisation before the rest of the server helpers load.
+function DisabledMealParser() {}
+DisabledMealParser.prototype.parse = async function parse() {
+  throw appError(503, 'provider_unavailable', 'Meal understanding is not configured.', true);
+};

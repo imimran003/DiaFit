@@ -348,6 +348,152 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
     }
 }
 
+/// Backend adapter for the strict, provenance-bearing nutrition endpoint.
+/// Provider credentials remain on the server; the app sends only canonical
+/// identity and a serving conversion. A missing or incomplete response is
+/// returned as `nil` so the resolver can use its explicit fallback hierarchy.
+struct BackendVerifiedNutritionProvider: VerifiedNutritionProvider, Sendable {
+    let endpoint: URL
+    let tokenProvider: BackendAccessTokenProvider
+    let session: URLSession
+
+    var identifier: String { "backend-verified-nutrition" }
+
+    init(endpoint: URL, tokenProvider: BackendAccessTokenProvider, session: URLSession = .shared) {
+        self.endpoint = endpoint
+        self.tokenProvider = tokenProvider
+        self.session = session
+    }
+
+    func lookup(canonicalSearchName: String, estimatedGrams: Double?) async throws -> NutritionLookup? {
+        let token = try await tokenProvider.accessToken()
+        let idempotencyKey = "nutrition-lookup-" + UUID().uuidString
+        var request = URLRequest(url: endpoint.appending(path: "v1/nutrition-lookup"))
+        request.httpMethod = "POST"
+        request.timeoutInterval = 8
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
+        request.httpBody = try JSONEncoder().encode(LookupRequest(
+            apiVersion: "v1",
+            canonicalSearchName: canonicalSearchName,
+            estimatedGrams: estimatedGrams,
+            idempotencyKey: idempotencyKey
+        ))
+
+        let (data, response) = try await perform(request)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        if status == 404 || status == 422 { return nil }
+        guard (200..<300).contains(status) else {
+            FoodLoggingDiagnostics.record("backend.nutrition-lookup", fields: [
+                "status": "http-error", "statusCode": String(status), "responseBytes": String(data.count)
+            ])
+            throw FoodAnalysisError.endpointUnavailable
+        }
+        do {
+            let result = try Self.decodeResponse(data)
+            FoodLoggingDiagnostics.record("backend.nutrition-lookup", fields: [
+                "status": "decoded", "sourceRecordID": result.provenance.sourceRecordID ?? "missing",
+                "responseBytes": String(data.count)
+            ])
+            return result
+        } catch {
+            FoodLoggingDiagnostics.record("backend.nutrition-lookup", fields: [
+                "status": "decode-error", "responseBytes": String(data.count)
+            ])
+            throw FoodAnalysisError.malformedProviderResponse
+        }
+    }
+
+    static func decodeResponse(_ data: Data) throws -> NutritionLookup {
+        let response = try JSONDecoder().decode(LookupResponse.self, from: data)
+        guard response.apiVersion == "v1",
+              response.sourceRecordID.isEmpty == false,
+              response.provenance.kind == .verifiedDatabase,
+              let dataVersion = response.provenance.dataVersion,
+              !dataVersion.isEmpty,
+              response.serving.unit == "g",
+              response.serving.grams.isFinite,
+              response.serving.grams > 0,
+              response.values.caloriesKcal?.isFinite == true,
+              response.values.proteinGrams?.isFinite == true,
+              response.values.carbohydrateGrams?.isFinite == true else {
+            throw FoodAnalysisError.malformedProviderResponse
+        }
+        let allValues = [
+            response.values.caloriesKcal, response.values.proteinGrams,
+            response.values.carbohydrateGrams, response.values.availableCarbohydrateGrams,
+            response.values.fatGrams, response.values.saturatedFatGrams,
+            response.values.fibreGrams, response.values.totalSugarGrams,
+            response.values.addedSugarGrams, response.values.sodiumMilligrams,
+            response.values.cholesterolMilligrams
+        ]
+        guard allValues.compactMap({ $0 }).allSatisfy({ $0.isFinite && $0 >= 0 }) else {
+            throw FoodAnalysisError.malformedProviderResponse
+        }
+        let provenance = NutritionProvenance(
+            kind: response.provenance.kind,
+            dataSource: response.provenance.dataSource,
+            dataVersion: dataVersion,
+            confidence: response.provenance.confidence,
+            sourceRecordID: response.sourceRecordID
+        )
+        return NutritionLookup(values: response.values, provenance: provenance)
+    }
+
+    private func perform(_ request: URLRequest) async throws -> (Data, URLResponse) {
+        var lastError: Error = FoodAnalysisError.endpointUnavailable
+        for attempt in 0..<2 {
+            do {
+                let result = try await session.data(for: request)
+                let status = (result.1 as? HTTPURLResponse)?.statusCode
+                let retryable = status == 408 || status == 429 || status.map { (500...599).contains($0) } == true
+                if attempt == 0, retryable {
+                    try? await Task.sleep(for: .milliseconds(350))
+                    continue
+                }
+                return result
+            } catch let error as URLError {
+                lastError = error
+                let retryable = [URLError.Code.networkConnectionLost, .cannotConnectToHost, .notConnectedToInternet, .dnsLookupFailed].contains(error.code)
+                guard attempt == 0, retryable else { throw error }
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+        }
+        throw lastError
+    }
+
+    private struct LookupRequest: Encodable {
+        let apiVersion: String
+        let canonicalSearchName: String
+        let estimatedGrams: Double?
+        let idempotencyKey: String
+    }
+
+    private struct LookupResponse: Decodable {
+        let apiVersion: String
+        let sourceRecordID: String
+        let serving: Serving
+        let nutrients: NutritionValues
+        let provenance: Provenance
+
+        var values: NutritionValues { nutrients }
+    }
+
+    private struct Serving: Decodable {
+        let amount: Double
+        let unit: String
+        let grams: Double
+    }
+
+    private struct Provenance: Decodable {
+        let kind: NutritionProvenance.Kind
+        let dataSource: String
+        let dataVersion: String?
+        let confidence: ConfidenceLevel
+    }
+}
+
 // MARK: - Canonical normalisation and user memory
 
 struct CanonicalFoodMatch: Hashable, Sendable {
@@ -896,12 +1042,21 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
             ).resolve(item: item, canonical: canonical)
         }
 
+        // Resolve a provider serving conversion before the network call. A
+        // provider value is never assumed to mean 100 g when the canonical
+        // serving (for example one egg or one katori) already has a known
+        // conversion.
+        let serving = ServingUnit(rawValue: unit) ?? canonical?.food.standardServing?.unit ?? .serving
+        let providerGrams = item.estimatedGrams
+            ?? canonical.flatMap { portions.estimatedWeight(quantity: amount, unit: serving, food: $0.food) }
+            ?? canonical?.food.standardServing?.grams
+
         if let verifiedProvider {
-            if let lookup = try? await verifiedProvider.lookup(canonicalSearchName: item.canonicalSearchName, estimatedGrams: item.estimatedGrams) {
+            if let lookup = try? await verifiedProvider.lookup(canonicalSearchName: item.canonicalSearchName, estimatedGrams: providerGrams) {
                 return validatedResolution(values: lookup.values, provenance: lookup.provenance,
-                                           sourceRecordID: lookup.provenance.dataSource,
+                                           sourceRecordID: lookup.provenance.sourceRecordID ?? lookup.provenance.dataSource,
                                            servingAmount: amount, servingUnit: unit,
-                                           estimatedGrams: item.estimatedGrams,
+                                           estimatedGrams: providerGrams,
                                            assumptions: ["Nutrition matched by verified provider \(verifiedProvider.identifier)."])
             }
         }
@@ -911,7 +1066,6 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
                                        estimatedGrams: item.estimatedGrams,
                                        assumptions: ["No verified canonical food match was available."])
         }
-        let serving = ServingUnit(rawValue: unit) ?? canonical.food.standardServing?.unit ?? .serving
         let grams = item.estimatedGrams ?? portions.estimatedWeight(quantity: amount, unit: serving, food: canonical.food)
         let lookup = CatalogNutritionLookupService().nutrition(for: canonical.food, estimatedWeightGrams: grams)
         if !lookup.values.isEmpty {

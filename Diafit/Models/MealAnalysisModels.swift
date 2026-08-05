@@ -316,12 +316,16 @@ struct NutritionProvenance: Codable, Hashable, Sendable {
     var dataSource: String
     var dataVersion: String?
     var confidence: ConfidenceLevel
+    /// Stable provider record identifier (for example `fdc:12345`). Optional
+    /// keeps older diary archives decodable during migration.
+    var sourceRecordID: String? = nil
 
     static let unavailable = NutritionProvenance(
         kind: .unavailable,
         dataSource: "No supported nutrition source",
         dataVersion: nil,
-        confidence: .unknown
+        confidence: .unknown,
+        sourceRecordID: nil
     )
 }
 

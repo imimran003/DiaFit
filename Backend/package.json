@@ -7,7 +7,7 @@
     "start": "node server.mjs",
     "check": "node --check server.mjs",
     "check:meal-understanding": "node --check meal-understanding.mjs",
-    "test": "node --test meal-understanding.test.mjs meal-visual.test.mjs",
+    "test": "node --test meal-understanding.test.mjs meal-visual.test.mjs nutrition-provider.test.mjs",
     "test:live-photo": "node live-meal-parse.mjs",
     "evaluate:food-resolution": "node evaluate-food-resolution.mjs",
     "evaluate": "node evaluate.mjs"
