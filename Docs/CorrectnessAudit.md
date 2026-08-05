@@ -39,6 +39,44 @@ and recipe composition still require review, and production distribution still
 requires deployed HTTPS, account authentication, managed secrets, provider
 monitoring, nutrition-source licensing and explicit photo-processing consent.
 
+## 2026-08-05 — Partial on-device label could leak into photo review
+
+The reported sprouts-and-eggs screenshot exposed a gap after the structured
+provider had not produced a usable inventory: the private Vision classifier
+returned one canonical `peanut` label, and the local nutrition path returned an
+incomplete but non-empty result. The orchestrator only withheld on-device
+results when local nutrition happened to be complete, so the review card could
+show a plausible six-kcal peanut row while the rest of the plate was missing.
+That was a routing/completeness defect, not evidence that the photo contained
+only a peanut.
+
+The image-only fallback now has a final invariant: any on-device candidate is
+withheld unless structured vision has already cleared the full inventory and
+nutrition gates. The result keeps the prepared photo, exposes a single retry
+or manual food-name recovery path, and cannot be confirmed. The review card
+also masks component rows and nutrient totals when a stale draft is marked for
+inventory recovery, preventing old drafts from presenting the same misleading
+partial meal.
+
+Verification added:
+
+- deterministic regression for an unconfigured backend plus a single `peanut`
+  candidate (no detected items, no totals, free-text recovery required);
+- iOS app and test bundle compile with the Xcode Default toolchain;
+- backend tests remain 4/4 and the opt-in bundled-image Gemini smoke returned
+  three schema-valid food components.
+
+The live backend is still an explicit development dependency: configure
+`DIAFIT_BACKEND_URL` and `DIAFIT_BACKEND_ACCESS_TOKEN` in the user-only Xcode
+scheme (or use the stored debug Keychain configuration). Without it, the app
+now fails safely instead of claiming to have identified a photo.
+
+The debug configuration store now verifies its Keychain write and uses a
+complete-file-protected app-container fallback only when the simulator's
+Keychain service is unavailable. This keeps the endpoint available after a
+Home-screen relaunch during device testing without moving provider credentials
+into the app bundle or any release configuration.
+
 ## 2026-08-04 — End-to-end QA closure
 
 The production-style QA pass covered the food and nutrition pipeline, typed

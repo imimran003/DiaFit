@@ -946,17 +946,11 @@ struct PhotoAnalysisOrchestrator: Sendable {
             // passes, never replace its rejected result with an equally
             // plausible-looking local pair. Preserve the photo and expose a
             // retry/manual recovery state instead of enabling confirmation.
-            var unresolved = local.makeAnalysis(
-                description: "",
-                imageReference: image.imageReference,
-                imageType: .originalPhoto
+            return unresolvedPhotoResult(
+                image: image,
+                modelVersion: "Structured AI inventory withheld after independent review",
+                warning: "AI couldn’t complete the full plate inventory safely. Retry recognition or name the visible foods before saving."
             )
-            unresolved.recognitionModelVersion = "Structured AI inventory withheld after independent review"
-            unresolved.warnings.insert(
-                "AI couldn’t complete the full plate inventory safely. Retry recognition or name the visible foods before saving.",
-                at: 0
-            )
-            return unresolved
         }
 
         var candidates: [FoodImageCandidate] = []
@@ -1003,6 +997,38 @@ struct PhotoAnalysisOrchestrator: Sendable {
         }
         let localCompleteness = completeness.evaluate(result)
 
+        // A Vision label is never an inventory. Previously this branch only
+        // withheld a *complete* on-device result; an incomplete label such as
+        // “Peanut” could therefore leak into the review card, where it looked
+        // like the uploaded plate had been understood even though eggs and
+        // sprouts were missing. Image-only candidates must always be withheld
+        // unless structured vision returned a complete result above. This is a
+        // provider-independent invariant, so it also protects future local
+        // classifiers and stale backend responses.
+        if trimmedDescription.isEmpty, !candidates.isEmpty {
+            let warning: String
+            let modelVersion: String
+            if remote == nil {
+                warning = "Secure AI recognition is not configured. The private on-device label was withheld until the full plate can be scanned."
+                modelVersion = "On-device whole-image suggestions withheld"
+            } else if remoteFailed {
+                warning = "Live recognition is unavailable. The private on-device label was withheld because it may omit foods elsewhere in the photo."
+                modelVersion = "On-device whole-image suggestions withheld after backend failure"
+            } else {
+                warning = "AI returned only a partial plate inventory. Retry recognition or name the visible foods before saving."
+                modelVersion = "Partial structured inventory withheld"
+            }
+            FoodLoggingDiagnostics.record("photo.classification", fields: [
+                "route": "image-only-candidate-withheld",
+                "candidateCount": String(candidates.count),
+                "canonicalIDs": candidates.map(\.canonicalFoodId).joined(separator: ","),
+                "remoteAttempted": String(remote != nil),
+                "remoteFailed": String(remoteFailed),
+                "localMissing": localCompleteness.missingRequirements.joined(separator: ",")
+            ])
+            return unresolvedPhotoResult(image: image, modelVersion: modelVersion, warning: warning)
+        }
+
         // If the structured provider and the private classifier agree only on
         // one tiny/salient item, do not turn that agreement into a saved meal.
         // Keep the photo and route the member to the recoverable retry state;
@@ -1016,25 +1042,13 @@ struct PhotoAnalysisOrchestrator: Sendable {
             let liveRecognitionUnavailable = remote == nil || remoteFailed
             if liveRecognitionUnavailable,
                !isSafeFallback(memberDescription: trimmedDescription) {
-                var unresolved = local.makeAnalysis(
-                    description: "",
-                    imageReference: image.imageReference,
-                    imageType: .originalPhoto
-                )
-                unresolved.recognitionModelVersion = "On-device whole-image suggestions withheld"
-                unresolved.warnings.insert(
-                    remoteFailed
+                return unresolvedPhotoResult(
+                    image: image,
+                    modelVersion: "On-device whole-image suggestions withheld",
+                    warning: remoteFailed
                         ? "Live recognition is unavailable. The private whole-image suggestions were too broad to identify this plate safely."
-                        : "Secure AI recognition is not configured. The private whole-image suggestions were too broad to identify this plate safely.",
-                    at: 0
+                        : "Secure AI recognition is not configured. The private whole-image suggestions were too broad to identify this plate safely."
                 )
-                FoodLoggingDiagnostics.record("photo.classification", fields: [
-                    "route": "unsafe-on-device-suggestions-withheld",
-                    "candidateCount": String(candidates.count),
-                    "remoteAttempted": String(remote != nil),
-                    "remoteFailed": String(remoteFailed)
-                ])
-                return unresolved
             }
             if remoteFailed {
                 result.overallConfidence = .low
@@ -1094,6 +1108,21 @@ struct PhotoAnalysisOrchestrator: Sendable {
         // to auto-confirm an image-only meal. A member-entered description is
         // explicit evidence and may still use the local nutrition path.
         !memberDescription.isEmpty
+    }
+
+    private func unresolvedPhotoResult(
+        image: PreparedFoodImage,
+        modelVersion: String,
+        warning: String
+    ) -> MealAnalysisResult {
+        var unresolved = local.makeAnalysis(
+            description: "",
+            imageReference: image.imageReference,
+            imageType: .originalPhoto
+        )
+        unresolved.recognitionModelVersion = modelVersion
+        unresolved.warnings.insert(warning, at: 0)
+        return unresolved
     }
 
     private func safeRemoteFailureReason(_ error: Error) -> String {

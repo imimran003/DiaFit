@@ -171,6 +171,20 @@ struct DevelopmentBackendConfigurationStore: RuntimeBackendConfigurationStoring,
     }
 
     func load() -> RuntimeBackendConfiguration? {
+        if let keychainCredential = loadKeychainCredential() {
+            return RuntimeBackendConfiguration(rawURL: keychainCredential.url, accessToken: keychainCredential.token)
+        }
+        // The simulator test host can expose a temporarily unavailable
+        // Keychain service even though the app container is healthy. Keep a
+        // development-only, data-protected fallback so a configured photo-AI
+        // endpoint is not silently forgotten on the next Home-screen launch.
+        // Release builds never construct this store.
+        guard let data = try? Data(contentsOf: fallbackURL),
+              let credential = try? JSONDecoder().decode(Credential.self, from: data) else { return nil }
+        return RuntimeBackendConfiguration(rawURL: credential.url, accessToken: credential.token)
+    }
+
+    private func loadKeychainCredential() -> Credential? {
         var query = baseQuery
         query[kSecReturnData as String] = true
         query[kSecMatchLimit as String] = kSecMatchLimitOne
@@ -178,24 +192,49 @@ struct DevelopmentBackendConfigurationStore: RuntimeBackendConfigurationStoring,
         guard SecItemCopyMatching(query as CFDictionary, &result) == errSecSuccess,
               let data = result as? Data,
               let credential = try? JSONDecoder().decode(Credential.self, from: data) else { return nil }
-        return RuntimeBackendConfiguration(rawURL: credential.url, accessToken: credential.token)
+        return credential
     }
 
     func save(_ configuration: RuntimeBackendConfiguration) {
         let credential = Credential(url: configuration.endpoint.absoluteString, token: configuration.accessToken)
         guard let data = try? JSONEncoder().encode(credential) else { return }
         let attributes = [kSecValueData as String: data]
-        let status = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
-        if status == errSecItemNotFound {
-            var insertion = baseQuery
-            insertion[kSecValueData as String] = data
-            insertion[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            SecItemAdd(insertion as CFDictionary, nil)
+        let updateStatus = SecItemUpdate(baseQuery as CFDictionary, attributes as CFDictionary)
+        guard updateStatus != errSecSuccess else { return }
+
+        // `SecItemUpdate` can return a different failure than
+        // `errSecItemNotFound` when the app is first launched in a simulator
+        // or after a development entitlement changes. Treat every non-success
+        // as an insert-or-replace path; otherwise a valid launch environment
+        // is silently lost and the next Home-screen launch falls back to the
+        // incomplete on-device photo classifier.
+        var insertion = baseQuery
+        insertion[kSecValueData as String] = data
+        insertion[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+        let addStatus = SecItemAdd(insertion as CFDictionary, nil)
+        if addStatus == errSecDuplicateItem {
+            SecItemDelete(baseQuery as CFDictionary)
+            _ = SecItemAdd(insertion as CFDictionary, nil)
+        }
+
+        // Verify the write. If the simulator or a development entitlement
+        // prevents Keychain persistence, retain the same temporary credential
+        // in a protected app-container file rather than making the next photo
+        // analysis silently fall back to a single Vision label.
+        if loadKeychainCredential() == nil {
+            try? FileManager.default.createDirectory(
+                at: fallbackDirectory,
+                withIntermediateDirectories: true
+            )
+            try? data.write(to: fallbackURL, options: .completeFileProtection)
+        } else {
+            try? FileManager.default.removeItem(at: fallbackURL)
         }
     }
 
     func remove() {
         SecItemDelete(baseQuery as CFDictionary)
+        try? FileManager.default.removeItem(at: fallbackURL)
     }
 
     private var baseQuery: [String: Any] {
@@ -204,6 +243,21 @@ struct DevelopmentBackendConfigurationStore: RuntimeBackendConfigurationStoring,
             kSecAttrService as String: service,
             kSecAttrAccount as String: "runtime-backend"
         ]
+    }
+
+    private var fallbackDirectory: URL {
+        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
+            ?? FileManager.default.temporaryDirectory
+        return base.appendingPathComponent("Diafit/Development", isDirectory: true)
+    }
+
+    private var fallbackURL: URL {
+        let safeService = service.map { character in
+            character.isLetter || character.isNumber || character == "." || character == "-" || character == "_"
+                ? String(character)
+                : "_"
+        }.joined()
+        return fallbackDirectory.appendingPathComponent("backend-\(safeService).json")
     }
 
     private struct Credential: Codable {

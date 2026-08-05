@@ -120,7 +120,7 @@ struct MealAnalysisReviewCard: View {
                     retryAnalysis: retryAnalysis,
                     addComponent: addComponent
                 )
-            } else {
+            } else if !photoNeedsInventoryRecovery {
                 VStack(spacing: 8) {
                     ForEach(result.detectedItems) { item in
                         DetectedItemEditor(
@@ -133,6 +133,16 @@ struct MealAnalysisReviewCard: View {
                         )
                     }
                 }
+            } else {
+                // Keep stale drafts safe as well as newly analysed photos. A
+                // partial image inventory must never show a plausible-looking
+                // item (for example “Peanut”) next to totals; the recovery
+                // notice above is the single source of truth until AI scans
+                // the whole plate or the member names the foods manually.
+                Text("Partial labels are hidden until the full plate is identified.")
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+                    .padding(.horizontal, 3)
             }
 
             summary
@@ -282,10 +292,10 @@ struct MealAnalysisReviewCard: View {
 
     private var summary: some View {
         HStack(spacing: 7) {
-            SummaryMetric(value: NutritionFormatter.energy(result.mealTotals.caloriesKcal), label: "kcal", tint: .ink)
-            SummaryMetric(value: NutritionFormatter.grams(result.mealTotals.carbohydrateGrams), label: "carbs", tint: .coral)
-            SummaryMetric(value: NutritionFormatter.grams(result.mealTotals.fibreGrams), label: "fibre", tint: .lime)
-            SummaryMetric(value: NutritionFormatter.grams(result.mealTotals.proteinGrams), label: "protein", tint: .saffron)
+            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.energy(result.mealTotals.caloriesKcal), label: "kcal", tint: .ink)
+            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.grams(result.mealTotals.carbohydrateGrams), label: "carbs", tint: .coral)
+            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.grams(result.mealTotals.fibreGrams), label: "fibre", tint: .lime)
+            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.grams(result.mealTotals.proteinGrams), label: "protein", tint: .saffron)
         }
     }
 

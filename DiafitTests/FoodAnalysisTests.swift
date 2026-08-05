@@ -749,6 +749,32 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(result.imageType, .originalPhoto)
     }
 
+    func testIncompleteImageOnlyPeanutLabelIsWithheldBeforeItCanMasqueradeAsThePlate() async throws {
+        // This models the reported sprouts-and-eggs failure when the backend
+        // is unavailable: Apple Vision notices one peanut, local nutrition is
+        // still able to produce a tiny estimate, and the old gate returned it
+        // to the review card. A valid nutrition value is not proof of a full
+        // image inventory, so the candidate must be replaced by recovery.
+        let classifier = StubFoodImageClassificationService(candidates: [
+            FoodImageCandidate(canonicalFoodId: "peanut", sourceLabel: "peanut", confidence: 0.79)
+        ])
+        let result = await PhotoAnalysisOrchestrator(
+            remote: nil,
+            onDevice: classifier,
+            local: LocalMealAnalysisEngine(catalog: catalog)
+        ).analyse(image: fixtureFoodImage(), description: "")
+
+        XCTAssertTrue(result.detectedItems.isEmpty)
+        XCTAssertTrue(result.mealTotals.isEmpty)
+        XCTAssertFalse(result.nutritionValidation?.isApproved == true)
+        XCTAssertTrue(result.warnings.contains {
+            $0.localizedCaseInsensitiveContains("withheld")
+                || $0.localizedCaseInsensitiveContains("configured")
+                || $0.localizedCaseInsensitiveContains("full plate")
+        })
+        XCTAssertTrue(result.clarificationQuestions.contains { $0.answerType == .freeText })
+    }
+
     func testMasoorDaalWithRotiKeepsBothComponentsAndExplicitQuantities() async throws {
         let result = await HybridMealAnalysisCoordinator(
             router: DefaultFoodResolutionRouter(catalog: catalog)
