@@ -16,6 +16,9 @@ struct MealAnalysisResult: Identifiable, Codable, Hashable, Sendable {
     var warnings: [String]
     let createdAt: Date
     var recognitionModelVersion: String?
+    /// Evidence from structured image understanding that the full frame was
+    /// inventoried. Text and legacy local analyses leave this nil.
+    var visualCoverage: MealVisualCoverage? = nil
     var nutritionDatabaseVersion: String?
     var glycaemicDatabaseVersion: String?
     var nutritionProvenance: NutritionProvenance

@@ -9,15 +9,37 @@
 export const MEAL_PARSE_SCHEMA = {
   type: 'object',
   additionalProperties: false,
-  required: ['detectedItems', 'unresolvedItems', 'mealDescription', 'clarificationQuestions', 'confidence'],
+  required: ['detectedItems', 'unresolvedItems', 'mealDescription', 'clarificationQuestions', 'confidence', 'visualCoverage'],
   properties: {
     detectedItems: { type: 'array', items: parsedFoodItemSchema() },
     unresolvedItems: { type: 'array', items: { type: 'string' } },
     mealDescription: { type: 'string' },
     clarificationQuestions: { type: 'array', items: { type: 'string' } },
-    confidence: { type: 'number' }
+    confidence: { type: 'number' },
+    visualCoverage: {
+      anyOf: [visualCoverageSchema(), { type: 'null' }]
+    }
   }
 };
+
+function visualCoverageSchema() {
+  return {
+    type: 'object',
+    additionalProperties: false,
+    required: [
+      'scannedRegions', 'visibleServingCount', 'distinctServingCount',
+      'occludedRegions', 'inventoryComplete', 'coverageConfidence'
+    ],
+    properties: {
+      scannedRegions: { type: 'array', items: { type: 'string' } },
+      visibleServingCount: { type: 'integer', minimum: 0 },
+      distinctServingCount: { type: 'integer', minimum: 0 },
+      occludedRegions: { type: 'array', items: { type: 'string' } },
+      inventoryComplete: { type: 'boolean' },
+      coverageConfidence: { type: 'number', minimum: 0, maximum: 1 }
+    }
+  };
+}
 
 function parsedFoodItemSchema() {
   return {
@@ -124,6 +146,7 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'For an identified packaged food whose nutrition panel is incomplete or not visible, provide aiNutritionEstimate as a conservative estimate of calories, protein, carbohydrate, fat, saturated fat, fibre, total sugar, and sodium for the visible package or serving. Keep it separate from packagedLabelEvidence, state package-size and product-category assumptions, and set confidence below 0.85. A printed value may also appear in the complete estimate, but packagedLabelEvidence remains authoritative and the estimate must not alter it. If product identity is too uncertain for a useful estimate, return aiNutritionEstimate null.',
   'AI nutrition estimates must include calories, protein, carbohydrate, and fat, use non-negative finite values, and have energy reasonably consistent with 4 kcal/g protein, 4 kcal/g carbohydrate, and 9 kcal/g fat.',
   'For images, inspect the whole composition systematically before naming the dish: scan top-to-bottom and left-to-right across the main plate, every separate bowl, and partially visible plate edges, then return each distinct physical food serving exactly once.',
+  'For an image, always return visualCoverage (never null). List the regions you actually scanned, count visibleServingCount and distinctServingCount conservatively, list any occluded or cropped regions, and set inventoryComplete false whenever a visible serving may be missing. A photo fast path is allowed only when inventoryComplete is true, distinctServingCount agrees with detectedItems after duplicate merging, and coverageConfidence is at least 0.82.',
   'Do not stop after the first recognisable ingredient. A plate with several bowls or piles must produce one detectedItems entry for every visually separable serving, even when one item is only moderately confident; preserve that item with lower confidence and a clarification instead of omitting it.',
   'A lone nut, seed, garnish, topping, or other tiny ingredient is never a complete inventory for a plate photograph. If the first salient object is a tiny ingredient, deliberately rescan the full image before responding and include the larger foods and separate piles around it. Do not return a one-item garnish answer unless the entire frame genuinely contains only that ingredient.',
   'As a concrete full-plate check, when boiled eggs and a pile of mixed sprouts, legumes, or nuts are visible, return separate entries for the eggs, the sprouts/legumes, and each clearly separable nut group; never stop at a single peanut or garnish.',
@@ -167,11 +190,20 @@ export function buildGeminiMealParseRequest({ text, imageBase64, mimeType }) {
 }
 
 export class OpenAIMealParser {
-  constructor({ apiKey = process.env.OPENAI_API_KEY, model = process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini', fetchImpl = globalThis.fetch, endpoint = 'https://api.openai.com/v1/responses' } = {}) {
+  constructor({
+    apiKey = process.env.OPENAI_API_KEY,
+    model = process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini',
+    fetchImpl = globalThis.fetch,
+    endpoint = 'https://api.openai.com/v1/responses',
+    maxAttempts = providerAttemptCount(),
+    retryBaseDelayMs = providerRetryBaseDelay()
+  } = {}) {
     this.apiKey = apiKey;
     this.model = model;
     this.fetch = fetchImpl;
     this.endpoint = endpoint;
+    this.maxAttempts = maxAttempts;
+    this.retryBaseDelayMs = retryBaseDelayMs;
   }
 
   async parse(input, { signal } = {}) {
@@ -185,13 +217,14 @@ export class OpenAIMealParser {
     };
     let response;
     try {
-      response = await this.fetch(this.endpoint, {
+      response = await fetchWithRetry(this.fetch, this.endpoint, {
         method: 'POST',
         headers: { authorization: `Bearer ${this.apiKey}`, 'content-type': 'application/json' },
         body: JSON.stringify(payload),
         signal
-      });
+      }, { maxAttempts: this.maxAttempts, retryBaseDelayMs: this.retryBaseDelayMs, signal });
     } catch (error) {
+      if (signal?.aborted) throw error;
       throw providerError(503, 'provider_unavailable', 'Meal understanding provider could not be reached.', error);
     }
     if (!response?.ok) {
@@ -206,7 +239,7 @@ export class OpenAIMealParser {
     let result;
     try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
     const sanitized = sanitizeMealParseResult(result);
-    validateMealParseResult(sanitized);
+    validateMealParseResult(sanitized, { requireVisualCoverage: Boolean(input.imageBase64) });
     return sanitized;
   }
 }
@@ -224,12 +257,16 @@ export class GeminiMealParser {
     apiKey = process.env.GEMINI_API_KEY,
     model = process.env.GEMINI_MEAL_MODEL ?? 'gemini-3.1-flash-lite',
     fetchImpl = globalThis.fetch,
-    endpointBase = 'https://generativelanguage.googleapis.com/v1beta/models'
+    endpointBase = 'https://generativelanguage.googleapis.com/v1beta/models',
+    maxAttempts = providerAttemptCount(),
+    retryBaseDelayMs = providerRetryBaseDelay()
   } = {}) {
     this.apiKey = apiKey;
     this.model = model;
     this.fetch = fetchImpl;
     this.endpoint = `${endpointBase}/${encodeURIComponent(model)}:generateContent`;
+    this.maxAttempts = maxAttempts;
+    this.retryBaseDelayMs = retryBaseDelayMs;
   }
 
   async parse(input, { signal } = {}) {
@@ -238,13 +275,14 @@ export class GeminiMealParser {
     const payload = buildGeminiMealParseRequest(input);
     let response;
     try {
-      response = await this.fetch(this.endpoint, {
+      response = await fetchWithRetry(this.fetch, this.endpoint, {
         method: 'POST',
         headers: { 'x-goog-api-key': this.apiKey, 'content-type': 'application/json' },
         body: JSON.stringify(payload),
         signal
-      });
+      }, { maxAttempts: this.maxAttempts, retryBaseDelayMs: this.retryBaseDelayMs, signal });
     } catch (error) {
+      if (signal?.aborted) throw error;
       throw providerError(503, 'provider_unavailable', 'Meal understanding provider could not be reached.', error);
     }
     if (!response?.ok) {
@@ -264,7 +302,7 @@ export class GeminiMealParser {
     let result;
     try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
     const sanitized = sanitizeMealParseResult(result);
-    validateMealParseResult(sanitized);
+    validateMealParseResult(sanitized, { requireVisualCoverage: Boolean(input.imageBase64) });
     return sanitized;
   }
 }
@@ -317,18 +355,35 @@ export function sanitizeMealParseResult(result) {
   return { ...result, detectedItems: [...byIdentity.values()], clarificationQuestions };
 }
 
-export function validateMealParseResult(result) {
+export function validateMealParseResult(result, { requireVisualCoverage = false } = {}) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw providerError(502, 'malformed_provider_response', 'Meal parse result must be an object.');
-  const allowed = new Set(['detectedItems', 'unresolvedItems', 'mealDescription', 'clarificationQuestions', 'confidence']);
+  const allowed = new Set(['detectedItems', 'unresolvedItems', 'mealDescription', 'clarificationQuestions', 'confidence', 'visualCoverage']);
   if (Object.keys(result).some(key => !allowed.has(key))) throw providerError(502, 'malformed_provider_response', 'Meal parse result contains an unexpected field.');
   if (!Array.isArray(result.detectedItems) || !Array.isArray(result.unresolvedItems) || !Array.isArray(result.clarificationQuestions) || result.unresolvedItems.some(value => typeof value !== 'string') || result.clarificationQuestions.some(value => typeof value !== 'string')) throw providerError(502, 'malformed_provider_response', 'Meal parse arrays are invalid.');
   if (typeof result.mealDescription !== 'string' || !finiteConfidence(result.confidence)) throw providerError(502, 'malformed_provider_response', 'Meal parse metadata is invalid.');
+  if (requireVisualCoverage && result.visualCoverage == null) throw providerError(502, 'malformed_provider_response', 'Image parse is missing visual coverage evidence.');
+  validateVisualCoverage(result.visualCoverage);
   for (const item of result.detectedItems) validateParsedFoodItem(item);
   const duplicateIdentities = duplicateFoodIdentities(result.detectedItems);
   if (duplicateIdentities.length) {
     throw providerError(502, 'duplicate_food_components', 'Meal understanding returned the same food component more than once.', duplicateIdentities.join(','));
   }
   return result;
+}
+
+function validateVisualCoverage(coverage) {
+  if (coverage === null || coverage === undefined) return;
+  if (!coverage || typeof coverage !== 'object' || Array.isArray(coverage)) throw providerError(502, 'malformed_provider_response', 'Visual coverage is invalid.');
+  const required = ['scannedRegions', 'visibleServingCount', 'distinctServingCount', 'occludedRegions', 'inventoryComplete', 'coverageConfidence'];
+  const allowed = new Set(required);
+  if (Object.keys(coverage).some(key => !allowed.has(key)) || required.some(key => !(key in coverage))) throw providerError(502, 'malformed_provider_response', 'Visual coverage has an invalid shape.');
+  if (!Array.isArray(coverage.scannedRegions) || coverage.scannedRegions.some(value => typeof value !== 'string' || !value.trim())
+      || !Array.isArray(coverage.occludedRegions) || coverage.occludedRegions.some(value => typeof value !== 'string')
+      || !Number.isInteger(coverage.visibleServingCount) || coverage.visibleServingCount < 0
+      || !Number.isInteger(coverage.distinctServingCount) || coverage.distinctServingCount < 0
+      || typeof coverage.inventoryComplete !== 'boolean' || !finiteConfidence(coverage.coverageConfidence)) {
+    throw providerError(502, 'malformed_provider_response', 'Visual coverage metadata is invalid.');
+  }
 }
 
 function duplicateFoodIdentities(items) {
@@ -414,9 +469,86 @@ async function safeResponseText(response) {
   try { return String(await response.text()).slice(0, 500); } catch { return ''; }
 }
 
+/**
+ * Provider transport is deliberately retried here rather than in the iOS
+ * target. A retry uses the same request body and caller idempotency context,
+ * never logs the image or provider key, and stops immediately when the route
+ * timeout aborts the request.
+ */
+export async function fetchWithRetry(fetchImpl, url, options, {
+  maxAttempts = providerAttemptCount(),
+  retryBaseDelayMs = providerRetryBaseDelay(),
+  signal
+} = {}) {
+  const attempts = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
+  const baseDelay = Math.max(0, Math.min(2_000, Number(retryBaseDelayMs) || 0));
+  let lastError;
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (signal?.aborted) throw abortError();
+    try {
+      const response = await fetchImpl(url, options);
+      if (attempt + 1 >= attempts || !retryableProviderStatus(response?.status)) return response;
+      const retryAfter = retryAfterMilliseconds(response);
+      await waitForRetry(retryAfter ?? baseDelay * (2 ** attempt), signal);
+    } catch (error) {
+      if (signal?.aborted || isAbortError(error)) throw error;
+      lastError = error;
+      if (attempt + 1 >= attempts || !retryableNetworkError(error)) throw error;
+      await waitForRetry(baseDelay * (2 ** attempt), signal);
+    }
+  }
+  throw lastError ?? new Error('Provider request failed.');
+}
+
+function retryableProviderStatus(status) {
+  return status === 408 || status === 425 || status === 429 || (Number.isInteger(status) && status >= 500 && status <= 599);
+}
+
+function retryableNetworkError(error) {
+  return error?.name === 'TypeError'
+    || ['ECONNRESET', 'ETIMEDOUT', 'EAI_AGAIN', 'ENETUNREACH'].includes(error?.code);
+}
+
+function retryAfterMilliseconds(response) {
+  const raw = response?.headers?.get?.('retry-after');
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds)) return null;
+  return Math.max(0, Math.min(2_000, seconds * 1_000));
+}
+
+function waitForRetry(milliseconds, signal) {
+  if (!milliseconds) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    let timer;
+    const onAbort = () => {
+      if (timer) clearTimeout(timer);
+      reject(abortError());
+    };
+    if (signal?.aborted) return onAbort();
+    timer = setTimeout(() => {
+      signal?.removeEventListener('abort', onAbort);
+      resolve();
+    }, milliseconds);
+    signal?.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
+function isAbortError(error) { return error?.name === 'AbortError' || error?.code === 'ABORT_ERR'; }
+function abortError() { return Object.assign(new Error('Provider request was cancelled.'), { name: 'AbortError', code: 'ABORT_ERR' }); }
+function providerAttemptCount() {
+  const value = Number(process.env.MEAL_PARSE_PROVIDER_ATTEMPTS ?? 2);
+  return Number.isFinite(value) ? Math.max(1, Math.min(3, Math.floor(value))) : 2;
+}
+function providerRetryBaseDelay() {
+  const value = Number(process.env.MEAL_PARSE_RETRY_BASE_MS ?? 250);
+  return Number.isFinite(value) ? Math.max(0, Math.min(2_000, value)) : 250;
+}
+
 function providerError(statusCode, code, message, cause) { return Object.assign(new Error(message), { statusCode, code, expose: true, cause }); }
 
-function defaultMockMealParser({ text }) {
+function defaultMockMealParser(input) {
+  const { text } = input;
   const normalized = String(text ?? '').toLowerCase();
   const detectedItems = [];
   if (/sprouts?|sprouted\s+moong|mung/.test(normalized)) detectedItems.push(food('sprouts', /bowl/.test(normalized) ? 1 : 1, /bowl/.test(normalized) ? 'medium bowl' : 'serving', 'mung bean sprouts', 0.86));
@@ -448,7 +580,26 @@ function defaultMockMealParser({ text }) {
     : detectedItems.some(item => item.requiresClarification && item.canonicalSearchName === 'chai')
       ? ['Was the chai sweetened, and how much milk was used?']
       : [];
-  return { detectedItems, unresolvedItems: detectedItems.length ? [] : [String(text)], mealDescription: String(text), clarificationQuestions, confidence: detectedItems.length ? 0.82 : 0.2 };
+  return {
+    detectedItems,
+    unresolvedItems: detectedItems.length ? [] : [String(text)],
+    mealDescription: String(text),
+    clarificationQuestions,
+    confidence: detectedItems.length ? 0.82 : 0.2,
+    visualCoverage: imageCoverageForMock(input, detectedItems)
+  };
+}
+
+function imageCoverageForMock(input, detectedItems) {
+  if (!input?.imageBase64) return null;
+  return {
+    scannedRegions: ['full frame', 'main plate', 'separate bowls and edges'],
+    visibleServingCount: detectedItems.length,
+    distinctServingCount: detectedItems.length,
+    occludedRegions: [],
+    inventoryComplete: detectedItems.length > 0,
+    coverageConfidence: 0.9
+  };
 }
 
 function food(originalText, quantity, unit, canonicalSearchName, confidence, preparationMethod = null, exclusions = [], requiresClarification = false) {

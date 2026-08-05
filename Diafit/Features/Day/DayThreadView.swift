@@ -21,6 +21,8 @@ struct DayThreadView: View {
     @State private var dailyReviewReminderEnabled = false
     @State private var isEnablingDailyReviewReminder = false
     @State private var dailyReviewReminderMessage: String?
+    @State private var photoAnalysisTask: Task<Void, Never>?
+    @State private var activePhotoRequestID: UUID?
     @FocusState private var composerFocused: Bool
 
     private var day: Day? { store.day(id: dayID) }
@@ -220,6 +222,12 @@ struct DayThreadView: View {
             guard phase == .active, dependencies.healthActivity.hasRequestedAccess else { return }
             Task { await loadHealthActivity() }
         }
+        .onDisappear {
+            photoAnalysisTask?.cancel()
+            photoAnalysisTask = nil
+            activePhotoRequestID = nil
+            isThinking = false
+        }
     }
 
     private func connectHealth() {
@@ -417,8 +425,12 @@ struct DayThreadView: View {
         isThinking = true
         thinkingLabel = "Identifying meal components"
 
-        Task { @MainActor in
+        photoAnalysisTask?.cancel()
+        let requestID = UUID()
+        activePhotoRequestID = requestID
+        photoAnalysisTask = Task { @MainActor in
             let result = await dependencies.photoAnalysis.analyse(image: image, description: description)
+            guard !Task.isCancelled, activePhotoRequestID == requestID else { return }
             let review = MealAnalysisDraft(result: result, transientImageData: image.data)
             let reviewItemID = UUID()
             store.append(ThreadItem(id: reviewItemID, kind: .mealAnalysis(review)), to: dayID)
@@ -431,20 +443,26 @@ struct DayThreadView: View {
                 )
             }
             isThinking = false
+            activePhotoRequestID = nil
         }
     }
 
     private func retryPhotoAnalysis(_ draft: MealAnalysisDraft, itemID: ThreadItem.ID) {
         guard let imageData = draft.transientImageData else { return }
         composerFocused = false
-
-        Task { @MainActor in
+        photoAnalysisTask?.cancel()
+        let requestID = UUID()
+        activePhotoRequestID = requestID
+        isThinking = true
+        thinkingLabel = "Scanning the whole plate"
+        photoAnalysisTask = Task { @MainActor in
             do {
                 let prepared = try AppleImagePreparationService().prepare(imageData: imageData)
                 let result = await dependencies.photoAnalysis.analyse(
                     image: prepared,
                     description: ""
                 )
+                guard !Task.isCancelled, activePhotoRequestID == requestID else { return }
                 store.update(
                     MealAnalysisDraft(result: result, transientImageData: prepared.data),
                     for: itemID,
@@ -455,7 +473,13 @@ struct DayThreadView: View {
                 failedDraft.result.warnings = SemanticQuestionDeduplicator.uniqueStrings(
                     [error.localizedDescription] + failedDraft.result.warnings
                 )
-                store.update(failedDraft, for: itemID, in: dayID)
+                if !Task.isCancelled, activePhotoRequestID == requestID {
+                    store.update(failedDraft, for: itemID, in: dayID)
+                }
+            }
+            if activePhotoRequestID == requestID {
+                isThinking = false
+                activePhotoRequestID = nil
             }
         }
     }

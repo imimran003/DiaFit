@@ -77,7 +77,7 @@ createServer(async (request, response) => {
         controller.abort();
         throw error;
       }
-      validateMealParseResult(result);
+      validateMealParseResult(result, { requireVisualCoverage: Boolean(input.imageBase64) });
       // Echo the photo reference so the iOS client can reject a delayed or
       // cross-request response before it reaches the meal review. This is
       // transport metadata beside (not inside) the strict provider schema.
@@ -323,10 +323,21 @@ function validateAnalysis(result) {
 }
 
 function withTimeout(promise, milliseconds) {
-  return Promise.race([
-    promise,
-    new Promise((_, reject) => setTimeout(() => reject(appError(504, 'provider_timeout', 'Analysis timed out.', true)), milliseconds))
-  ]);
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      reject(appError(504, 'provider_timeout', 'Analysis timed out.', true));
+    }, milliseconds);
+    Promise.resolve(promise).then(
+      value => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      error => {
+        clearTimeout(timer);
+        reject(error);
+      }
+    );
+  });
 }
 
 function setHeaders(response, requestId) {

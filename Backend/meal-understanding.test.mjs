@@ -6,6 +6,7 @@ import {
   OpenAIMealParser,
   buildGeminiMealParseRequest,
   buildMealParseInput,
+  fetchWithRetry,
   sanitizeMealParseResult,
   validateMealParseResult
 } from './meal-understanding.mjs';
@@ -58,6 +59,79 @@ assert.equal(request.text.format.strict, true);
 assert.deepEqual(request.text.format.schema, MEAL_PARSE_SCHEMA);
 assert.equal(requestOptions.headers.authorization, 'Bearer server-only-test-key');
 assert.equal(request.input[0].content[0].text.includes('AI nutrition estimates must include'), true);
+
+const visualCoverage = {
+  scannedRegions: ['full frame', 'main plate', 'separate bowls and edges'],
+  visibleServingCount: 3,
+  distinctServingCount: 3,
+  occludedRegions: [],
+  inventoryComplete: true,
+  coverageConfidence: 0.91
+};
+const imageParse = { ...parsed, visualCoverage };
+const imageOpenAI = new OpenAIMealParser({
+  apiKey: 'server-only-test-key',
+  fetchImpl: async () => ({ ok: true, async json() { return { output_text: JSON.stringify(imageParse) }; } })
+});
+const imageOutput = await imageOpenAI.parse({
+  text: 'Inspect the complete meal photo.',
+  imageBase64: 'aGVsbG8=',
+  mimeType: 'image/jpeg'
+});
+assert.equal(imageOutput.visualCoverage.inventoryComplete, true);
+
+const missingImageCoverage = new OpenAIMealParser({
+  apiKey: 'server-only-test-key',
+  fetchImpl: async () => ({ ok: true, async json() { return { output_text: JSON.stringify(parsed) }; } })
+});
+await assert.rejects(
+  () => missingImageCoverage.parse({ text: 'Inspect the complete meal photo.', imageBase64: 'aGVsbG8=', mimeType: 'image/jpeg' }),
+  error => error.code === 'malformed_provider_response'
+);
+
+let retryAttempts = 0;
+const retryingOpenAI = new OpenAIMealParser({
+  apiKey: 'server-only-test-key',
+  maxAttempts: 2,
+  retryBaseDelayMs: 0,
+  fetchImpl: async () => {
+    retryAttempts += 1;
+    if (retryAttempts === 1) return { ok: false, status: 503, headers: { get: () => null } };
+    return { ok: true, async json() { return { output_text: JSON.stringify(parsed) }; } };
+  }
+});
+await retryingOpenAI.parse({ text: 'sprouts' });
+assert.equal(retryAttempts, 2);
+
+let directRetryAttempts = 0;
+await fetchWithRetry(
+  async () => {
+    directRetryAttempts += 1;
+    if (directRetryAttempts === 1) return { ok: false, status: 429, headers: { get: () => null } };
+    return { ok: true, status: 200 };
+  },
+  'https://provider.test',
+  { method: 'POST', body: 'same-body' },
+  { maxAttempts: 2, retryBaseDelayMs: 0 }
+);
+assert.equal(directRetryAttempts, 2);
+
+const cancelledProvider = new AbortController();
+cancelledProvider.abort();
+let cancelledAttempts = 0;
+await assert.rejects(
+  () => fetchWithRetry(
+    async () => {
+      cancelledAttempts += 1;
+      return { ok: true, status: 200 };
+    },
+    'https://provider.test',
+    { method: 'POST', body: 'same-body' },
+    { maxAttempts: 3, retryBaseDelayMs: 0, signal: cancelledProvider.signal }
+  ),
+  error => error.name === 'AbortError'
+);
+assert.equal(cancelledAttempts, 0);
 
 const geminiImageRequest = buildGeminiMealParseRequest({
   text: 'Identify the meal.',

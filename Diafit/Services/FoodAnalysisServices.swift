@@ -139,6 +139,7 @@ enum FoodAnalysisError: LocalizedError {
     case unsupportedImage
     case imageTooLarge
     case unauthenticatedBackend
+    case photoAnalysisTimedOut
 
     var errorDescription: String? {
         switch self {
@@ -147,6 +148,7 @@ enum FoodAnalysisError: LocalizedError {
         case .unsupportedImage: return "Choose a JPEG, HEIC, or PNG photo to continue."
         case .imageTooLarge: return "That photo is too large to process. Try a smaller image."
         case .unauthenticatedBackend: return "Secure photo analysis needs an authenticated account. You can still describe the meal."
+        case .photoAnalysisTimedOut: return "Photo analysis took too long. Retry once on a stronger connection or name the visible foods."
         }
     }
 }
@@ -321,13 +323,21 @@ struct PhotoInventoryVerificationService: Sendable {
     }
 
     func needsIndependentCheck(_ parse: MealParseResult) -> Bool {
+        // The live image contract now includes an explicit coverage proof. A
+        // strong proof lets a simple photo finish after one provider call;
+        // without it we retain the conservative verification path used by
+        // legacy providers and deterministic fixtures.
+        if hasTrustedCoverage(parse) {
+            return false
+        }
         // A six-component plate is still small enough to audit, and is where
         // a single broad label is most likely to hide a side or flatbread.
-        (1...6).contains(parse.detectedItems.count)
+        return (1...6).contains(parse.detectedItems.count)
     }
 
     func needsExpandedInventory(_ parse: MealParseResult) -> Bool {
         guard !parse.detectedItems.isEmpty else { return true }
+        if hasTrustedCoverage(parse) { return false }
 
         // Do not gate this on a one-item result. The recurring failure was a
         // photo reduced to two plausible labels (for example rice + soup)
@@ -346,6 +356,7 @@ struct PhotoInventoryVerificationService: Sendable {
 
     func needsRecoveryPass(_ parse: MealParseResult) -> Bool {
         guard !parse.detectedItems.isEmpty, parse.detectedItems.count <= 4 else { return false }
+        if hasTrustedCoverage(parse) { return false }
 
         // The previously reported failure returned two nutritionally valid
         // labels (for example “tomato” + “vegetable soup”) for a multi-serving
@@ -566,6 +577,20 @@ struct PhotoInventoryVerificationService: Sendable {
         !item.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             || !(item.regionalName ?? item.originalText).trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
+
+    private func hasTrustedCoverage(_ parse: MealParseResult) -> Bool {
+        guard let coverage = parse.visualCoverage,
+              coverage.inventoryComplete,
+              coverage.coverageConfidence >= 0.82,
+              coverage.occludedRegions.isEmpty,
+              !parse.detectedItems.isEmpty,
+              parse.unresolvedItems.isEmpty,
+              coverage.distinctServingCount == parse.detectedItems.count else { return false }
+        return parse.detectedItems.allSatisfy {
+            $0.confidence >= 0.82
+                && !$0.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }
+    }
 }
 
 /// Reframes one photograph into overlapping spatial views for the independent
@@ -751,6 +776,13 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
         if result.overallConfidence == .low || result.overallConfidence == .unknown {
             missing.append("recognition confidence")
         }
+        if let coverage = result.visualCoverage,
+           (!coverage.inventoryComplete
+            || coverage.coverageConfidence < 0.82
+            || !coverage.occludedRegions.isEmpty
+            || coverage.distinctServingCount != result.detectedItems.count) {
+            missing.append("visual inventory coverage")
+        }
 
         for item in result.detectedItems {
             if item.canonicalFoodId.isEmpty || item.displayName.isEmpty { missing.append("canonical identity") }
@@ -783,6 +815,18 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
         guard result.imageType == .originalPhoto,
               !result.detectedItems.isEmpty,
               result.detectedItems.count <= 4 else { return false }
+
+        if let coverage = result.visualCoverage,
+           !coverage.inventoryComplete
+            || coverage.coverageConfidence < 0.82
+            || !coverage.occludedRegions.isEmpty
+            || coverage.distinctServingCount != result.detectedItems.count {
+            FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
+                "reason": "visual-coverage",
+                "itemCount": String(result.detectedItems.count)
+            ])
+            return true
+        }
 
         // Low aggregate confidence is an inventory problem only when the
         // parser surfaced too little of the plate. A complete, specific
@@ -876,8 +920,12 @@ struct PhotoAnalysisOrchestrator: Sendable {
         // delayed every successful backend result, even though those broad
         // labels were discarded afterwards.
         if let remote {
+            let remoteStartedAt = Date()
             do {
-                let remoteResult = try await remote.analyse(image, dishHint: description)
+                let remoteResult = try await withPhotoAnalysisTimeout(seconds: 32) {
+                    try await remote.analyse(image, dishHint: description)
+                }
+                let elapsedMilliseconds = Int(Date().timeIntervalSince(remoteStartedAt) * 1_000)
                 // A late response from a previous photo is valid JSON, but it
                 // is not valid for this review. Every remote implementation
                 // must carry the image identity through its result so the
@@ -903,17 +951,20 @@ struct PhotoAnalysisOrchestrator: Sendable {
                         "route": "structured-backend",
                         "candidateCount": String(remoteResult.detectedItems.count),
                         "remoteAttempted": "true",
-                        "complete": "true"
+                        "complete": "true",
+                        "elapsedMs": String(elapsedMilliseconds)
                     ])
                     return remoteResult
                 }
                 remoteIncomplete = remoteResult
                 remoteNeedsInventoryRecovery = needsInventoryRecovery
             } catch {
+                let elapsedMilliseconds = Int(Date().timeIntervalSince(remoteStartedAt) * 1_000)
                 remoteFailed = true
                 FoodLoggingDiagnostics.record("photo.classification", fields: [
                     "route": "structured-backend-failed",
-                    "reason": safeRemoteFailureReason(error)
+                    "reason": safeRemoteFailureReason(error),
+                    "elapsedMs": String(elapsedMilliseconds)
                 ])
             }
         }
@@ -1136,9 +1187,28 @@ struct PhotoAnalysisOrchestrator: Sendable {
             case .unsupportedImage: return "unsupported-image"
             case .imageTooLarge: return "image-too-large"
             case .unauthenticatedBackend: return "unauthenticated"
+            case .photoAnalysisTimedOut: return "analysis-timeout"
             }
         }
         return "provider-error"
+    }
+
+    private func withPhotoAnalysisTimeout<T: Sendable>(
+        seconds: Int,
+        operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw FoodAnalysisError.photoAnalysisTimedOut
+            }
+            defer { group.cancelAll() }
+            guard let result = try await group.next() else {
+                throw FoodAnalysisError.photoAnalysisTimedOut
+            }
+            return result
+        }
     }
 
     private func confidenceLevel(for score: Double) -> ConfidenceLevel {

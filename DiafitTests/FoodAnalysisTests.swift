@@ -1762,6 +1762,89 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(keys.contains("peanut"))
     }
 
+    func testTrustedVisualCoverageEnablesSinglePassFastPath() {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Boiled egg",
+                    canonicalSearchName: "hard-boiled egg",
+                    category: .egg,
+                    quantity: 1,
+                    unit: "whole egg",
+                    quantityEvidence: "one visible egg",
+                    estimatedGrams: 50,
+                    preparationMethod: "boiled",
+                    confidence: 0.94
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "One boiled egg",
+            clarificationQuestions: [],
+            confidence: 0.94,
+            visualCoverage: MealVisualCoverage(
+                scannedRegions: ["full frame", "main plate"],
+                visibleServingCount: 1,
+                distinctServingCount: 1,
+                occludedRegions: [],
+                inventoryComplete: true,
+                coverageConfidence: 0.93
+            )
+        )
+
+        let verification = PhotoInventoryVerificationService()
+        XCTAssertFalse(verification.needsIndependentCheck(parse))
+        XCTAssertFalse(verification.needsExpandedInventory(parse))
+        XCTAssertFalse(verification.needsRecoveryPass(parse))
+    }
+
+    func testIncompleteVisualCoverageBlocksPhotoCompleteness() async {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Boiled egg",
+                    canonicalSearchName: "hard-boiled egg",
+                    category: .egg,
+                    quantity: 1,
+                    unit: "whole egg",
+                    quantityEvidence: "one visible egg",
+                    estimatedGrams: 50,
+                    preparationMethod: "boiled",
+                    confidence: 0.94
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "One visible item",
+            clarificationQuestions: [],
+            confidence: 0.94,
+            visualCoverage: MealVisualCoverage(
+                scannedRegions: ["main plate"],
+                visibleServingCount: 3,
+                distinctServingCount: 1,
+                occludedRegions: ["lower plate edge"],
+                inventoryComplete: false,
+                coverageConfidence: 0.41
+            )
+        )
+        let result = await HybridMealAnalysisCoordinator(
+            router: DefaultFoodResolutionRouter(
+                catalog: catalog,
+                normalisation: HybridFoodNormalisationService(catalog: catalog),
+                understanding: nil,
+                nutrition: HybridNutritionResolutionService(catalog: catalog)
+            )
+        ).analyse(
+            parse: parse,
+            originalInput: "photo",
+            imageReference: fixtureFoodImage().imageReference,
+            imageType: .originalPhoto
+        )
+
+        let report = PhotoAnalysisCompletenessEvaluator().evaluate(result)
+        XCTAssertFalse(report.isComplete)
+        XCTAssertTrue(report.missingRequirements.contains("visual inventory coverage"))
+        XCTAssertTrue(PhotoAnalysisCompletenessEvaluator().requiresInventoryRecovery(result))
+    }
+
     func testQuestionDeduplicationPrefersTheActionableAnsweredQuestion() {
         let wording = "Was the rice a small, medium, or large serving?"
         let freeText = ClarificationQuestion(

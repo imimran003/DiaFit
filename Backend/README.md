@@ -14,6 +14,15 @@ npm start
 
 Set `DIAFIT_MEAL_PARSER_MODE=mock` for deterministic offline parsing, `gemini` with a server-only `GEMINI_API_KEY`, or `openai` with a server-only `OPENAI_API_KEY`. Gemini uses `generateContent` with inline image data and a strict response JSON schema; OpenAI uses the Responses API with strict Structured Outputs (`meal_parse_result`). The shared schema intentionally contains no nutrition fields. A nutrition service canonicalises each item and resolves verified nutrition after parsing. `idempotencyKey` can be supplied to safely retry a parse without creating duplicate downstream meal work.
 
+Image parses also include a strict `visualCoverage` contract. The provider must
+report the regions scanned, visible/distinct serving counts, occlusions, and
+whether the inventory is complete. The iOS client will not take the one-pass
+fast path when that evidence is missing, contradictory, or low confidence; it
+returns a recoverable review instead of presenting a salient garnish as the
+whole meal. Provider transport retries are bounded by
+`MEAL_PARSE_PROVIDER_ATTEMPTS` (1–3, default 2) and
+`MEAL_PARSE_RETRY_BASE_MS` (default 250 ms), and stop when the route aborts.
+
 The Gemini free tier is suitable for development and personal testing, subject to Google's current quotas and data-use terms. It is not an unlimited production service. Keep the key out of the iOS target and Git, and obtain explicit consent before uploading a meal photo. For a local free-tier run, copy `.env.example` to the ignored `.env`, set `DIAFIT_MEAL_PARSER_MODE=gemini`, and add `GEMINI_API_KEY` there.
 
 `POST /v1/nutrition-lookup` is the server-owned verified nutrition boundary. It

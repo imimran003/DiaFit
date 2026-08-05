@@ -10,6 +10,36 @@ struct MealParseResult: Codable, Hashable, Sendable {
     var mealDescription: String
     var clarificationQuestions: [String]
     var confidence: Double
+    /// Provider-reported evidence that an image was scanned as an inventory
+    /// rather than classified from its most salient object. This is optional
+    /// for legacy text/offline fixtures, but required by the live image
+    /// contract before a photo can take the fast path.
+    var visualCoverage: MealVisualCoverage? = nil
+}
+
+struct MealVisualCoverage: Codable, Hashable, Sendable {
+    var scannedRegions: [String]
+    var visibleServingCount: Int
+    var distinctServingCount: Int
+    var occludedRegions: [String]
+    var inventoryComplete: Bool
+    var coverageConfidence: Double
+
+    init(
+        scannedRegions: [String] = [],
+        visibleServingCount: Int = 0,
+        distinctServingCount: Int = 0,
+        occludedRegions: [String] = [],
+        inventoryComplete: Bool = false,
+        coverageConfidence: Double = 0
+    ) {
+        self.scannedRegions = scannedRegions
+        self.visibleServingCount = visibleServingCount
+        self.distinctServingCount = distinctServingCount
+        self.occludedRegions = occludedRegions
+        self.inventoryComplete = inventoryComplete
+        self.coverageConfidence = coverageConfidence
+    }
 }
 
 /// Text transcribed from a photographed package is evidence, not a model
@@ -201,7 +231,11 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         // quickly; compressed image uploads receive a little more time, but a
         // dead tunnel must not leave "Checking nutrition" onscreen for nearly
         // a minute.
-        request.timeoutInterval = image == nil ? 8 : 14
+        // One live image request is now the normal path when the provider
+        // returns trusted visual coverage. Allow the backend's bounded retry
+        // window to finish, while still failing a dead tunnel quickly enough
+        // for the UI to offer the private/manual recovery state.
+        request.timeoutInterval = image == nil ? 10 : 20
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
@@ -263,7 +297,8 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
             unresolvedItems: response.unresolvedItems,
             mealDescription: response.mealDescription,
             clarificationQuestions: response.clarificationQuestions,
-            confidence: response.confidence
+            confidence: response.confidence,
+            visualCoverage: response.visualCoverage
         )
     }
 
@@ -323,7 +358,7 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
     /// Kept beside the client so the backend contract can be generated and
     /// reviewed without placing an untyped prompt or schema in a view.
     static let strictJSONSchema = """
-    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","category","quantityEvidence","additions","exclusions","confidence","requiresClarification","isPackagedProduct","packagedLabelEvidence","aiNutritionEstimate"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"category":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"quantityEvidence":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"},"isPackagedProduct":{"type":["boolean","null"]},"packagedLabelEvidence":{"type":["object","null"]},"aiNutritionEstimate":{"type":["object","null"]}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"}}}
+    {"type":"object","additionalProperties":false,"required":["detectedItems","unresolvedItems","mealDescription","clarificationQuestions","confidence","visualCoverage"],"properties":{"detectedItems":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["originalText","canonicalSearchName","category","quantityEvidence","additions","exclusions","confidence","requiresClarification","isPackagedProduct","packagedLabelEvidence","aiNutritionEstimate"],"properties":{"originalText":{"type":"string"},"canonicalSearchName":{"type":"string"},"regionalName":{"type":["string","null"]},"category":{"type":["string","null"]},"quantity":{"type":["number","null"]},"unit":{"type":["string","null"]},"quantityEvidence":{"type":["string","null"]},"estimatedGrams":{"type":["number","null"]},"preparationMethod":{"type":["string","null"]},"additions":{"type":"array","items":{"type":"string"}},"exclusions":{"type":"array","items":{"type":"string"}},"brand":{"type":["string","null"]},"productName":{"type":["string","null"]},"flavour":{"type":["string","null"]},"servingSize":{"type":["string","null"]},"confidence":{"type":"number"},"requiresClarification":{"type":"boolean"},"isPackagedProduct":{"type":["boolean","null"]},"packagedLabelEvidence":{"type":["object","null"]},"aiNutritionEstimate":{"type":["object","null"]}}}},"unresolvedItems":{"type":"array","items":{"type":"string"}},"mealDescription":{"type":"string"},"clarificationQuestions":{"type":"array","items":{"type":"string"}},"confidence":{"type":"number"},"visualCoverage":{"anyOf":[{"type":"object","additionalProperties":false,"required":["scannedRegions","visibleServingCount","distinctServingCount","occludedRegions","inventoryComplete","coverageConfidence"],"properties":{"scannedRegions":{"type":"array","items":{"type":"string"}},"visibleServingCount":{"type":"integer","minimum":0},"distinctServingCount":{"type":"integer","minimum":0},"occludedRegions":{"type":"array","items":{"type":"string"}},"inventoryComplete":{"type":"boolean"},"coverageConfidence":{"type":"number","minimum":0,"maximum":1}}},{"type":"null"}]}}}
     """
 
     private struct UnderstandingRequest: Encodable {
@@ -341,6 +376,7 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         let mealDescription: String
         let clarificationQuestions: [String]
         let confidence: Double
+        let visualCoverage: MealVisualCoverage?
     }
 
     private struct ResponseMetadata: Decodable {
@@ -1832,13 +1868,19 @@ struct HybridMealAnalysisCoordinator: Sendable {
         imageType: MealImageType
     ) async -> MealAnalysisResult {
         let resolution = await router.resolve(parse: parse, originalInput: originalInput)
-        return makeAnalysis(from: resolution, imageReference: imageReference, imageType: imageType)
+        return makeAnalysis(
+            from: resolution,
+            imageReference: imageReference,
+            imageType: imageType,
+            visualCoverage: parse.visualCoverage
+        )
     }
 
     private func makeAnalysis(
         from resolution: FoodResolutionResult,
         imageReference: MealImageReference,
-        imageType: MealImageType
+        imageType: MealImageType,
+        visualCoverage: MealVisualCoverage? = nil
     ) -> MealAnalysisResult {
         // Never erase a provider-recognised component because canonical or
         // nutrition resolution is incomplete. The review must show the item
@@ -1874,6 +1916,7 @@ struct HybridMealAnalysisCoordinator: Sendable {
             warnings: warnings,
             createdAt: .now,
             recognitionModelVersion: items.contains(where: { $0.matchedAlias == nil }) ? "local-router" : nil,
+            visualCoverage: visualCoverage,
             nutritionDatabaseVersion: provenance.dataVersion,
             glycaemicDatabaseVersion: nil,
             nutritionProvenance: provenance,

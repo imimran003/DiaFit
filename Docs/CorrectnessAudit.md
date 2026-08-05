@@ -110,6 +110,31 @@ Keychain service is unavailable. This keeps the endpoint available after a
 Home-screen relaunch during device testing without moving provider credentials
 into the app bundle or any release configuration.
 
+## 2026-08-05 — Phase 3 visual-inventory contract and bounded photo analysis
+
+The remaining recurring photo failures were caused by treating a valid-looking
+food label as proof that the entire frame had been scanned. The live structured
+parser now requires `visualCoverage` for image requests: scanned regions,
+visible/distinct serving counts, occluded regions, an inventory-complete flag,
+and a confidence score. The app only uses the one-pass fast path when that
+evidence is complete, contradiction-free, and every returned component is
+specific and high confidence. Missing or weak evidence enters the existing
+independent, spatial, and recovery passes; a sparse result is withheld rather
+than displayed as a plausible partial meal.
+
+Provider transport is now bounded and idempotent: OpenAI and Gemini retry only
+transient HTTP/network failures (at most three attempts, two by default), obey
+the route abort signal, and honour a capped `Retry-After`. The iOS request has
+a 20-second image/10-second text deadline, and the day thread cancels stale
+photo tasks when a new request starts or the view disappears. A delayed result
+cannot update another meal or a deleted draft.
+
+Regression coverage includes strict image-schema acceptance/rejection,
+provider retry behaviour, trusted-coverage fast-path selection, and incomplete
+coverage recovery gating. The Xcode compile and backend deterministic tests
+pass; CoreSimulatorService was unavailable in this environment, so execution
+on a simulator remains a separate machine-level check.
+
 ## 2026-08-04 — End-to-end QA closure
 
 The production-style QA pass covered the food and nutrition pipeline, typed
