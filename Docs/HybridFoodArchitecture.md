@@ -55,9 +55,14 @@ provider hierarchy -> recipe calculation (when needed) -> validation -> review
 * `MealClarificationService` emits only material questions (for example whey
   scoop/base or a high-impact recipe oil amount), leaving low-impact spices out.
 
-The in-memory repositories are deterministic development implementations. A
-production account repository should persist the same records behind the
-protocol and retain only user-confirmed preferences.
+The in-memory repositories remain deterministic development implementations for
+previews and UI tests. Normal runtime now uses `FileUserFoodMemoryRepository`
+and `FilePackagedFoodRepository`. Both stores use versioned, atomic JSON under
+Application Support with complete-until-first-user-authentication protection.
+Corrupt or newer archives are left untouched and produce an explicit
+development diagnostic rather than being replaced with an empty store. A
+production account repository can later persist the same records behind the
+protocol; only user-confirmed preferences and labels are retained.
 
 ## Completeness gate
 

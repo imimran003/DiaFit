@@ -28,8 +28,20 @@ struct AppDependencies: Sendable {
         arguments: [String] = ProcessInfo.processInfo.arguments
     ) -> AppDependencies {
         let catalog = IndianFoodCatalogService()
-        let memory = InMemoryUserFoodMemoryRepository()
-        let packaged = InMemoryPackagedFoodRepository()
+        // UI tests and previews must stay isolated. Normal runtime uses
+        // protected, versioned local repositories so confirmed aliases and
+        // branded nutrition labels survive relaunches and app updates.
+        let memory: any UserFoodMemoryRepository
+        let packaged: any PackagedFoodRepository
+        let usesEphemeralFoodMemory = arguments.contains("UITestMode")
+            || environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+        if usesEphemeralFoodMemory {
+            memory = InMemoryUserFoodMemoryRepository()
+            packaged = InMemoryPackagedFoodRepository()
+        } else {
+            memory = FileUserFoodMemoryRepository()
+            packaged = FilePackagedFoodRepository()
+        }
         let normalisation = HybridFoodNormalisationService(catalog: catalog)
         let nutrition = HybridNutritionResolutionService(catalog: catalog, packaged: packaged)
         let localUnderstanding = LocalStructuredMealUnderstandingService(catalog: catalog)

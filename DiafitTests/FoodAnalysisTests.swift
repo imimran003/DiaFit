@@ -3569,6 +3569,71 @@ final class FoodAnalysisTests: XCTestCase {
             confidenceScore: 0.8
         )
     }
+
+    func testConfirmedFoodMemoryAndPackagedProductsSurviveRepositoryReload() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-food-memory-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+
+        let memoryStore = FileUserFoodMemoryStore(
+            fileURL: directory.appendingPathComponent("memory.json"),
+            appliesFileProtection: false
+        )
+        let memory = UserFoodMemory(
+            id: UUID(),
+            alias: "my usual whey",
+            canonicalFoodID: "whey-protein-powder",
+            servingGrams: 30,
+            servingUnit: "scoop",
+            preparation: "with water",
+            productID: "brand-whey-1",
+            lastConfirmedAt: .now
+        )
+        await FileUserFoodMemoryRepository(store: memoryStore).save(memory)
+        let reloadedMemory = await FileUserFoodMemoryRepository(store: memoryStore)
+            .rankedMatches(for: "my usual whey")
+        XCTAssertEqual(reloadedMemory.first?.canonicalFoodID, "whey-protein-powder")
+        XCTAssertEqual(reloadedMemory.first?.servingGrams, 30)
+
+        let packagedStore = FilePackagedFoodStore(
+            fileURL: directory.appendingPathComponent("packaged.json"),
+            appliesFileProtection: false
+        )
+        let product = PackagedFoodRecord(
+            id: "brand-whey-1",
+            brand: "Diafit Test",
+            productName: "Whey Isolate",
+            barcode: "0123456789012",
+            flavour: "Chocolate",
+            gramsPerScoop: 30,
+            servingGrams: 30,
+            nutritionPerServing: NutritionValues(caloriesKcal: 120, proteinGrams: 25, carbohydrateGrams: 3, fatGrams: 1),
+            nutritionPer100Grams: NutritionValues(caloriesKcal: 400, proteinGrams: 83, carbohydrateGrams: 10, fatGrams: 3.3),
+            source: "user-confirmed-label",
+            sourceVersion: "1",
+            userConfirmed: true
+        )
+        await FilePackagedFoodRepository(store: packagedStore).save(product)
+        let reloadedProduct = await FilePackagedFoodRepository(store: packagedStore)
+            .find(brand: "Diafit Test", productName: "Whey Isolate", barcode: nil, flavour: "Chocolate")
+        XCTAssertEqual(reloadedProduct?.id, product.id)
+        XCTAssertEqual(reloadedProduct?.nutritionPerServing.proteinGrams, 25)
+    }
+
+    func testFoodMemoryCorruptionDoesNotOverwriteOriginalArchive() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-food-memory-corrupt-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("memory.json")
+        let original = Data("not-a-diary".utf8)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        try original.write(to: fileURL)
+
+        let repository = FileUserFoodMemoryRepository(store: FileUserFoodMemoryStore(fileURL: fileURL, appliesFileProtection: false))
+        let matches = await repository.rankedMatches(for: "whey")
+        XCTAssertTrue(matches.isEmpty)
+        XCTAssertEqual(try Data(contentsOf: fileURL), original)
+    }
 }
 
 private struct StubMealUnderstanding: FoodUnderstandingService {

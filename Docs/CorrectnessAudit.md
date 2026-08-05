@@ -2,6 +2,26 @@
 
 Date: 2026-07-15
 
+## 2026-08-05 — confirmed food memory survives relaunch
+
+Normal runtime no longer keeps confirmed food aliases and packaged-product
+labels only in actor memory. `FileUserFoodMemoryRepository` and
+`FilePackagedFoodRepository` persist versioned, atomic archives under protected
+Application Support storage. Previews and UI tests continue using isolated
+in-memory repositories. Corrupt or newer archives are preserved rather than
+overwritten, and blank queries cannot return every saved record.
+
+Verification:
+
+- The new repository round-trip and corrupt-archive tests compile in the iOS
+  test bundle.
+- The simulator service was unavailable during this pass, so execution of the
+  focused tests is pending a CoreSimulatorService restart.
+
+This is a local persistence foundation, not account sync. Production still
+needs an authenticated, account-scoped repository and explicit export/delete
+semantics before multi-device support.
+
 ## 2026-08-04 — Meal-period reachability and AI inventory adjudication
 
 The `WHEN` control no longer depends on a horizontal gesture nested inside the

@@ -550,12 +550,119 @@ actor InMemoryUserFoodMemoryRepository: UserFoodMemoryRepository {
     private var records: [UserFoodMemory] = []
     func rankedMatches(for query: String) async -> [UserFoodMemory] {
         let key = query.lowercased()
+        guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
         return records.filter { $0.alias.lowercased().contains(key) || key.contains($0.alias.lowercased()) }
             .sorted { $0.lastConfirmedAt > $1.lastConfirmedAt }
     }
     func save(_ memory: UserFoodMemory) async {
         records.removeAll { $0.alias.caseInsensitiveCompare(memory.alias) == .orderedSame }
         records.append(memory)
+    }
+}
+
+/// A protected, versioned store for confirmed aliases. The repository is kept
+/// behind `UserFoodMemoryRepository` so the account-backed implementation can
+/// replace it later without changing routing or SwiftUI code.
+struct FileUserFoodMemoryStore: Sendable {
+    let fileURL: URL
+    var appliesFileProtection: Bool = true
+
+    static func live(fileName: String = "user-food-memory.json", fileManager: FileManager = .default) -> FileUserFoodMemoryStore {
+        let supportDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = supportDirectory.appendingPathComponent("Diafit", isDirectory: true)
+        return FileUserFoodMemoryStore(fileURL: directory.appendingPathComponent(fileName))
+    }
+
+    func load() throws -> [UserFoodMemory] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+        let archive = try Self.decoder.decode(Archive.self, from: data)
+        guard archive.schemaVersion <= Archive.currentVersion else {
+            throw FoodMemoryPersistenceError.unsupportedSchema(found: archive.schemaVersion)
+        }
+        return archive.records
+    }
+
+    func save(_ records: [UserFoodMemory]) throws {
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let archive = Archive(records: records)
+        let data = try Self.encoder.encode(archive)
+        try data.write(to: fileURL, options: [.atomic])
+        if appliesFileProtection {
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: fileURL.path
+            )
+        }
+    }
+
+    private struct Archive: Codable {
+        static let currentVersion = 1
+        let schemaVersion: Int
+        let savedAt: Date
+        let records: [UserFoodMemory]
+
+        init(records: [UserFoodMemory]) {
+            schemaVersion = Self.currentVersion
+            savedAt = .now
+            self.records = records
+        }
+    }
+
+    private static var encoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+
+    private static var decoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return decoder
+    }
+}
+
+enum FoodMemoryPersistenceError: Error, Equatable {
+    case unsupportedSchema(found: Int)
+}
+
+actor FileUserFoodMemoryRepository: UserFoodMemoryRepository {
+    private var records: [UserFoodMemory]
+    private let store: FileUserFoodMemoryStore
+
+    init(store: FileUserFoodMemoryStore = .live()) {
+        self.store = store
+        do {
+            records = try store.load()
+        } catch {
+            // A corrupt or newer file must not be replaced with an empty
+            // archive. The repository remains usable for reads and exposes a
+            // diagnostic in development; the original file stays untouched.
+            records = []
+            FoodLoggingDiagnostics.record("food-memory.load", fields: ["status": "failed"])
+        }
+    }
+
+    func rankedMatches(for query: String) async -> [UserFoodMemory] {
+        let key = query.lowercased().trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !key.isEmpty else { return [] }
+        return records
+            .filter { $0.alias.lowercased().contains(key) || key.contains($0.alias.lowercased()) }
+            .sorted { $0.lastConfirmedAt > $1.lastConfirmedAt }
+    }
+
+    func save(_ memory: UserFoodMemory) async {
+        let previous = records
+        records.removeAll { $0.alias.caseInsensitiveCompare(memory.alias) == .orderedSame }
+        records.append(memory)
+        do {
+            try store.save(records)
+        } catch {
+            records = previous
+            FoodLoggingDiagnostics.record("food-memory.save", fields: ["status": "failed"])
+        }
     }
 }
 
@@ -593,6 +700,108 @@ actor InMemoryPackagedFoodRepository: PackagedFoodRepository {
     func save(_ record: PackagedFoodRecord) async {
         records.removeAll { $0.id == record.id }
         records.append(record)
+    }
+}
+
+/// Protected persistence for user-confirmed branded foods and supplements.
+/// Nutrition labels remain user-owned records and are never sent to the
+/// language model by this repository.
+struct FilePackagedFoodStore: Sendable {
+    let fileURL: URL
+    var appliesFileProtection: Bool = true
+
+    static func live(fileName: String = "packaged-foods.json", fileManager: FileManager = .default) -> FilePackagedFoodStore {
+        let supportDirectory = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        let directory = supportDirectory.appendingPathComponent("Diafit", isDirectory: true)
+        return FilePackagedFoodStore(fileURL: directory.appendingPathComponent(fileName))
+    }
+
+    func load() throws -> [PackagedFoodRecord] {
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return [] }
+        let data = try Data(contentsOf: fileURL, options: [.mappedIfSafe])
+        let archive = try Self.decoder.decode(Archive.self, from: data)
+        guard archive.schemaVersion <= Archive.currentVersion else {
+            throw FoodMemoryPersistenceError.unsupportedSchema(found: archive.schemaVersion)
+        }
+        return archive.records
+    }
+
+    func save(_ records: [PackagedFoodRecord]) throws {
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let archive = Archive(records: records)
+        let data = try Self.encoder.encode(archive)
+        try data.write(to: fileURL, options: [.atomic])
+        if appliesFileProtection {
+            try FileManager.default.setAttributes(
+                [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
+                ofItemAtPath: fileURL.path
+            )
+        }
+    }
+
+    private struct Archive: Codable {
+        static let currentVersion = 1
+        let schemaVersion: Int
+        let savedAt: Date
+        let records: [PackagedFoodRecord]
+
+        init(records: [PackagedFoodRecord]) {
+            schemaVersion = Self.currentVersion
+            savedAt = .now
+            self.records = records
+        }
+    }
+
+    private static var encoder: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .millisecondsSince1970
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }
+
+    private static var decoder: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        return decoder
+    }
+}
+
+actor FilePackagedFoodRepository: PackagedFoodRepository {
+    private var records: [PackagedFoodRecord]
+    private let store: FilePackagedFoodStore
+
+    init(store: FilePackagedFoodStore = .live()) {
+        self.store = store
+        do {
+            records = try store.load()
+        } catch {
+            records = []
+            FoodLoggingDiagnostics.record("packaged-foods.load", fields: ["status": "failed"])
+        }
+    }
+
+    func find(brand: String?, productName: String?, barcode: String?, flavour: String?) async -> PackagedFoodRecord? {
+        records.first { record in
+            if let barcode, !barcode.isEmpty { return record.barcode == barcode }
+            let query = [brand, productName, flavour]
+                .compactMap { $0?.lowercased().trimmingCharacters(in: .whitespacesAndNewlines) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            return !query.isEmpty && query.contains(record.productName.lowercased())
+        }
+    }
+
+    func save(_ record: PackagedFoodRecord) async {
+        let previous = records
+        records.removeAll { $0.id == record.id }
+        records.append(record)
+        do {
+            try store.save(records)
+        } catch {
+            records = previous
+            FoodLoggingDiagnostics.record("packaged-foods.save", fields: ["status": "failed"])
+        }
     }
 }
 
