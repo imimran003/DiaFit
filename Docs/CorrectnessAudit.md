@@ -222,3 +222,35 @@ Before replacing fixture services, test fresh/existing diaries, empty/populated 
 ## Remaining production work
 
 The app intentionally has no authenticated nutrition or image-generation provider configured. Nutrition entries are curated local estimates, not clinical guidance. A production backend must supply authoritative provenance, consented history access, secure key handling, visual-match validation, explicit wrong-image recovery, telemetry review, accessibility/device QA, and clinical/regulatory review.
+
+## 2026-08-05 — Phase 4 nutrition integrity
+
+The Phase 4 audit found a real completeness defect: a local or provider record
+could contain a food name and one or two nutrient fields, yet still be treated
+as a usable resolution. A second defect scaled packaged-label values by the
+raw quantity, so a gram entry such as `500 g` could be interpreted as 500
+servings. Both paths could produce a review that looked identified while
+nutrition was incomplete or materially distorted.
+
+The resolution contract now requires calories, carbohydrates, and protein
+before a component or meal can be considered usable. Partial records remain
+raw diagnostic evidence and are routed through curated/provider fallback or an
+explicit clarification state; they cannot affect daily totals. The same gate
+is used by the local engine, photo completeness evaluator, hybrid nutrition
+router, review confirmation state, and nutrition-route diagnostics.
+
+Packaged records now scale against `servingGrams`. Explicit gram/millilitre
+amounts use their requested mass, scoop amounts use `gramsPerScoop`, and only a
+plain serving count falls back to a serving multiplier. The assumption is
+stored with the editable result so the user can audit the conversion. Invalid
+or non-finite multipliers return unavailable values rather than NaN/Infinity.
+Fractional egg/beverage/supplement quantities are validated using their actual
+quantity instead of being silently rounded up to one.
+
+New deterministic regression coverage verifies partial-core rejection,
+invalid-multiplier safety, packaged 500 g scaling, and complete provenance on
+the packaged path. `npm --prefix Backend test`, the 165-case food-resolution
+evaluator, and the iOS unit-test build pass. Runtime XCTest/UI execution could
+not be performed in this environment because CoreSimulatorService is refusing
+connections; run the existing test plan on a machine with an available
+simulator before release.

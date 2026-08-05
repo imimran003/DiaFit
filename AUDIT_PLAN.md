@@ -48,9 +48,12 @@
 - Analysis drafts restore without transient raw photo bytes.
 - A focused UI test confirms a whey meal survives process termination and relaunch.
 - Failed writes retain the previous committed state and expose a retryable storage issue.
-4. **Nutrition integrity**
+4. **Nutrition integrity — complete for the local/provider resolution boundary**
    - Make source, fallback level and assumptions explicit in the domain and UI.
    - Expand category sanity checks and scale/property tests.
+   - Gate confirmation on complete core nutrients (calories, carbohydrates and protein).
+   - Scale packaged labels from grams/scoops against the product serving basis.
+   - Preserve unavailable/partial provider responses as review states instead of totals.
 5. **Meal visuals**
    - Separate original photos, generated visuals and deterministic placeholders.
    - Add a runtime provider boundary, durable request state and recoverable failures without bundling secrets.

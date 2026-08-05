@@ -465,7 +465,7 @@ struct MealAnalysisReviewCard: View {
         applyClarificationEffects()
         let totals = NutritionValues.total(of: editableDraft.result.detectedItems.map(\.nutrition))
         let allValuesSupported = !editableDraft.result.detectedItems.isEmpty
-            && editableDraft.result.detectedItems.allSatisfy { !$0.nutrition.isEmpty }
+            && editableDraft.result.detectedItems.allSatisfy { $0.nutrition.hasCompleteCoreNutrients }
         let totalReport = validation.validate(rawValues: totals, canonicalFoodID: nil, quantity: nil, servingUnit: nil, estimatedWeightGrams: nil)
         let report = allValuesSupported ? totalReport : NutritionValidationReport(
             status: .requiresClarification,

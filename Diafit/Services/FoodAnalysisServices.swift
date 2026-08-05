@@ -788,9 +788,7 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
             if item.canonicalFoodId.isEmpty || item.displayName.isEmpty { missing.append("canonical identity") }
             if !item.quantity.isFinite || item.quantity <= 0 { missing.append("quantity") }
             if item.estimatedWeightGrams.map({ !$0.isFinite || $0 <= 0 }) ?? true { missing.append("serving conversion") }
-            if item.nutrition.caloriesKcal == nil
-                || item.nutrition.carbohydrateGrams == nil
-                || item.nutrition.proteinGrams == nil {
+            if !item.nutrition.hasCompleteCoreNutrients {
                 missing.append("nutrition")
             }
             if item.nutritionProvenance.kind == .unavailable { missing.append("nutrition source") }
@@ -1417,7 +1415,7 @@ struct MealItemNutritionRecalculator: Sendable {
             food: definition
         )
         let catalogLookup = nutrition.nutrition(for: definition, estimatedWeightGrams: weight)
-        let fallbackResolution = catalogLookup.values.isEmpty
+        let fallbackResolution = !catalogLookup.values.hasCompleteCoreNutrients
             ? fallback.resolve(
                 item: ParsedFoodItem(
                     originalText: item.matchedAlias ?? item.displayName,
@@ -1651,7 +1649,7 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
             servingUnit: nil,
             estimatedWeightGrams: nil
         )
-        let allValuesSupported = !items.isEmpty && items.allSatisfy { !$0.nutrition.isEmpty }
+        let allValuesSupported = !items.isEmpty && items.allSatisfy { $0.nutrition.hasCompleteCoreNutrients }
         let validation = allValuesSupported ? rawValidation : NutritionValidationReport(
             status: .requiresClarification,
             rawValues: totals,
@@ -1705,7 +1703,7 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
         let unit = component.servingUnit
         let weight = portionService.estimatedWeight(quantity: quantity, unit: unit, food: food)
         let catalogLookup = nutritionService.nutrition(for: food, estimatedWeightGrams: weight)
-        let fallback = catalogLookup.values.isEmpty
+        let fallback = !catalogLookup.values.hasCompleteCoreNutrients
             ? fallbackService.resolve(
                 item: ParsedFoodItem(
                     originalText: component.matchedAlias,
@@ -1744,7 +1742,7 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
             "canonicalFoodID": food.canonicalId,
             "estimatedWeightGrams": weight.map { String(format: "%.1f", $0) } ?? "unavailable",
             "provenance": lookup.provenance.kind.rawValue,
-            "providerResponse": resolvedValues.isEmpty ? "unavailable" : "usable",
+            "providerResponse": resolvedValues.hasCompleteCoreNutrients ? "usable" : "incomplete",
             "validation": validation.status.rawValue
         ])
 
@@ -1809,9 +1807,9 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
 
     private func itemWarnings(for values: NutritionValues, validation: NutritionValidationReport) -> [String] {
         if !validation.isApproved { return validation.issues.map(\.message) }
-        return values.isEmpty
-            ? ["Nutrition is not available from the offline catalog for this dish."]
-            : ["Estimated from a recipe profile. Oil, ghee, cream, and sugar may change this substantially."]
+        return values.hasCompleteCoreNutrients
+            ? ["Estimated from a recipe profile. Oil, ghee, cream, and sugar may change this substantially."]
+            : ["Nutrition is incomplete for this dish; confirm the missing core values before saving."]
     }
 
     private func alternatives(for food: IndianFoodDefinition) -> [AlternativeFoodMatch] {
@@ -1839,7 +1837,7 @@ struct LocalMealAnalysisEngine: AgentToolService, Sendable {
         if items.contains(where: { $0.category == .dessertOrDrink }) {
             values.append("Sweeteners may substantially change this estimate.")
         }
-        if items.contains(where: { $0.nutrition.isEmpty }) {
+        if items.contains(where: { !$0.nutrition.hasCompleteCoreNutrients }) {
             values.append("Nutrition is incomplete: totals are withheld until every component has a supported variation.")
         }
         if !validation.isApproved {

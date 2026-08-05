@@ -40,7 +40,7 @@ struct MealAnalysisResult: Identifiable, Codable, Hashable, Sendable {
     var id: UUID { analysisId }
 
     var hasUnsupportedNutrition: Bool {
-        nutritionProvenance.kind == .unavailable || mealTotals.isEmpty
+        nutritionProvenance.kind == .unavailable || !mealTotals.hasCompleteCoreNutrients
     }
 }
 
@@ -181,6 +181,10 @@ enum ServingUnit: String, Codable, CaseIterable, Hashable, Sendable {
     case wholeEgg
     case scoop
 
+    var isMassBased: Bool {
+        self == .grams || self == .millilitres
+    }
+
     var singularDisplayName: String {
         switch self {
         case .smallBowl: return "small bowl"
@@ -244,12 +248,40 @@ struct NutritionValues: Codable, Hashable, Sendable {
         self.cholesterolMilligrams = cholesterolMilligrams
     }
 
+    /// `nil` means the source did not support that nutrient. A record with
+    /// only one populated field is not a complete nutrition result, but it is
+    /// still useful raw evidence for diagnostics and fallback layering.
     var isEmpty: Bool {
-        caloriesKcal == nil && proteinGrams == nil && carbohydrateGrams == nil && fatGrams == nil && fibreGrams == nil
+        !hasAnyValue
+    }
+
+    var hasAnyValue: Bool {
+        [
+            caloriesKcal, proteinGrams, carbohydrateGrams,
+            availableCarbohydrateGrams, fatGrams, saturatedFatGrams,
+            fibreGrams, totalSugarGrams, addedSugarGrams,
+            sodiumMilligrams, cholesterolMilligrams
+        ].contains { $0 != nil }
+    }
+
+    /// These are the minimum fields required before a meal can affect daily
+    /// nutrition totals. Fibre and the other optional nutrients remain
+    /// optional because many verified labels and food databases omit them.
+    var hasCompleteCoreNutrients: Bool {
+        caloriesKcal != nil && proteinGrams != nil && carbohydrateGrams != nil
+    }
+
+    var missingCoreNutrients: [String] {
+        var missing: [String] = []
+        if caloriesKcal == nil { missing.append("calories") }
+        if carbohydrateGrams == nil { missing.append("carbohydrates") }
+        if proteinGrams == nil { missing.append("protein") }
+        return missing
     }
 
     func scaled(by multiplier: Double) -> NutritionValues {
-        NutritionValues(
+        guard multiplier.isFinite, multiplier >= 0 else { return .unavailable }
+        return NutritionValues(
             caloriesKcal: caloriesKcal.map { $0 * multiplier },
             proteinGrams: proteinGrams.map { $0 * multiplier },
             carbohydrateGrams: carbohydrateGrams.map { $0 * multiplier },

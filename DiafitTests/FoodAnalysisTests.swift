@@ -3770,6 +3770,83 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(result.estimatedGrams, 50)
         XCTAssertEqual(result.lookup.values.proteinGrams, 6.3)
     }
+
+    func testPartialCoreNutritionCannotBeApprovedOrSaved() {
+        let values = NutritionValues(caloriesKcal: 100, proteinGrams: 5)
+        let report = DefaultNutritionValidationService().validate(
+            rawValues: values,
+            canonicalFoodID: "unknown-food",
+            quantity: 1,
+            servingUnit: .serving,
+            estimatedWeightGrams: 100
+        )
+
+        XCTAssertFalse(report.isApproved)
+        XCTAssertNil(report.safeValues)
+        XCTAssertTrue(report.issues.contains { $0.code == .incompleteCoreNutrition })
+        XCTAssertEqual(values.missingCoreNutrients, ["carbohydrates"])
+    }
+
+    func testNutritionScalingRejectsInvalidMultipliersInsteadOfCreatingNaN() {
+        let values = NutritionValues(caloriesKcal: 100, proteinGrams: 10, carbohydrateGrams: 12, fatGrams: 2)
+
+        XCTAssertTrue(values.scaled(by: .nan).isEmpty)
+        XCTAssertTrue(values.scaled(by: -.infinity).isEmpty)
+        XCTAssertEqual(values.scaled(by: 0).caloriesKcal, 0)
+
+        let invalidEgg = DefaultNutritionValidationService().validate(
+            rawValues: NutritionValues(caloriesKcal: 78, proteinGrams: 6, carbohydrateGrams: 0.6, fatGrams: 5),
+            canonicalFoodID: "boiled-egg",
+            quantity: 0,
+            servingUnit: .wholeEgg,
+            estimatedWeightGrams: 0
+        )
+        XCTAssertFalse(invalidEgg.isApproved)
+        XCTAssertTrue(invalidEgg.issues.allSatisfy { !$0.message.localizedCaseInsensitiveContains("infinity") })
+    }
+
+    func testPackagedNutritionScalesByRequestedGramsNotServingCount() async {
+        let repository = InMemoryPackagedFoodRepository()
+        await repository.save(PackagedFoodRecord(
+            id: "tofu-label",
+            brand: "Diafit Test",
+            productName: "Tofu",
+            barcode: nil,
+            flavour: nil,
+            gramsPerScoop: nil,
+            servingGrams: 100,
+            nutritionPerServing: NutritionValues(
+                caloriesKcal: 100,
+                proteinGrams: 10,
+                carbohydrateGrams: 5,
+                fatGrams: 4,
+                fibreGrams: 2
+            ),
+            nutritionPer100Grams: nil,
+            source: "user-confirmed-label",
+            sourceVersion: "1",
+            userConfirmed: true
+        ))
+
+        let service = HybridNutritionResolutionService(catalog: catalog, packaged: repository)
+        let item = ParsedFoodItem(
+            originalText: "500 g tofu",
+            canonicalSearchName: "tofu",
+            quantity: 500,
+            unit: "grams",
+            estimatedGrams: 500,
+            productName: "Tofu",
+            confidence: 1
+        )
+        let result = await service.resolve(item: item, canonical: nil)
+
+        XCTAssertEqual(result.estimatedGrams ?? -1, 500, accuracy: 0.001)
+        XCTAssertEqual(result.lookup.values.caloriesKcal ?? -1, 500, accuracy: 0.001)
+        XCTAssertEqual(result.lookup.values.proteinGrams ?? -1, 50, accuracy: 0.001)
+        XCTAssertEqual(result.lookup.values.carbohydrateGrams ?? -1, 25, accuracy: 0.001)
+        XCTAssertEqual(result.lookup.provenance.kind, .packagedLabel)
+        XCTAssertTrue(result.verified)
+    }
 }
 
 private struct StubMealUnderstanding: FoodUnderstandingService {

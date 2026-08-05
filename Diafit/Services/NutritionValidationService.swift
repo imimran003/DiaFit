@@ -13,6 +13,7 @@ struct NutritionValidationReport: Codable, Hashable, Sendable {
     struct Issue: Codable, Hashable, Sendable, Identifiable {
         enum Code: String, Codable, Hashable, Sendable {
             case invalidNumber
+            case incompleteCoreNutrition
             case unreasonableQuantity
             case unreasonableWeight
             case energyMismatch
@@ -131,6 +132,12 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
                 severity: .blocking,
                 message: "Nutrition is unavailable for this preparation. Choose a variation or add the serving details."
             ))
+        } else if !rawValues.hasCompleteCoreNutrients {
+            issues.append(.init(
+                code: .incompleteCoreNutrition,
+                severity: .blocking,
+                message: "Calories, carbohydrates, and protein are required before this food can affect daily totals. Missing: " + rawValues.missingCoreNutrients.joined(separator: ", ") + "."
+            ))
         }
 
         if let calories = rawValues.caloriesKcal,
@@ -152,7 +159,7 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
 
         if ["black-coffee", "plain-tea", "green-tea"].contains(canonicalFoodID),
            let calories = rawValues.caloriesKcal {
-            let servings = max(quantity ?? 1, 1)
+            let servings = quantity.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 1
             if calories > max(20, servings * 6) {
                 issues.append(.init(
                     code: .implausibleBeverageEnergy,
@@ -169,7 +176,7 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
         if let canonicalFoodID,
            singleEggRecords.contains(canonicalFoodID),
            let calories = rawValues.caloriesKcal {
-            let count = max(quantity ?? 1, 1)
+            let count = quantity.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 1
             let perEgg = calories / count
             let isBoiled = canonicalFoodID.contains("boiled")
             let range: ClosedRange<Double>
@@ -193,7 +200,7 @@ struct DefaultNutritionValidationService: NutritionValidationService, Sendable {
            canonicalFoodID.contains("whey"),
            let protein = rawValues.proteinGrams,
            servingUnit == .scoop {
-            let scoops = max(quantity ?? 1, 1)
+            let scoops = quantity.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } ?? 1
             let proteinPerScoop = protein / scoops
             // Generic whey usually supplies roughly 15–35 g protein per scoop.
             // Values outside this range often reveal scoop/gram confusion.

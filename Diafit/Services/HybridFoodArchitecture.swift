@@ -1055,13 +1055,14 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
     func resolve(item: ParsedFoodItem, canonical: CanonicalFoodMatch?) async -> NutritionResolution {
         let amount = item.quantity ?? 1
         let unit = item.unit ?? "serving"
-        if let packaged, let product = await packaged.find(brand: item.brand, productName: item.productName, barcode: nil, flavour: item.flavour) {
+        if let packaged, let product = await packaged.find(brand: item.brand, productName: item.productName, barcode: nil, flavour: item.flavour),
+           let packageScale = packagedScale(for: item, product: product, amount: amount, unit: unit) {
             return validatedResolution(
-                values: product.nutritionPerServing.scaled(by: amount),
+                values: product.nutritionPerServing.scaled(by: packageScale.multiplier),
                 provenance: NutritionProvenance(kind: .packagedLabel, dataSource: product.source, dataVersion: product.sourceVersion, confidence: .high),
-                sourceRecordID: product.id, servingAmount: amount, servingUnit: unit,
-                estimatedGrams: product.servingGrams * amount,
-                assumptions: ["Using the confirmed packaged serving label."]
+                sourceRecordID: product.id, servingAmount: packageScale.multiplier, servingUnit: unit,
+                estimatedGrams: packageScale.grams,
+                assumptions: ["Using the confirmed packaged serving label.", packageScale.assumption]
             )
         }
 
@@ -1104,7 +1105,7 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
         }
         let grams = item.estimatedGrams ?? portions.estimatedWeight(quantity: amount, unit: serving, food: canonical.food)
         let lookup = CatalogNutritionLookupService().nutrition(for: canonical.food, estimatedWeightGrams: grams)
-        if !lookup.values.isEmpty {
+        if lookup.values.hasCompleteCoreNutrients {
             let local = validatedResolution(values: lookup.values, provenance: lookup.provenance,
                                             sourceRecordID: canonical.food.canonicalId,
                                             servingAmount: amount, servingUnit: serving.rawValue,
@@ -1147,14 +1148,54 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
         let report = validation.validate(rawValues: values, canonicalFoodID: sourceRecordID,
                                          quantity: servingAmount, servingUnit: serving,
                                          estimatedWeightGrams: estimatedGrams)
-        let safeValues = report.safeValues ?? .unavailable
+        let hasTraceableSource = provenance.kind != .unavailable
+            && !provenance.dataSource.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        let approved = report.isApproved && hasTraceableSource && values.hasCompleteCoreNutrients
+        let safeValues = approved ? (report.safeValues ?? .unavailable) : .unavailable
         let resolvedAssumptions = assumptions + report.issues.map(\.message)
+            + (hasTraceableSource ? [] : ["No traceable nutrition source was returned; the result remains unavailable."])
         return NutritionResolution(
-            lookup: NutritionLookup(values: safeValues, provenance: report.isApproved ? provenance : .unavailable),
-            sourceRecordID: report.isApproved ? sourceRecordID : nil,
+            lookup: NutritionLookup(values: safeValues, provenance: approved ? provenance : .unavailable),
+            sourceRecordID: approved ? sourceRecordID : nil,
             servingAmount: servingAmount, servingUnit: servingUnit,
             estimatedGrams: estimatedGrams, assumptions: resolvedAssumptions,
-            verified: report.isApproved && !safeValues.isEmpty
+            verified: approved && safeValues.hasCompleteCoreNutrients
+        )
+    }
+
+    /// Converts a packaged-food request into a serving multiplier without
+    /// confusing a gram amount with a count of servings. This keeps edits
+    /// (for example 100 g → 500 g) proportional and repeatable.
+    private func packagedScale(
+        for item: ParsedFoodItem,
+        product: PackagedFoodRecord,
+        amount: Double,
+        unit: String
+    ) -> (multiplier: Double, grams: Double, assumption: String)? {
+        guard product.servingGrams.isFinite, product.servingGrams > 0 else { return nil }
+        let servingUnit = ServingUnit(rawValue: unit)
+        let requestedGrams: Double? = {
+            if let explicit = item.estimatedGrams, explicit.isFinite, explicit > 0 { return explicit }
+            guard let servingUnit else { return nil }
+            if servingUnit.isMassBased { return amount }
+            if servingUnit == .scoop, let gramsPerScoop = product.gramsPerScoop,
+               gramsPerScoop.isFinite, gramsPerScoop > 0 {
+                return amount * gramsPerScoop
+            }
+            return nil
+        }()
+        if let requestedGrams, requestedGrams.isFinite, requestedGrams > 0 {
+            return (
+                requestedGrams / product.servingGrams,
+                requestedGrams,
+                String(format: "Scaled %.1f g against the product's %.1f g serving.", requestedGrams, product.servingGrams)
+            )
+        }
+        let multiplier = amount
+        return (
+            multiplier,
+            product.servingGrams * multiplier,
+            String(format: "Used %.1f packaged serving(s).", multiplier)
         )
     }
 }
@@ -1188,15 +1229,23 @@ struct CuratedNutritionFallbackService: Sendable {
         let label = labelAssessment.evidence
         let estimateAssessment = assessAIEstimate(item.aiNutritionEstimate)
         let aiEstimate = estimateAssessment.estimate
-        let labelGrams = label.flatMap { evidence -> Double? in
-            if let packageGrams = evidence.packageGrams { return packageGrams * amount }
-            if let servingGrams = evidence.servingGrams { return servingGrams * amount }
-            return nil
+        let labelGrams = label.flatMap {
+            evidenceGrams(
+                basis: $0.basis.rawValue,
+                packageGrams: $0.packageGrams,
+                servingGrams: $0.servingGrams,
+                amount: amount,
+                servingUnit: servingUnit
+            )
         }
-        let estimateGrams = aiEstimate.flatMap { estimate -> Double? in
-            if let packageGrams = estimate.packageGrams { return packageGrams * amount }
-            if let servingGrams = estimate.servingGrams { return servingGrams * amount }
-            return nil
+        let estimateGrams = aiEstimate.flatMap {
+            evidenceGrams(
+                basis: $0.basis.rawValue,
+                packageGrams: $0.packageGrams,
+                servingGrams: $0.servingGrams,
+                amount: amount,
+                servingUnit: servingUnit
+            )
         }
         let grams = item.estimatedGrams
             ?? labelGrams
@@ -1229,14 +1278,14 @@ struct CuratedNutritionFallbackService: Sendable {
         var values = fallbackValues
         let provenance: NutritionProvenance
         if let aiEstimate {
-            values = values.fillingMissingValues(from: aiValues(aiEstimate, amount: amount, estimatedGrams: grams))
+            values = values.fillingMissingValues(from: aiValues(aiEstimate, amount: amount, servingUnit: servingUnit, estimatedGrams: grams))
             assumptions.append(contentsOf: aiEstimate.assumptions)
             assumptions.append("AI estimated nutrients that were not visible on the package. These values are editable and are not verified label data.")
         } else if estimateAssessment.wasRejected {
             assumptions.append("The AI nutrition estimate failed plausibility checks and was ignored; a conservative curated estimate is shown instead.")
         }
         if let label {
-            let printed = labelValues(label, amount: amount, estimatedGrams: grams)
+            let printed = labelValues(label, amount: amount, servingUnit: servingUnit, estimatedGrams: grams)
             values = values.fillingMissingValues(from: printed)
             assumptions.append("Visible package text reports \(label.evidenceText); printed values take priority over the editable fallback.")
             if printed.caloriesKcal == nil || printed.carbohydrateGrams == nil || printed.proteinGrams == nil {
@@ -1275,7 +1324,7 @@ struct CuratedNutritionFallbackService: Sendable {
             servingUnit: servingUnit.rawValue,
             estimatedGrams: grams,
             assumptions: assumptions + report.issues.map(\.message),
-            verified: report.isApproved && !safe.isEmpty
+            verified: report.isApproved && safe.hasCompleteCoreNutrients
         )
     }
 
@@ -1350,12 +1399,15 @@ struct CuratedNutritionFallbackService: Sendable {
         return valid ? (estimate, false) : (nil, true)
     }
 
-    private func aiValues(_ estimate: AINutritionEstimate, amount: Double, estimatedGrams: Double) -> NutritionValues {
-        let multiplier: Double
-        switch estimate.basis {
-        case .per100Grams: multiplier = estimatedGrams / 100
-        case .perPackage, .perServing: multiplier = amount
-        }
+    private func aiValues(_ estimate: AINutritionEstimate, amount: Double, servingUnit: ServingUnit, estimatedGrams: Double) -> NutritionValues {
+        let multiplier = evidenceMultiplier(
+            basis: estimate.basis,
+            packageGrams: estimate.packageGrams,
+            servingGrams: estimate.servingGrams,
+            amount: amount,
+            servingUnit: servingUnit,
+            estimatedGrams: estimatedGrams
+        )
         return NutritionValues(
             caloriesKcal: estimate.caloriesKcal.map { $0 * multiplier },
             proteinGrams: estimate.proteinGrams.map { $0 * multiplier },
@@ -1368,12 +1420,15 @@ struct CuratedNutritionFallbackService: Sendable {
         )
     }
 
-    private func labelValues(_ evidence: PackagedLabelEvidence, amount: Double, estimatedGrams: Double) -> NutritionValues {
-        let multiplier: Double
-        switch evidence.basis {
-        case .per100Grams: multiplier = estimatedGrams / 100
-        case .perPackage, .perServing, .frontOfPackClaim: multiplier = amount
-        }
+    private func labelValues(_ evidence: PackagedLabelEvidence, amount: Double, servingUnit: ServingUnit, estimatedGrams: Double) -> NutritionValues {
+        let multiplier = evidenceMultiplier(
+            basis: evidence.basis,
+            packageGrams: evidence.packageGrams,
+            servingGrams: evidence.servingGrams,
+            amount: amount,
+            servingUnit: servingUnit,
+            estimatedGrams: estimatedGrams
+        )
         return NutritionValues(
             caloriesKcal: evidence.caloriesKcal.map { $0 * multiplier },
             proteinGrams: evidence.proteinGrams.map { $0 * multiplier },
@@ -1383,6 +1438,67 @@ struct CuratedNutritionFallbackService: Sendable {
             totalSugarGrams: evidence.totalSugarGrams.map { $0 * multiplier }
         )
     }
+
+    private func evidenceMultiplier<B: RawRepresentable>(
+        basis: B,
+        packageGrams: Double?,
+        servingGrams: Double?,
+        amount: Double,
+        servingUnit: ServingUnit,
+        estimatedGrams: Double
+    ) -> Double where B.RawValue == String {
+        switch basis.rawValue {
+        case "per100Grams":
+            return estimatedGrams / 100
+        case "perServing":
+            if let servingGrams, servingGrams.isFinite, servingGrams > 0 {
+                return estimatedGrams / servingGrams
+            }
+            return servingUnit.isMassBased ? 1 : amount
+        case "perPackage":
+            if let packageGrams, packageGrams.isFinite, packageGrams > 0 {
+                return estimatedGrams / packageGrams
+            }
+            return servingUnit.isMassBased ? 1 : amount
+        case "frontOfPackClaim":
+            if let packageGrams, packageGrams.isFinite, packageGrams > 0 {
+                return estimatedGrams / packageGrams
+            }
+            if let servingGrams, servingGrams.isFinite, servingGrams > 0 {
+                return estimatedGrams / servingGrams
+            }
+            // A front-of-pack claim such as “24.6 g protein” is evidence for
+            // one visible package. If the member entered grams but the photo
+            // did not reveal package size, scaling the claim by grams would
+            // manufacture thousands of grams of protein. Keep one claim and
+            // surface the missing conversion as an assumption instead.
+            return servingUnit.isMassBased ? 1 : amount
+        default:
+            return servingUnit.isMassBased ? 1 : amount
+        }
+    }
+
+    private func evidenceGrams(
+        basis: String,
+        packageGrams: Double?,
+        servingGrams: Double?,
+        amount: Double,
+        servingUnit: ServingUnit
+    ) -> Double? {
+        switch basis {
+        case "perPackage":
+            return packageGrams.map { $0 * amount }
+        case "perServing":
+            return servingGrams.map { $0 * amount }
+        case "frontOfPackClaim":
+            return packageGrams.map { $0 * amount } ?? servingGrams.map { $0 * amount }
+        case "per100Grams":
+            return servingUnit.isMassBased ? amount : nil
+        default:
+            return nil
+        }
+    }
+
 }
 
 // MARK: - Recipe calculation and clarification
@@ -1410,7 +1526,22 @@ struct CatalogRecipeCalculationService: RecipeCalculationService, Sendable {
             values.append(result.lookup.values); assumptions.append(contentsOf: result.assumptions)
         }
         let total = NutritionValues.total(of: values)
-        return NutritionResolution(lookup: NutritionLookup(values: total, provenance: NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "ingredient calculation", dataVersion: resolver.catalog.version, confidence: .medium)), sourceRecordID: nil, servingAmount: 1, servingUnit: "recipe", estimatedGrams: nil, assumptions: assumptions, verified: !total.isEmpty)
+        let report = DefaultNutritionValidationService().validate(rawValues: total)
+        let safeValues = report.safeValues ?? .unavailable
+        return NutritionResolution(
+            lookup: NutritionLookup(
+                values: safeValues,
+                provenance: report.isApproved
+                    ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "ingredient calculation", dataVersion: resolver.catalog.version, confidence: .medium)
+                    : .unavailable
+            ),
+            sourceRecordID: report.isApproved ? "recipe:ingredient-calculation" : nil,
+            servingAmount: 1,
+            servingUnit: "recipe",
+            estimatedGrams: nil,
+            assumptions: assumptions + report.issues.map(\.message),
+            verified: report.isApproved && safeValues.hasCompleteCoreNutrients
+        )
     }
 }
 
@@ -1511,9 +1642,7 @@ struct FoodResolutionCompletenessEvaluator: Sendable {
         }
 
         let values = item.nutrition.lookup.values
-        if values.caloriesKcal == nil { missing.append("calories") }
-        if values.carbohydrateGrams == nil { missing.append("carbohydrates") }
-        if values.proteinGrams == nil { missing.append("protein") }
+        missing.append(contentsOf: values.missingCoreNutrients)
         if item.nutrition.lookup.provenance.kind == .unavailable { missing.append("nutrition source") }
         if !item.nutrition.verified { missing.append("nutrition validation") }
 
@@ -1553,7 +1682,9 @@ struct FoodResolutionResult: Sendable {
     let overallConfidence: Double
     let state: FoodResolutionState
 
-    var hasUsableNutrition: Bool { !items.isEmpty && items.allSatisfy { !$0.nutrition.lookup.values.isEmpty } }
+    var hasUsableNutrition: Bool {
+        !items.isEmpty && items.allSatisfy { $0.nutrition.lookup.values.hasCompleteCoreNutrients }
+    }
     var requiresClarification: Bool { !clarificationQuestions.isEmpty || !unresolvedTerms.isEmpty || !hasUsableNutrition }
 }
 
@@ -1791,7 +1922,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         }
         return FoodResolutionItem(parsedItem: parsed, canonical: canonical, nutrition: nutrition,
                                   interpretationRoute: route,
-                                  nutritionRoute: nutrition.verified ? nutritionRoute : (nutrition.lookup.values.isEmpty ? .clarificationRequired : nutritionRoute))
+                                  nutritionRoute: nutrition.verified ? nutritionRoute : (nutrition.lookup.values.hasCompleteCoreNutrients ? nutritionRoute : .clarificationRequired))
     }
 
     private func route(for component: ParsedFoodComponent) -> FoodInterpretationRoute {
@@ -1902,7 +2033,9 @@ struct HybridMealAnalysisCoordinator: Sendable {
         let visualRequest = MealVisualRequestBuilder().make(mealID: analysisID, items: items, clarificationQuestions: questions)
         let provenance = items.first?.nutritionProvenance ?? .unavailable
         var warnings = resolution.unresolvedTerms.isEmpty ? ["Review the editable serving before saving."] : ["Some terms need confirmation before they can be logged."]
-        if items.contains(where: { $0.nutrition.isEmpty }) { warnings.append("Nutrition unavailable. Confirm the food or enter the nutrition manually.") }
+        if items.contains(where: { !$0.nutrition.hasCompleteCoreNutrients }) {
+            warnings.append("Nutrition is incomplete. Confirm the food or enter the missing values manually.")
+        }
         if !validation.isApproved { warnings.append(contentsOf: validation.issues.map(\.message)) }
         return MealAnalysisResult(
             analysisId: analysisID,
@@ -1943,7 +2076,9 @@ struct HybridMealAnalysisCoordinator: Sendable {
             possibleIngredients: [], preparationMethod: parsed.preparationMethod,
             nutrition: values, glycaemicInformation: .unavailable,
             assumptions: resolved.nutrition.assumptions + ["Serving is editable before confirmation."],
-            warnings: values.isEmpty ? ["Nutrition unavailable. Confirm the food or enter the nutrition manually."] : [],
+            warnings: values.hasCompleteCoreNutrients
+                ? []
+                : ["Nutrition is incomplete. Confirm the food or enter the missing values manually."],
             boundingRegion: nil, nutritionProvenance: resolved.nutrition.lookup.provenance,
             rawNutrition: values, nutritionValidation: nil,
             matchedAlias: resolved.interpretationRoute == .openAI ? nil : resolved.parsedItem.originalText,
