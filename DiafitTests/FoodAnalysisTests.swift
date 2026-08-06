@@ -3847,6 +3847,69 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(result.lookup.provenance.kind, .packagedLabel)
         XCTAssertTrue(result.verified)
     }
+
+    func testPrivacyExportContainsMeaningfulDataWithoutInternalIDsOrPhotoBytes() throws {
+        let meal = Meal(
+            id: UUID(), title: "Coffee", subtitle: "black coffee", mealType: "Breakfast", time: .now,
+            energy: 2, carbs: 0, protein: 0, fat: 0, artwork: .neutral, confidence: .verified
+        )
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [
+                ThreadItem(id: UUID(), kind: .meal(meal)),
+                ThreadItem(id: UUID(), kind: .glucose(GlucoseReading(value: 96, unit: .milligramsPerDeciliter, type: .fasting)))
+            ],
+            energyGoal: 2_100,
+            carbohydrateGoal: 180
+        )
+        var profile = UserProfile.empty
+        profile.preferredName = "Test member"
+        profile.avatarJPEGData = Data([0xFF, 0xD8, 0xFF])
+
+        let document = try DiafitExportDocument(
+            profile: profile,
+            preferences: .default,
+            days: [day]
+        )
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let payload = try decoder.decode(DiafitExportPayload.self, from: document.data)
+
+        XCTAssertEqual(payload.profile.preferredName, "Test member")
+        XCTAssertTrue(payload.profile.profilePhotoPresent)
+        XCTAssertEqual(payload.days.first?.meals.first?.name, "Coffee")
+        XCTAssertEqual(payload.days.first?.glucoseReadings.first?.normalizedMgPerDl, Decimal(96))
+        XCTAssertFalse(document.data.contains(0xFF))
+        XCTAssertFalse(String(data: document.data, encoding: .utf8)?.contains(meal.id.uuidString) == true)
+    }
+
+    func testDeleteAllUserDataRemovesArchiveAndRestoresEmptyDay() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("DiafitPrivacyTests-\(UUID().uuidString)", isDirectory: true)
+        let fileURL = directory.appendingPathComponent("diary.json")
+        let meal = Meal(
+            id: UUID(), title: "Rice", subtitle: "cooked", mealType: "Lunch", time: .now,
+            energy: 200, carbs: 45, protein: 4, fat: 1, artwork: .bowl, confidence: .known
+        )
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: UUID(), kind: .meal(meal))],
+            energyGoal: 2_100,
+            carbohydrateGoal: 180
+        )
+        let store = DiaryStore(
+            seedDays: [day],
+            persistence: FileDiaryPersistence(fileURL: fileURL, appliesFileProtection: false)
+        )
+        XCTAssertEqual(store.days.flatMap(\.meals).count, 1)
+
+        let result = store.deleteAllUserData()
+        guard case .success = result else {
+            return XCTFail("Expected local diary deletion to succeed")
+        }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+        XCTAssertTrue(store.days.flatMap(\.meals).isEmpty)
+    }
 }
 
 private struct StubMealUnderstanding: FoodUnderstandingService {

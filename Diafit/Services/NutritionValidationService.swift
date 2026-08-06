@@ -230,11 +230,25 @@ enum FoodLoggingDiagnostics {
     static func record(_ stage: String, fields: [String: String]) {
         #if DEBUG
         let payload = fields
+            .filter { !isSensitiveKey($0.key) }
+            .mapValues { sanitize($0) }
             .sorted { $0.key < $1.key }
             .map { "\($0.key)=\($0.value)" }
             .joined(separator: " ")
         print("[DiafitFoodAudit] \(stage) \(payload)")
         #endif
+    }
+
+    private static func isSensitiveKey(_ key: String) -> Bool {
+        let normalized = key.lowercased()
+        return ["text", "prompt", "photo", "image", "token", "secret", "password", "email", "note", "body", "payload", "raw", "url", "path"]
+            .contains { normalized.contains($0) }
+    }
+
+    private static func sanitize(_ value: String) -> String {
+        let singleLine = value.replacingOccurrences(of: "\n", with: " ")
+            .replacingOccurrences(of: "\r", with: " ")
+        return String(singleLine.prefix(160))
     }
 
     static func fingerprint(_ value: String) -> String {

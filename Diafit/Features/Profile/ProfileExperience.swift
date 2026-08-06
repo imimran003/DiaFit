@@ -204,12 +204,17 @@ private struct GoalValue: View {
 
 struct SettingsView: View {
     @EnvironmentObject private var profileStore: UserProfileStore
+    @EnvironmentObject private var diaryStore: DiaryStore
     @Environment(\.appDependencies) private var dependencies
     @Environment(\.openURL) private var openURL
     @State private var reminderEnabled = false
     @State private var reminderStatus: String?
     @State private var showsPrivacy = false
     @State private var confirmsReset = false
+    @State private var confirmsDeleteData = false
+    @State private var showsExporter = false
+    @State private var exportDocument: DiafitExportDocument?
+    @State private var privacyActionMessage: String?
 
     var body: some View {
         NavigationStack {
@@ -281,6 +286,31 @@ struct SettingsView: View {
                         }
                         .buttonStyle(PressableStyle())
 
+                        Button {
+                            Task { await prepareExport() }
+                        } label: {
+                            SettingsNavigationRow(
+                                title: "Export my data",
+                                detail: "Save meals, readings, and profile details as JSON",
+                                symbol: "square.and.arrow.up"
+                            )
+                        }
+                        .buttonStyle(PressableStyle())
+
+                        Button(role: .destructive) { confirmsDeleteData = true } label: {
+                            SettingsNavigationRow(
+                                title: "Delete all local data",
+                                detail: "Meals, readings, saved foods, profile, and photos",
+                                symbol: "trash",
+                                tint: .coral
+                            )
+                        }
+                        .buttonStyle(PressableStyle())
+
+                        if let privacyActionMessage {
+                            InlineNotice(text: privacyActionMessage, symbol: "info.circle")
+                        }
+
                         Button(role: .destructive) { confirmsReset = true } label: {
                             SettingsNavigationRow(
                                 title: "Reset profile",
@@ -312,6 +342,19 @@ struct SettingsView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .fileExporter(
+            isPresented: $showsExporter,
+            document: exportDocument,
+            contentType: .json,
+            defaultFilename: "diafit-data-export"
+        ) { result in
+            switch result {
+            case .success:
+                privacyActionMessage = "Your export is ready. Photos and internal IDs were left out."
+            case .failure:
+                privacyActionMessage = "The export could not be created. Your data was not changed."
+            }
+        }
         .alert("Reset your profile?", isPresented: $confirmsReset) {
             Button("Reset profile", role: .destructive) {
                 _ = profileStore.resetProfile()
@@ -319,6 +362,70 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("Your personal details and photo will be cleared. Logged meals, glucose readings, and Apple Health data are not deleted.")
+        }
+        .alert("Delete all local data?", isPresented: $confirmsDeleteData) {
+            Button("Delete everything", role: .destructive) {
+                deleteAllLocalData()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This permanently removes your Diafit meals, glucose readings, saved foods, profile, and stored meal photos from this device. Apple Health data stays in Apple Health.")
+        }
+    }
+
+    private func prepareExport() async {
+        do {
+            let savedFoodMemories: [UserFoodMemory]
+            if let exporting = dependencies.userFoodMemory as? any UserFoodMemoryDataExporting {
+                savedFoodMemories = await exporting.allRecords()
+            } else {
+                savedFoodMemories = []
+            }
+            let packagedFoods: [PackagedFoodRecord]
+            if let exporting = dependencies.packagedFoods as? any PackagedFoodDataExporting {
+                packagedFoods = await exporting.allRecords()
+            } else {
+                packagedFoods = []
+            }
+            exportDocument = try DiafitExportDocument(
+                profile: profileStore.profile,
+                preferences: profileStore.preferences,
+                days: diaryStore.days,
+                savedFoodMemories: savedFoodMemories,
+                packagedFoods: packagedFoods
+            )
+            showsExporter = true
+        } catch {
+            privacyActionMessage = "The export could not be created. Your data was not changed."
+        }
+    }
+
+    private func deleteAllLocalData() {
+        let diaryResult = diaryStore.deleteAllUserData()
+        let profileResult = profileStore.deleteAllProfileData()
+        guard case .success = diaryResult, case .success = profileResult else {
+            privacyActionMessage = "Some local data could not be deleted. Try again; any store that succeeded was cleared."
+            return
+        }
+
+        #if DEBUG
+        // The development-only backend token is app-owned local data too.
+        DevelopmentBackendConfigurationStore().remove()
+        #endif
+        UserDefaults.standard.removeObject(forKey: "diafit.glucose.preferredUnit")
+        UserDefaults.standard.removeObject(forKey: "diafit.health.requestedAccess")
+
+        Task {
+            if let purging = dependencies.userFoodMemory as? any UserFoodMemoryDataPurging {
+                await purging.deleteAll()
+            }
+            if let purging = dependencies.packagedFoods as? any PackagedFoodDataPurging {
+                await purging.deleteAll()
+            }
+            await dependencies.mealVisuals.deleteAllAssets()
+            await MainActor.run {
+                privacyActionMessage = "All Diafit data on this device was deleted. Apple Health data remains in Apple Health."
+            }
         }
     }
 
@@ -1489,18 +1596,23 @@ private struct PrivacyDetailsView: View {
                     )
                     PrivacyPoint(
                         title: "Stored on this device",
-                        detail: "Your profile, meals, and glucose readings use protected local storage.",
+                        detail: "Your profile, meals, glucose readings, saved foods, and retained photos use protected local storage.",
                         symbol: "iphone"
                     )
                     PrivacyPoint(
                         title: "Photos are your choice",
-                        detail: "A meal photo is sent only when you explicitly choose AI recognition.",
+                        detail: "A meal photo or food description is sent to the configured backend only when you explicitly use AI recognition. Provider keys stay server-side.",
                         symbol: "photo"
                     )
                     PrivacyPoint(
-                        title: "You stay in control",
-                        detail: "You can edit or delete readings, meals, and your profile.",
+                        title: "Export or delete",
+                        detail: "Export creates a JSON copy without internal IDs or photo bytes. Delete all local data removes Diafit records from this device; Apple Health remains in Apple Health.",
                         symbol: "hand.raised"
+                    )
+                    PrivacyPoint(
+                        title: "No tracking by default",
+                        detail: "Diafit does not sell health data or use it for advertising. Review the App Store privacy details before shipping a production backend.",
+                        symbol: "eye.slash"
                     )
                 }
                 .padding(20)

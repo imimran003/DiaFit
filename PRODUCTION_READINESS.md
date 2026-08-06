@@ -11,14 +11,11 @@ Current verdict: **not ready for TestFlight or App Store submission**. The app i
 - No real generated-image runtime, retry queue or restored request state.
 - The production app launches with sample diary data and no explicit demo/account boundary.
 
-## Blocking privacy/security issues
+## Privacy/security status
 
-- No `PrivacyInfo.xcprivacy` manifest found.
-- No account authentication/authorization implementation.
-- No user-facing data export/deletion or retention policy.
-- No documented sensitive-health-data storage protection.
-- No production backend/provider deployment, secret-store integration, abuse protection or rate-limit evidence.
-- Photo metadata stripping and payload validation need independent tests.
+Phase 4 code-level controls are now present: `PrivacyInfo.xcprivacy`, a release-only Info.plist without the Debug local-network exception, protected local stores, explicit JSON export, destructive local-data deletion, retained-photo purging, and redacted DEBUG/backend diagnostics. See `Docs/PrivacyAndSecurity.md`.
+
+The following remain release blockers outside the app code: production authentication/authorization, TLS/backend deployment, managed secret storage, durable abuse/rate-limit monitoring, a published privacy/retention policy, App Store privacy answers, and physical-device photo payload/security tests.
 
 ## Blocking release issues
 

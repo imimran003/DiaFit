@@ -240,12 +240,17 @@ protocol UserProfilePersisting: Sendable {
     func save(_ archive: UserProfileArchive) throws
 }
 
-struct TransientUserProfilePersistence: UserProfilePersisting {
-    func load() throws -> UserProfileArchive? { nil }
-    func save(_ archive: UserProfileArchive) throws {}
+protocol UserProfileDataDeleting: Sendable {
+    func deleteStoredProfile() throws
 }
 
-struct FileUserProfilePersistence: UserProfilePersisting, @unchecked Sendable {
+struct TransientUserProfilePersistence: UserProfilePersisting, UserProfileDataDeleting {
+    func load() throws -> UserProfileArchive? { nil }
+    func save(_ archive: UserProfileArchive) throws {}
+    func deleteStoredProfile() throws {}
+}
+
+struct FileUserProfilePersistence: UserProfilePersisting, UserProfileDataDeleting, @unchecked Sendable {
     let fileURL: URL
     var appliesFileProtection: Bool
     private let fileManager: FileManager
@@ -297,6 +302,11 @@ struct FileUserProfilePersistence: UserProfilePersisting, @unchecked Sendable {
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: fileURL.path
         )
+    }
+
+    func deleteStoredProfile() throws {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        try fileManager.removeItem(at: fileURL)
     }
 
     private struct Header: Decodable { let schemaVersion: Int }
@@ -402,6 +412,27 @@ final class UserProfileStore: ObservableObject {
             return .success(())
         } catch {
             persistenceIssue = "The profile could not be reset."
+            return .failure(error)
+        }
+    }
+
+    /// Removes the persisted profile and restores in-memory defaults. This is
+    /// intentionally separate from `resetProfile()`, which keeps preferences
+    /// for the lighter profile-editing action.
+    @discardableResult
+    func deleteAllProfileData() -> Result<Void, Error> {
+        do {
+            if let deleting = persistence as? any UserProfileDataDeleting {
+                try deleting.deleteStoredProfile()
+            } else {
+                try persistence.save(UserProfileArchive(profile: .empty, preferences: .default))
+            }
+            profile = .empty
+            preferences = .default
+            persistenceIssue = nil
+            return .success(())
+        } catch {
+            persistenceIssue = "Your profile could not be deleted. Nothing was removed; try again."
             return .failure(error)
         }
     }

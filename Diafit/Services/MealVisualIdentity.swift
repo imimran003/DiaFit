@@ -433,4 +433,10 @@ actor MealVisualRequestLedger {
         latestRequestByMeal[mealID] = nil
         pending = pending.filter { $0.value.mealID != mealID }
     }
+
+    func deleteAll() {
+        pending.removeAll()
+        latestRequestByMeal.removeAll()
+        deletedMeals.removeAll()
+    }
 }

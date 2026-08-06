@@ -201,6 +201,12 @@ actor MealVisualAssetStore {
         try? fileManager.removeItem(at: directory.appendingPathComponent(fileName, isDirectory: false))
     }
 
+    /// Deletes every app-owned visual, including retained original photos.
+    /// The directory is recreated lazily on the next confirmed save.
+    func removeAll() {
+        try? fileManager.removeItem(at: directory)
+    }
+
     nonisolated static func liveURL(for fileName: String, fileManager: FileManager = .default) -> URL? {
         guard isSafeFileName(fileName) else { return nil }
         return liveDirectory(fileManager: fileManager).appendingPathComponent(fileName, isDirectory: false)
@@ -327,6 +333,11 @@ struct MealVisualGenerationService: Sendable {
         for fileName in fileNames {
             await assets.remove(fileName: fileName)
         }
+    }
+
+    func deleteAllAssets() async {
+        await assets.removeAll()
+        await ledger.deleteAll()
     }
 
     /// Confirmation explicitly retains a prepared, metadata-stripped photo as

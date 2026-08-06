@@ -350,7 +350,19 @@ function setHeaders(response, requestId) {
 function send(response, status, body) { response.writeHead(status); response.end(JSON.stringify(body)); }
 function appError(statusCode, code, message, expose) { return Object.assign(new Error(message), { statusCode, code, expose }); }
 function normalise(value) { return value.toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim(); }
-function audit(event, fields) { console.log(JSON.stringify({ event, at: new Date().toISOString(), ...fields })); }
+
+// Audit records are deliberately metadata-only. Keep this boundary strict so
+// a future endpoint cannot accidentally put meal text, photo payloads, tokens,
+// or provider prompts into production logs.
+const AUDIT_SENSITIVE_KEY = /(text|prompt|photo|image|token|secret|password|email|note|body|payload|raw|url|path)/i;
+function audit(event, fields = {}) {
+  const safeFields = Object.fromEntries(
+    Object.entries(fields)
+      .filter(([key, value]) => !AUDIT_SENSITIVE_KEY.test(key) && ['string', 'number', 'boolean'].includes(typeof value))
+      .map(([key, value]) => [key, String(value).replace(/[\r\n]/g, ' ').slice(0, 160)])
+  );
+  console.log(JSON.stringify({ event, at: new Date().toISOString(), ...safeFields }));
+}
 
 class RollingRateLimiter {
   constructor(limit, windowMs) { this.limit = limit; this.windowMs = windowMs; this.hits = new Map(); }

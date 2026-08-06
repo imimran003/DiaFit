@@ -728,7 +728,15 @@ protocol UserFoodMemoryRepository: Sendable {
     func save(_ memory: UserFoodMemory) async
 }
 
-actor InMemoryUserFoodMemoryRepository: UserFoodMemoryRepository {
+protocol UserFoodMemoryDataPurging: Sendable {
+    func deleteAll() async
+}
+
+protocol UserFoodMemoryDataExporting: Sendable {
+    func allRecords() async -> [UserFoodMemory]
+}
+
+actor InMemoryUserFoodMemoryRepository: UserFoodMemoryRepository, UserFoodMemoryDataPurging, UserFoodMemoryDataExporting {
     private var records: [UserFoodMemory] = []
     func rankedMatches(for query: String) async -> [UserFoodMemory] {
         let key = query.lowercased()
@@ -740,6 +748,9 @@ actor InMemoryUserFoodMemoryRepository: UserFoodMemoryRepository {
         records.removeAll { $0.alias.caseInsensitiveCompare(memory.alias) == .orderedSame }
         records.append(memory)
     }
+
+    func deleteAll() async { records.removeAll() }
+    func allRecords() async -> [UserFoodMemory] { records }
 }
 
 /// A protected, versioned store for confirmed aliases. The repository is kept
@@ -810,7 +821,7 @@ enum FoodMemoryPersistenceError: Error, Equatable {
     case unsupportedSchema(found: Int)
 }
 
-actor FileUserFoodMemoryRepository: UserFoodMemoryRepository {
+actor FileUserFoodMemoryRepository: UserFoodMemoryRepository, UserFoodMemoryDataPurging, UserFoodMemoryDataExporting {
     private var records: [UserFoodMemory]
     private let store: FileUserFoodMemoryStore
     private var canPersist: Bool
@@ -854,6 +865,20 @@ actor FileUserFoodMemoryRepository: UserFoodMemoryRepository {
             FoodLoggingDiagnostics.record("food-memory.save", fields: ["status": "failed"])
         }
     }
+
+    func deleteAll() async {
+        guard canPersist else { return }
+        do {
+            if FileManager.default.fileExists(atPath: store.fileURL.path) {
+                try FileManager.default.removeItem(at: store.fileURL)
+            }
+            records.removeAll()
+        } catch {
+            FoodLoggingDiagnostics.record("food-memory.delete", fields: ["status": "failed"])
+        }
+    }
+
+    func allRecords() async -> [UserFoodMemory] { records }
 }
 
 // MARK: - Verified nutrition and packaged products
@@ -878,7 +903,15 @@ protocol PackagedFoodRepository: Sendable {
     func save(_ record: PackagedFoodRecord) async
 }
 
-actor InMemoryPackagedFoodRepository: PackagedFoodRepository {
+protocol PackagedFoodDataPurging: Sendable {
+    func deleteAll() async
+}
+
+protocol PackagedFoodDataExporting: Sendable {
+    func allRecords() async -> [PackagedFoodRecord]
+}
+
+actor InMemoryPackagedFoodRepository: PackagedFoodRepository, PackagedFoodDataPurging, PackagedFoodDataExporting {
     private var records: [PackagedFoodRecord] = []
     func find(brand: String?, productName: String?, barcode: String?, flavour: String?) async -> PackagedFoodRecord? {
         records.first { record in
@@ -891,6 +924,9 @@ actor InMemoryPackagedFoodRepository: PackagedFoodRepository {
         records.removeAll { $0.id == record.id }
         records.append(record)
     }
+
+    func deleteAll() async { records.removeAll() }
+    func allRecords() async -> [PackagedFoodRecord] { records }
 }
 
 /// Protected persistence for user-confirmed branded foods and supplements.
@@ -957,7 +993,7 @@ struct FilePackagedFoodStore: Sendable {
     }
 }
 
-actor FilePackagedFoodRepository: PackagedFoodRepository {
+actor FilePackagedFoodRepository: PackagedFoodRepository, PackagedFoodDataPurging, PackagedFoodDataExporting {
     private var records: [PackagedFoodRecord]
     private let store: FilePackagedFoodStore
     private var canPersist: Bool
@@ -1001,6 +1037,20 @@ actor FilePackagedFoodRepository: PackagedFoodRepository {
             FoodLoggingDiagnostics.record("packaged-foods.save", fields: ["status": "failed"])
         }
     }
+
+    func deleteAll() async {
+        guard canPersist else { return }
+        do {
+            if FileManager.default.fileExists(atPath: store.fileURL.path) {
+                try FileManager.default.removeItem(at: store.fileURL)
+            }
+            records.removeAll()
+        } catch {
+            FoodLoggingDiagnostics.record("packaged-foods.delete", fields: ["status": "failed"])
+        }
+    }
+
+    func allRecords() async -> [PackagedFoodRecord] { records }
 }
 
 struct NutritionResolution: Sendable {

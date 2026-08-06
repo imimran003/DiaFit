@@ -24,14 +24,22 @@ protocol DiaryPersisting {
     func save(_ archive: DiaryArchive) throws
 }
 
-/// Used by previews and deterministic UI tests. It preserves the same store
-/// transaction behavior without writing test fixtures into the member diary.
-struct TransientDiaryPersistence: DiaryPersisting {
-    func load() throws -> DiaryArchive? { nil }
-    func save(_ archive: DiaryArchive) throws {}
+/// Destructive operations are kept separate from normal persistence so a
+/// caller cannot accidentally erase a diary while saving an edit. The
+/// privacy controls use this capability only after explicit confirmation.
+protocol DiaryDataDeleting: Sendable {
+    func deleteStoredArchive() throws
 }
 
-struct FileDiaryPersistence: DiaryPersisting {
+/// Used by previews and deterministic UI tests. It preserves the same store
+/// transaction behavior without writing test fixtures into the member diary.
+struct TransientDiaryPersistence: DiaryPersisting, DiaryDataDeleting {
+    func load() throws -> DiaryArchive? { nil }
+    func save(_ archive: DiaryArchive) throws {}
+    func deleteStoredArchive() throws {}
+}
+
+struct FileDiaryPersistence: DiaryPersisting, DiaryDataDeleting, @unchecked Sendable {
     let fileURL: URL
     var appliesFileProtection: Bool = true
     private let fileManager: FileManager
@@ -90,6 +98,11 @@ struct FileDiaryPersistence: DiaryPersisting {
             [.protectionKey: FileProtectionType.completeUntilFirstUserAuthentication],
             ofItemAtPath: fileURL.path
         )
+    }
+
+    func deleteStoredArchive() throws {
+        guard fileManager.fileExists(atPath: fileURL.path) else { return }
+        try fileManager.removeItem(at: fileURL)
     }
 
     private struct ArchiveHeader: Decodable {

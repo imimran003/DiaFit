@@ -131,6 +131,32 @@ final class DiaryStore: ObservableObject {
         }
     }
 
+    /// Removes every app-owned diary record after an explicit privacy
+    /// confirmation. A fresh empty day is kept in memory so the home screen
+    /// remains usable; the on-disk archive itself is removed when the active
+    /// persistence supports destructive deletion.
+    @discardableResult
+    func deleteAllUserData(now: Date = .now) -> Result<Void, Error> {
+        guard canPersist else {
+            let error = DiaryPersistenceError.invalidArchive
+            persistenceIssue = Self.userMessage(for: error, operation: "delete")
+            return .failure(error)
+        }
+        do {
+            if let deleting = persistence as? any DiaryDataDeleting {
+                try deleting.deleteStoredArchive()
+            } else {
+                try persistence.save(DiaryArchive(days: RuntimeDiaryDefaults.days(now: now)))
+            }
+            days = RuntimeDiaryDefaults.days(now: now)
+            persistenceIssue = nil
+            return .success(())
+        } catch {
+            persistenceIssue = Self.userMessage(for: error, operation: "delete")
+            return .failure(error)
+        }
+    }
+
     private func transact(_ mutation: (inout [Day]) -> Void) {
         guard canPersist else { return }
         var candidate = days
@@ -148,6 +174,9 @@ final class DiaryStore: ObservableObject {
     private static func userMessage(for error: Error, operation: String) -> String {
         if operation == "load" {
             return "Your saved diary could not be opened. The original data was left untouched."
+        }
+        if operation == "delete" {
+            return "Your diary could not be deleted. Nothing was removed; try again."
         }
         return "This change could not be saved on this device. Check available storage, then retry."
     }
