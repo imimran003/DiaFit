@@ -107,6 +107,12 @@ final class DiaryStore: ObservableObject {
     func update(_ draft: MealAnalysisDraft, for itemID: ThreadItem.ID, in dayID: Day.ID) {
         guard let dayIndex = days.firstIndex(where: { $0.id == dayID }),
               let messageIndex = days[dayIndex].messages.firstIndex(where: { $0.id == itemID }) else { return }
+        // Draft callbacks and visual-provider completions are asynchronous.
+        // Once confirmation replaces this item with a saved meal, an older
+        // callback must never be allowed to turn the meal back into a draft.
+        // Keeping this invariant at the store boundary protects every caller,
+        // including SwiftUI state updates and late provider responses.
+        guard case .mealAnalysis = days[dayIndex].messages[messageIndex].kind else { return }
         transact { $0[dayIndex].messages[messageIndex].kind = .mealAnalysis(draft) }
     }
 

@@ -246,6 +246,10 @@ final class DiafitUITests: XCTestCase {
         app.buttons["small bowl"].tap()
         XCTAssertNotEqual(metricLabel("meal-total-kcal"), caloriesBefore)
 
+        // The serving editor is above the confirmation footer in the long
+        // compound-meal card. Scroll back to the footer before tapping it;
+        // XCTest does not auto-scroll an off-screen SwiftUI button.
+        app.swipeUp()
         let confirm = app.buttons["Confirm estimate"]
         XCTAssertTrue(confirm.isEnabled)
         confirm.tap()

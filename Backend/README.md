@@ -10,7 +10,13 @@ set -a; source .env; set +a
 npm start
 ```
 
-`GET /health` reports both analysis and meal-parser modes. `POST /v1/meal-analysis` is the legacy photo contract. `POST /v1/meal-parse` accepts text and/or a metadata-stripped JPEG/HEIC/PNG payload and returns schema-validated meal components. Both endpoints require the development bearer token locally. The process never writes image payloads to disk or logs them. It emits a random request ID and a one-way caller hash only.
+`GET /health` reports development modes for local diagnostics and a minimal
+status/version payload in production. `POST /v1/meal-analysis` is the legacy
+photo contract. `POST /v1/meal-parse` accepts text and/or a metadata-stripped
+JPEG/HEIC/PNG payload and returns schema-validated meal components. Both
+endpoints require the development bearer token locally or a verified production
+JWT. The process never writes image payloads to disk or logs them. It emits a
+random request ID and a one-way caller hash only.
 
 Set `DIAFIT_MEAL_PARSER_MODE=mock` for deterministic offline parsing, `gemini` with a server-only `GEMINI_API_KEY`, or `openai` with a server-only `OPENAI_API_KEY`. Gemini uses `generateContent` with inline image data and a strict response JSON schema; OpenAI uses the Responses API with strict Structured Outputs (`meal_parse_result`). The shared schema intentionally contains no nutrition fields. A nutrition service canonicalises each item and resolves verified nutrition after parsing. `idempotencyKey` can be supplied to safely retry a parse without creating duplicate downstream meal work.
 
@@ -43,6 +49,22 @@ no free API tier, so this mode is deliberately disabled by default. Uploaded
 meal photos do not use this endpoint: after confirmation, the prepared,
 metadata-stripped photo is kept only in protected local app storage.
 
+## Authentication and deployment modes
+
+The default `development` mode uses a local bearer token so the fixture server
+can be exercised without an account service. Setting
+`DIAFIT_DEPLOYMENT_ENV=production` changes the safety contract: the process
+refuses to start unless `DIAFIT_AUTH_MODE=jwks`, an HTTPS JWKS URL, issuer and
+audience are present, and a live meal parser is selected. Production access
+tokens must be short-lived RS256 JWTs signed by the configured identity
+provider. The server returns only an opaque, one-way principal hash to rate
+limiting and diagnostics; it never logs or forwards the token.
+
+The production `/health` response intentionally omits parser/provider modes and
+fixture versions. Those details remain available only in development. TLS
+termination, identity-provider configuration, managed rate limiting and
+secret storage still belong to the deployment environment.
+
 An opt-in live smoke test is available after the backend starts. Set `LIVE_FOOD_IMAGE_PATH` to a local JPEG or PNG and run `npm run test:live-photo`. It prints only structured food identities and confidence; it never prints the image or provider credential. Deterministic CI continues to use the mock provider. The local HTTPS tunnel used for device testing is temporary: restart it and update the user-only Xcode scheme whenever its URL changes.
 
 For an Xcode-launched simulator build, pass the backend origin as
@@ -56,7 +78,7 @@ Run `npm run evaluate:food-resolution` for the checked-in 165-input development 
 
 ## Required production work
 
-- Replace the development token guard with account authentication and authorization verified by a managed identity provider or JWKS.
+- Provision the managed identity provider/JWKS issuer and audience used by the production verifier; the development token guard is rejected in production.
 - Terminate TLS at managed ingress; restrict origins/network access; use managed rate limiting and WAF controls.
 - Store vision, image-generation, and nutrition keys only in a managed secret store. Do not put them in Xcode settings, app resources, or `.env.example`.
 - Use `GeminiMealParser` or `OpenAIMealParser` behind the `/v1/meal-parse` seam. Both send images only from the backend, request strict JSON, validate every field, and retain model/version provenance at the API boundary. Keep canonical matching, nutrition lookup, recipe calculation, and plausibility validation in separate server services; never accept model-generated nutrition as authoritative.

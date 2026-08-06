@@ -2761,6 +2761,31 @@ final class FoodAnalysisTests: XCTestCase {
     }
 
     @MainActor
+    func testLateDraftCallbackCannotRestoreAConfirmedMeal() throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "sprouts with 3 boiled eggs")
+        let draft = MealAnalysisDraft(result: result)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+
+        _ = DiaryMealLoggingService().confirm(draft, replacing: itemID, in: store, dayID: day.id)
+
+        // Simulate a stale SwiftUI callback/provider completion that was
+        // already queued before the confirmation transaction completed.
+        store.update(draft, for: itemID, in: day.id)
+
+        guard case .meal = store.day(id: day.id)?.messages.first?.kind else {
+            return XCTFail("A stale draft callback restored the review state")
+        }
+        XCTAssertEqual(store.day(id: day.id)?.meals.count, 1)
+    }
+
+    @MainActor
     func testConfirmedPhotoIsRetainedLocallyAndBecomesPrimaryMealVisual() async throws {
         var result = LocalMealAnalysisEngine(catalog: catalog)
             .makeAnalysis(description: "biryani")

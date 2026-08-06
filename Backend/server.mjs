@@ -1,10 +1,12 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { createHash, timingSafeEqual, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { GeminiMealParser, OpenAIMealParser, MockMealParser, validateMealParseResult } from './meal-understanding.mjs';
 import { DisabledMealVisualGenerator, GeminiMealVisualGenerator, validateMealVisualRequest } from './meal-visual.mjs';
+import { JWKSAuthenticator, developmentPrincipal } from './auth.mjs';
+import { healthPayload, validateProductionConfiguration } from './production-config.mjs';
 import {
   DisabledNutritionProvider,
   USDAFoodDataCentralProvider,
@@ -15,6 +17,7 @@ import {
 
 const here = dirname(fileURLToPath(import.meta.url));
 const config = {
+  deploymentEnvironment: (process.env.DIAFIT_DEPLOYMENT_ENV ?? 'development').toLowerCase(),
   host: process.env.HOST ?? '127.0.0.1',
   port: Number(process.env.PORT ?? 8787),
   mode: process.env.DIAFIT_ANALYSIS_MODE ?? 'disabled',
@@ -22,10 +25,24 @@ const config = {
   mealVisualMode: process.env.DIAFIT_MEAL_VISUAL_MODE ?? 'disabled',
   nutritionProviderMode: process.env.DIAFIT_NUTRITION_PROVIDER_MODE ?? 'disabled',
   nutritionDataVersion: process.env.NUTRITION_DATA_VERSION ?? 'FoodData Central API',
+  authMode: process.env.DIAFIT_AUTH_MODE ?? 'development-token',
+  authJWKSURL: process.env.DIAFIT_AUTH_JWKS_URL ?? '',
+  authIssuer: process.env.DIAFIT_AUTH_ISSUER ?? '',
+  authAudience: process.env.DIAFIT_AUTH_AUDIENCE ?? '',
   developmentToken: process.env.DIAFIT_DEVELOPMENT_TOKEN ?? '',
   rateLimit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 20),
   timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 25_000)
 };
+
+const productionConfigurationErrors = validateProductionConfiguration(process.env);
+if (productionConfigurationErrors.length) {
+  console.error(JSON.stringify({
+    event: 'startup_rejected',
+    reason: 'invalid_production_configuration',
+    failedChecks: productionConfigurationErrors.length
+  }));
+  throw new Error('Production configuration failed safety checks.');
+}
 
 const fixtures = JSON.parse(await readFile(join(here, 'fixtures/recognition-fixtures.json'), 'utf8'));
 
@@ -53,15 +70,24 @@ const components = {
   'butter-naan': item('butter-naan', 'Butter naan', 'bread', 1, 'naan', 95, nutrients(304, 7.6, 50.4, 8.6, 1.9))
 };
 
-createServer(async (request, response) => {
+const jwksAuthenticator = config.authMode === 'jwks'
+  ? new JWKSAuthenticator({
+      url: config.authJWKSURL,
+      issuer: config.authIssuer,
+      audience: config.authAudience,
+      timeoutMs: Math.min(config.timeoutMs, 5_000)
+    })
+  : null;
+
+const server = createServer(async (request, response) => {
   const requestId = randomUUID();
   setHeaders(response, requestId);
   try {
     if (request.method === 'GET' && request.url === '/health') {
-      return send(response, 200, { status: 'ok', apiVersion: 'v1', mode: config.mode, mealParserMode: config.mealParserMode, mealVisualMode: config.mealVisualMode, nutritionProviderMode: config.nutritionProviderMode, fixtureVersion: fixtures.version });
+      return send(response, 200, healthPayload(config, fixtures.version));
     }
     if (request.method === 'POST' && request.url === '/v1/meal-parse') {
-      const principal = authenticate(request);
+      const principal = await authenticate(request);
       if (!principal) return send(response, 401, { error: 'unauthorized', requestId });
       if (!limiter.take(`${principal}:meal-parse`)) return send(response, 429, { error: 'rate_limited', requestId });
       const input = validateMealParseRequest(await readJSON(request));
@@ -96,7 +122,7 @@ createServer(async (request, response) => {
       return send(response, 200, responseBody);
     }
     if (request.method === 'POST' && request.url === '/v1/nutrition-lookup') {
-      const principal = authenticate(request);
+      const principal = await authenticate(request);
       if (!principal) return send(response, 401, { error: 'unauthorized', requestId });
       if (!limiter.take(`${principal}:nutrition-lookup`)) return send(response, 429, { error: 'rate_limited', requestId });
       const input = validateNutritionLookupRequest(await readJSON(request));
@@ -121,7 +147,7 @@ createServer(async (request, response) => {
       return send(response, 200, body);
     }
     if (request.method === 'POST' && request.url === '/v1/meal-visual') {
-      const principal = authenticate(request);
+      const principal = await authenticate(request);
       if (!principal) return send(response, 401, { error: 'unauthorized', requestId });
       if (!limiter.take(`${principal}:meal-visual`)) return send(response, 429, { error: 'rate_limited', requestId });
       const input = validateMealVisualRequest(await readJSON(request));
@@ -157,7 +183,7 @@ createServer(async (request, response) => {
     if (request.method !== 'POST' || request.url !== '/v1/meal-analysis') {
       return send(response, 404, { error: 'not_found', requestId });
     }
-    const principal = authenticate(request);
+    const principal = await authenticate(request);
     if (!principal) return send(response, 401, { error: 'unauthorized', requestId });
     if (!limiter.take(principal)) return send(response, 429, { error: 'rate_limited', requestId });
     const input = validateRequest(await readJSON(request));
@@ -170,7 +196,12 @@ createServer(async (request, response) => {
     audit('analysis_rejected', { requestId, status, reason: error.code ?? 'bad_request' });
     return send(response, status, { error: error.code ?? 'bad_request', message: error.expose ? error.message : 'Request could not be processed.', requestId });
   }
-}).listen(config.port, config.host, () => {
+});
+
+server.requestTimeout = config.timeoutMs + 5_000;
+server.headersTimeout = 10_000;
+server.keepAliveTimeout = 5_000;
+server.listen(config.port, config.host, () => {
   console.log(`Diafit analysis service listening on http://${config.host}:${config.port}`);
 });
 
@@ -255,16 +286,13 @@ function sumNutrition(values) {
   return output;
 }
 
-function authenticate(request) {
-  // The app never carries a provider credential. This development guard exists
-  // only for the local fixture server; replace it with verified user auth/JWKS.
-  if (!config.developmentToken) return null;
-  const header = request.headers.authorization ?? '';
-  const candidate = header.startsWith('Bearer ') ? header.slice(7) : '';
-  const expected = Buffer.from(config.developmentToken);
-  const received = Buffer.from(candidate);
-  if (expected.length !== received.length || !timingSafeEqual(expected, received)) return null;
-  return createHash('sha256').update(candidate).digest('hex').slice(0, 16);
+async function authenticate(request) {
+  if (config.authMode === 'jwks') return jwksAuthenticator ? jwksAuthenticator.principal(request) : null;
+  // Development tokens are intentionally unavailable when the deployment is
+  // marked production. Production configuration validation also rejects this
+  // mode before the listener starts.
+  if (config.deploymentEnvironment === 'production') return null;
+  return developmentPrincipal(request, config.developmentToken);
 }
 
 async function readJSON(request) {
@@ -345,6 +373,9 @@ function setHeaders(response, requestId) {
   response.setHeader('x-request-id', requestId);
   response.setHeader('x-content-type-options', 'nosniff');
   response.setHeader('cache-control', 'no-store');
+  if (config.deploymentEnvironment === 'production') {
+    response.setHeader('strict-transport-security', 'max-age=31536000; includeSubDomains');
+  }
 }
 
 function send(response, status, body) { response.writeHead(status); response.end(JSON.stringify(body)); }

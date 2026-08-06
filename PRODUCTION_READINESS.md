@@ -17,6 +17,18 @@ Phase 4 code-level controls are now present: `PrivacyInfo.xcprivacy`, a release-
 
 The following remain release blockers outside the app code: production authentication/authorization, TLS/backend deployment, managed secret storage, durable abuse/rate-limit monitoring, a published privacy/retention policy, App Store privacy answers, and physical-device photo payload/security tests.
 
+## Phase 5 release/service hardening
+
+The backend now fails closed in production, supports RS256/JWKS access-token
+verification, hides provider details from production health responses, bounds
+HTTP timeouts, and has a repeatable release audit at
+`Tools/verify-release.sh`. See `Docs/ReleaseReadiness.md`.
+
+The audit does not create Apple signing certificates, deploy infrastructure, or
+claim physical-device verification. Those steps still require the Apple
+Developer account, identity provider, managed secrets, and a healthy Xcode
+installation.
+
 ## Blocking release issues
 
 - Code signing is disabled in the project’s app configurations.
