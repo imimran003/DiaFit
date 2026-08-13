@@ -1011,7 +1011,11 @@ struct PhotoAnalysisOrchestrator: Sendable {
         if let remote {
             let remoteStartedAt = Date()
             do {
-                let remoteResult = try await withPhotoAnalysisTimeout(seconds: 32) {
+                // The hosted free tier may need roughly a minute to wake. Keep
+                // this above the URLSession timeout and the backend's 90 s
+                // request budget, while still providing a finite recovery
+                // state if the service genuinely cannot respond.
+                let remoteResult = try await withPhotoAnalysisTimeout(seconds: 105) {
                     try await remote.analyse(image, dishHint: description)
                 }
                 let elapsedMilliseconds = Int(Date().timeIntervalSince(remoteStartedAt) * 1_000)

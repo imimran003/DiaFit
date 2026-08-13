@@ -227,15 +227,15 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         // fixtures, or another provider without changing this client.
         var request = URLRequest(url: endpoint.appending(path: "v1/meal-parse"))
         request.httpMethod = "POST"
-        // Keep interactive logging bounded. Text requests should resolve
-        // quickly; compressed image uploads receive a little more time, but a
-        // dead tunnel must not leave "Checking nutrition" onscreen for nearly
-        // a minute.
-        // One live image request is now the normal path when the provider
-        // returns trusted visual coverage. Allow the backend's bounded retry
-        // window to finish, while still failing a dead tunnel quickly enough
-        // for the UI to offer the private/manual recovery state.
-        request.timeoutInterval = image == nil ? 10 : 20
+        // Render's free tier can suspend the service. The first request after
+        // suspension is therefore a cold start (often 50+ seconds) before
+        // the provider even receives the photo. A 20-second image timeout
+        // turned every legitimate cold start into "Retry AI recognition".
+        // Keep text requests responsive, but allow an image request to cover
+        // the host wake-up plus one bounded Gemini attempt. The server uses
+        // the same budget, so the client never abandons a request that the
+        // backend is still safely processing.
+        request.timeoutInterval = image == nil ? 20 : 100
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")

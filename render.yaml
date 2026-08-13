@@ -32,8 +32,10 @@ services:
         value: disabled
       - key: RATE_LIMIT_PER_MINUTE
         value: 20
+      # The free instance may sleep. This budget covers cold-start wake-up
+      # plus one bounded Gemini request; the iOS client allows a small margin.
       - key: ANALYSIS_TIMEOUT_MS
-        value: 25000
+        value: 90000
       - key: MEAL_PARSE_PROVIDER_ATTEMPTS
         value: 2
       - key: MEAL_PARSE_RETRY_BASE_MS
