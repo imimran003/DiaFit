@@ -24,6 +24,23 @@ Provider output is deduplicated before nutrition aggregation, and canonical matc
 
 Structured interpretation also carries a coarse typed food category and optional visual quantity evidence. A recognised component is never removed merely because the bundled catalog lacks an exact row: the app creates a provisional identity, labels the resulting category-level nutrition as a curated estimate, and keeps the item editable. If even a safe category cannot be established, the unresolved component still remains visible with an explicit unavailable state. Countable foods such as eggs and stacked breads must include concise visual count evidence; absent evidence lowers confidence and creates a quantity clarification instead of silently defaulting to one.
 
+### Portion and prepared-dish reconciliation
+
+The image pipeline treats provider output as multiple observations of one plate,
+not as additive truth. When full-frame and verification passes disagree on a
+discrete count, the lower visible bound is retained, the item is marked for
+confirmation, and its estimated grams and nutrition scale from that count. A
+catalog-specific bread conversion is used even when a provider says `piece`,
+so two rotis use two 35 g servings rather than a generic 120 g piece estimate.
+Ingredient-only observations are collapsed when a more specific prepared dish
+is present: paneer in visible spinach gravy becomes one editable `Palak paneer`
+component, never both paneer and palak paneer. Tiny onions, garnishes and papad
+fragments are excluded unless a separate serving is explicitly evidenced or a
+second pass corroborates them. The bundled palak-paneer record is a traceable,
+editable 180 g katori estimate (150 kcal, 8 g protein, 7 g carbohydrate, 10 g
+fat and 2.5 g fibre per 100 g); it is not treated as an exact recipe or medical
+claim.
+
 The photo picker states this escalation before selection: processing starts on device, and uncertain local results may send a metadata-stripped copy to the configured AI provider. Development use of Gemini's free tier remains subject to Google's quotas and data-use terms; it is not the shipping privacy posture for sensitive health data without a completed consent, retention, and disclosure review.
 
 If automatic recognition cannot clear the completeness gate, the review keeps the photo and presents one recoverable food-name field. Submitting that field now shows an explicit error when unresolved, or removes the blocking identification question and enables confirmation after nutrition validates. The review uses opaque semantic surfaces rather than translucent white overlays so labels, controls and nutrition remain legible in dark mode and under Reduce Transparency.

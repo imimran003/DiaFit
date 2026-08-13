@@ -239,6 +239,73 @@ assert.equal(sanitizedRice.detectedItems[0].preparationMethod, null);
 assert.equal(sanitizedRice.clarificationQuestions.length, 1);
 validateMealParseResult(sanitizedRice);
 
+// A photographed curry must remain a prepared dish, not be double-counted as
+// both paneer and palak paneer. A tiny onion garnish without portion evidence
+// is not a meal component, and two-vs-three roti observations keep the lower
+// visible bound until the member confirms the count.
+const photoPlate = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'Paneer', canonicalSearchName: 'paneer', category: 'dairyOrSide', quantity: 1, unit: 'medium bowl', confidence: 0.97 },
+    { ...parsed.detectedItems[0], originalText: 'Palak paneer sabji', canonicalSearchName: 'palak paneer', category: 'vegetarianCurry', quantity: 1, unit: 'katori', preparationMethod: 'spinach gravy', confidence: 0.91 },
+    { ...parsed.detectedItems[0], originalText: 'Two rotis', canonicalSearchName: 'roti', category: 'bread', quantity: 2, unit: 'piece', quantityEvidence: 'two visible roti layers', confidence: 0.90 },
+    { ...parsed.detectedItems[0], originalText: 'Three rotis', canonicalSearchName: 'roti', category: 'bread', quantity: 3, unit: 'piece', quantityEvidence: 'three visible roti layers', confidence: 0.94 },
+    { ...parsed.detectedItems[0], originalText: 'Pyaz', canonicalSearchName: 'onion', category: 'fruitOrVegetable', quantity: 1, unit: 'serving', confidence: 0.72 }
+  ],
+  clarificationQuestions: [],
+  visualCoverage
+});
+assert.deepEqual(photoPlate.detectedItems.map(item => item.canonicalSearchName), ['palak paneer', 'roti']);
+assert.equal(photoPlate.detectedItems.find(item => item.canonicalSearchName === 'roti').quantity, 2);
+assert.equal(photoPlate.detectedItems.find(item => item.canonicalSearchName === 'roti').requiresClarification, true);
+assert.equal(photoPlate.detectedItems.find(item => item.canonicalSearchName === 'palak paneer').quantity, 1);
+assert.equal(photoPlate.detectedItems.some(item => item.canonicalSearchName === 'onion'), false);
+assert.equal(photoPlate.visualCoverage.inventoryComplete, false);
+validateMealParseResult(photoPlate);
+
+const ingredientOnlyPalak = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'Paneer in green spinach gravy', canonicalSearchName: 'paneer', category: 'dairyOrSide', quantity: 1, unit: 'medium bowl', preparationMethod: 'green spinach gravy', confidence: 0.86 }
+  ],
+  mealDescription: 'Paneer in green spinach gravy',
+  visualCoverage
+});
+assert.equal(ingredientOnlyPalak.detectedItems[0].canonicalSearchName, 'palak paneer');
+assert.equal(ingredientOnlyPalak.detectedItems[0].category, 'vegetarianCurry');
+
+const evidenceCorrectedCount = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'Roti stack', canonicalSearchName: 'roti', category: 'bread', quantity: 3, unit: 'piece', quantityEvidence: 'two visible roti layers', confidence: 0.90 }
+  ],
+  visualCoverage
+});
+assert.equal(evidenceCorrectedCount.detectedItems[0].quantity, 2);
+assert.equal(evidenceCorrectedCount.detectedItems[0].requiresClarification, true);
+assert.equal(evidenceCorrectedCount.clarificationQuestions.length, 1);
+
+const speculativePapadPlate = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'Two rotis', canonicalSearchName: 'roti', category: 'bread', quantity: 2, unit: 'piece', quantityEvidence: 'two visible roti layers', confidence: 0.92 },
+    { ...parsed.detectedItems[0], originalText: 'Palak paneer', canonicalSearchName: 'palak paneer', category: 'vegetarianCurry', quantity: 1, unit: 'katori', confidence: 0.91 },
+    { ...parsed.detectedItems[0], originalText: 'Papad fragment', canonicalSearchName: 'sabudana papad', category: 'snack', quantity: 2, unit: 'piece', quantityEvidence: 'two visible papad fragments', confidence: 0.88 }
+  ],
+  visualCoverage
+});
+assert.deepEqual(speculativePapadPlate.detectedItems.map(item => item.canonicalSearchName), ['roti', 'palak paneer']);
+
+const explicitPapadPlate = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'Two separate papads', canonicalSearchName: 'sabudana papad', category: 'snack', quantity: 2, unit: 'piece', quantityEvidence: 'two separate papads on a side plate', confidence: 0.88 },
+    { ...parsed.detectedItems[0], originalText: 'Palak paneer', canonicalSearchName: 'palak paneer', category: 'vegetarianCurry', quantity: 1, unit: 'katori', confidence: 0.91 }
+  ],
+  visualCoverage
+});
+assert.equal(explicitPapadPlate.detectedItems.some(item => item.canonicalSearchName === 'sabudana papad'), true);
+
 let geminiURL;
 let geminiOptions;
 const gemini = new GeminiMealParser({

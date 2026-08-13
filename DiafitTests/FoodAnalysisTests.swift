@@ -1762,6 +1762,62 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(keys.contains("peanut"))
     }
 
+    func testPhotoInventoryKeepsPalakPaneerAsDishAndUsesConservativeRotiCount() throws {
+        let primary = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Paneer", canonicalSearchName: "paneer", category: .dairyOrSide, quantity: 1, unit: "medium bowl", confidence: 0.97),
+                ParsedFoodItem(originalText: "Two rotis", canonicalSearchName: "roti", regionalName: "roti", category: .bread, quantity: 2, unit: "piece", quantityEvidence: "two visible roti layers", confidence: 0.90),
+                ParsedFoodItem(originalText: "Pyaz", canonicalSearchName: "onion", regionalName: "pyaz", category: .fruitOrVegetable, quantity: 1, unit: "serving", confidence: 0.72)
+            ],
+            unresolvedItems: [], mealDescription: "Paneer, two rotis and onion", clarificationQuestions: [], confidence: 0.80
+        )
+        let verified = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(originalText: "Palak paneer sabji", canonicalSearchName: "palak paneer", category: .vegetarianCurry, quantity: 1, unit: "katori", preparationMethod: "spinach gravy", confidence: 0.91),
+                ParsedFoodItem(originalText: "Three rotis", canonicalSearchName: "roti", regionalName: "roti", category: .bread, quantity: 3, unit: "piece", quantityEvidence: "three visible roti layers", confidence: 0.94)
+            ],
+            unresolvedItems: [], mealDescription: "Palak paneer and three rotis", clarificationQuestions: [], confidence: 0.88
+        )
+
+        let selected = PhotoInventoryVerificationService(catalog: catalog).preferred(primary: primary, verified: verified)
+
+        XCTAssertEqual(Set(selected.detectedItems.map(\.canonicalSearchName)), Set(["palak paneer", "roti"]))
+        let roti = try XCTUnwrap(selected.detectedItems.first { $0.canonicalSearchName == "roti" })
+        XCTAssertEqual(roti.quantity, 2, "A count disagreement must keep the visible lower bound until confirmation.")
+        XCTAssertTrue(roti.requiresClarification)
+        XCTAssertTrue(selected.clarificationQuestions.contains { $0.localizedCaseInsensitiveContains("how many roti") })
+        XCTAssertFalse(selected.detectedItems.contains { $0.canonicalSearchName == "onion" })
+    }
+
+    func testPalakPaneerHasTraceableCuratedNutrition() throws {
+        let palakPaneer = try XCTUnwrap(catalog.normalise("palak paneer"))
+        let grams = try XCTUnwrap(StandardPortionEstimationService().estimatedWeight(quantity: 1, unit: .katori, food: palakPaneer))
+        let nutrition = CatalogNutritionLookupService().nutrition(for: palakPaneer, estimatedWeightGrams: grams)
+
+        XCTAssertEqual(grams, 180)
+        XCTAssertEqual(nutrition.values.caloriesKcal ?? 0, 270, accuracy: 0.01)
+        XCTAssertEqual(nutrition.values.proteinGrams ?? 0, 14.4, accuracy: 0.01)
+        XCTAssertEqual(nutrition.values.carbohydrateGrams ?? 0, 12.6, accuracy: 0.01)
+        XCTAssertTrue(nutrition.values.hasCompleteCoreNutrients)
+        XCTAssertEqual(nutrition.provenance.kind, .curatedRecipeEstimate)
+    }
+
+    func testPalakPaneerWithTwoRotisUsesServingAwareNutritionTotals() throws {
+        let palakPaneer = try XCTUnwrap(catalog.normalise("palak paneer"))
+        let roti = try XCTUnwrap(catalog.normalise("roti"))
+        let portions = StandardPortionEstimationService()
+        let curryGrams = try XCTUnwrap(portions.estimatedWeight(quantity: 1, unit: .katori, food: palakPaneer))
+        let rotiGrams = try XCTUnwrap(portions.estimatedWeight(quantity: 2, unit: .piece, food: roti))
+        let curry = CatalogNutritionLookupService().nutrition(for: palakPaneer, estimatedWeightGrams: curryGrams).values
+        let breads = CatalogNutritionLookupService().nutrition(for: roti, estimatedWeightGrams: rotiGrams).values
+
+        XCTAssertEqual(rotiGrams, 70, accuracy: 0.01)
+        XCTAssertEqual((curry.caloriesKcal ?? 0) + (breads.caloriesKcal ?? 0), 477.9, accuracy: 0.1)
+        XCTAssertEqual((curry.carbohydrateGrams ?? 0) + (breads.carbohydrateGrams ?? 0), 55.65, accuracy: 0.1)
+        XCTAssertEqual((curry.proteinGrams ?? 0) + (breads.proteinGrams ?? 0), 22.45, accuracy: 0.1)
+        XCTAssertEqual((curry.fibreGrams ?? 0) + (breads.fibreGrams ?? 0), 11.5, accuracy: 0.1)
+    }
+
     func testTrustedVisualCoverageEnablesSinglePassFastPath() {
         let parse = MealParseResult(
             detectedItems: [
@@ -2596,6 +2652,12 @@ final class FoodAnalysisTests: XCTestCase {
         let ghee = try XCTUnwrap(catalog.normalise("ghee"))
         let portions = StandardPortionEstimationService()
         XCTAssertEqual(portions.estimatedWeight(quantity: 1, unit: .cup, food: roti), 240)
+        XCTAssertEqual(
+            try XCTUnwrap(portions.estimatedWeight(quantity: 2, unit: .piece, food: roti)),
+            70,
+            accuracy: 0.001,
+            "A generic vision 'piece' must use the catalog's one-roti conversion."
+        )
         XCTAssertEqual(portions.estimatedWeight(quantity: 1, unit: .teaspoon, food: ghee), 5)
         XCTAssertEqual(portions.estimatedWeight(quantity: 1, unit: .tablespoon, food: ghee), 15)
 

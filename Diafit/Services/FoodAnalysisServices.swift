@@ -349,7 +349,11 @@ struct PhotoInventoryVerificationService: Sendable {
         // without it we retain the conservative verification path used by
         // legacy providers and deterministic fixtures.
         if hasTrustedCoverage(parse) {
-            return false
+            // A countable stack still benefits from one independent count
+            // check; the common single-item photo keeps the fast path.
+            return parse.detectedItems.contains {
+                isVisuallyCountable($0) && ($0.quantity ?? 1) > 1
+            }
         }
         // A six-component plate is still small enough to audit, and is where
         // a single broad label is most likely to hide a side or flatbread.
@@ -519,6 +523,31 @@ struct PhotoInventoryVerificationService: Sendable {
             }
         }
 
+        // A dish name is more informative than one of its visible ingredients.
+        // Vision passes often disagree as "paneer" versus "palak paneer" (or
+        // "rice" versus "biryani"). Keeping both would double-count the bowl
+        // and erase the preparation that the user actually needs to review.
+        merged = collapseIngredientIdentities(merged)
+        let countDisagreements = merged.filter { $0.requiresClarification && isDiscreteUnit($0.unit) }
+
+        // Tiny accompaniments are a common source of false plate components:
+        // one pass sees onion slices or a papad fragment and another does not.
+        // Keep them when both passes corroborate the item or when the provider
+        // supplied explicit portion evidence; otherwise they must not inflate
+        // the meal simply because they were salient in one crop.
+        let substantiveCount = merged.filter(isSubstantiveServing).count
+        if substantiveCount > 0 {
+            let primaryIdentitySet = Set(primary.detectedItems.map(identityKey))
+            let verifiedIdentitySet = Set(verified.detectedItems.map(identityKey))
+            merged.removeAll { item in
+                guard isMinorAccompaniment(item) else { return false }
+                let key = identityKey(item)
+                let corroborated = primaryIdentitySet.contains(key) && verifiedIdentitySet.contains(key)
+                let hasStandaloneEvidence = hasStandalonePortionEvidence(item)
+                return !corroborated && !hasStandaloneEvidence
+            }
+        }
+
         // The fallback above intentionally remains conservative. If a future
         // provider returns an empty merge after filtering, preserve the more
         // complete response rather than showing a blank review.
@@ -533,9 +562,12 @@ struct PhotoInventoryVerificationService: Sendable {
         selected.unresolvedItems = SemanticQuestionDeduplicator.uniqueStrings(
             primary.unresolvedItems + verified.unresolvedItems
         )
-        selected.clarificationQuestions = SemanticQuestionDeduplicator.uniqueStrings(
-            primary.clarificationQuestions + verified.clarificationQuestions
-        )
+        var clarificationQuestions = primary.clarificationQuestions + verified.clarificationQuestions
+        clarificationQuestions.append(contentsOf: countDisagreements.map { item in
+            let name = item.regionalName ?? item.originalText
+            return "How many \(name) were visible? I kept the lower count until you confirm it."
+        })
+        selected.clarificationQuestions = SemanticQuestionDeduplicator.uniqueStrings(clarificationQuestions)
         selected.visualCoverage = reconciledCoverage(
             primary: primary.visualCoverage,
             verified: verified.visualCoverage,
@@ -613,15 +645,93 @@ struct PhotoInventoryVerificationService: Sendable {
             let key = identityKey(item)
             guard !key.isEmpty else { continue }
             if let index = indexByKey[key] {
-                if evidenceScore(item) > evidenceScore(result[index]) {
-                    result[index] = item
-                }
+                result[index] = reconciledDuplicate(result[index], item)
             } else {
                 indexByKey[key] = result.count
                 result.append(item)
             }
         }
         return result
+    }
+
+    /// Reconcile two provider observations of the same physical serving. A
+    /// count disagreement is not permission to select the largest count: for
+    /// discrete foods that would turn two visible rotis into three. Keep the
+    /// conservative lower bound, retain both observations as editable context,
+    /// and force one explicit confirmation question.
+    private func reconciledDuplicate(_ first: ParsedFoodItem, _ second: ParsedFoodItem) -> ParsedFoodItem {
+        let preferred = evidenceScore(second) > evidenceScore(first) ? second : first
+        guard let firstQuantity = first.quantity, let secondQuantity = second.quantity,
+              firstQuantity.isFinite, secondQuantity.isFinite,
+              abs(firstQuantity - secondQuantity) > 0.0001,
+              isDiscreteUnit(first.unit) || isDiscreteUnit(second.unit) else {
+            return preferred
+        }
+
+        var reviewed = preferred
+        reviewed.quantity = min(firstQuantity, secondQuantity)
+        reviewed.confidence = min(reviewed.confidence, 0.70)
+        reviewed.requiresClarification = true
+        if let weight = reviewed.estimatedGrams,
+           let preferredQuantity = preferred.quantity,
+           let reviewedQuantity = reviewed.quantity,
+           preferredQuantity > 0 {
+            reviewed.estimatedGrams = weight * reviewedQuantity / preferredQuantity
+        }
+        reviewed.quantityEvidence = [first.quantityEvidence, second.quantityEvidence]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " / ")
+        return reviewed
+    }
+
+    private func isDiscreteUnit(_ unit: String?) -> Bool {
+        let normalized = unit?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() ?? ""
+        return ["piece", "pieces", "whole", "whole egg", "egg", "eggs", "roti", "rotis", "chapati", "chapatis", "naan", "paratha", "idli", "slice", "package"].contains(normalized)
+    }
+
+    private func isVisuallyCountable(_ item: ParsedFoodItem) -> Bool {
+        if item.category == .egg || item.category == .bread { return true }
+        return isDiscreteUnit(item.unit)
+    }
+
+    /// Removes an ingredient-level observation when a more specific prepared
+    /// dish from the other pass contains it (for example paneer -> palak
+    /// paneer). Token matching is intentionally generic and catalog-backed.
+    private func collapseIngredientIdentities(_ items: [ParsedFoodItem]) -> [ParsedFoodItem] {
+        items.filter { item in
+            let itemKey = identityKey(item).replacingOccurrences(of: "-", with: " ")
+            let itemTokens = Set(itemKey.split(separator: " ").map(String.init))
+            guard !itemTokens.isEmpty else { return true }
+            return !items.contains { other in
+                let otherKey = identityKey(other).replacingOccurrences(of: "-", with: " ")
+                guard otherKey != itemKey else { return false }
+                let otherTokens = Set(otherKey.split(separator: " ").map(String.init))
+                guard otherTokens.count > itemTokens.count,
+                      itemTokens.isSubset(of: otherTokens) else { return false }
+                // Do not collapse unrelated foods merely because a short word
+                // happens to be shared; require a food-family relationship.
+                return item.category == other.category
+                    || item.category == .dairyOrSide
+                    || other.category == .vegetarianCurry
+            }
+        }
+    }
+
+    private func isMinorAccompaniment(_ item: ParsedFoodItem) -> Bool {
+        let key = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        let source = [item.originalText, item.regionalName ?? ""].joined(separator: " ").lowercased()
+        let minor = ["onion", "pyaz", "coriander", "cilantro", "tomato", "papad", "poppadom", "garnish", "topping", "sprinkle", "pickle"]
+        return minor.contains { key == $0 || key.hasPrefix($0 + " ") || source.contains($0) }
+    }
+
+    private func hasStandalonePortionEvidence(_ item: ParsedFoodItem) -> Bool {
+        guard let evidence = item.quantityEvidence?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !evidence.isEmpty else { return false }
+        return evidence.range(
+            of: #"(?i)\b(separate|distinct|serving|plate|bowl|whole|piece|pieces)\b"#,
+            options: .regularExpression
+        ) != nil
     }
 
     private func isReplaceableGeneric(_ item: ParsedFoodItem) -> Bool {
@@ -663,10 +773,11 @@ struct PhotoInventoryVerificationService: Sendable {
               !parse.detectedItems.isEmpty,
               parse.unresolvedItems.isEmpty,
               coverage.distinctServingCount == parse.detectedItems.count else { return false }
-        return parse.detectedItems.allSatisfy {
+        guard parse.detectedItems.allSatisfy({
             $0.confidence >= 0.82
                 && !$0.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }
+        }) else { return false }
+        return true
     }
 }
 
@@ -1439,6 +1550,19 @@ struct StandardPortionEstimationService: PortionEstimationService, Sendable {
             return grams * quantity / serving.quantity
         }
 
+        // Vision providers commonly describe a countable bread as a generic
+        // "piece". Once the item is canonical, prefer its food-specific
+        // serving conversion (one roti/naan/paratha) over the 60 g generic
+        // piece fallback. This keeps two rotis from being silently scaled as
+        // 120 g and makes the same rule apply to edits and fresh recognition.
+        if unit == .piece,
+           food.category == .bread,
+           let serving = food.standardServing,
+           let grams = serving.grams,
+           serving.quantity > 0 {
+            return grams * quantity / serving.quantity
+        }
+
         let gramsPerUnit: Double? = switch unit {
         case .millilitres: 1
         case .teaspoon: 5
@@ -1655,6 +1779,13 @@ struct MealItemNutritionRecalculator: Sendable {
         case .ladle:
             return item.quantity * 60
         case .piece:
+            if let definition = catalog.food(canonicalID: item.canonicalFoodId),
+               definition.category == .bread,
+               let serving = definition.standardServing,
+               let grams = serving.grams,
+               serving.quantity > 0 {
+                return grams * item.quantity / serving.quantity
+            }
             return item.quantity * 60
         case .roti:
             return item.quantity * 35

@@ -154,6 +154,9 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'Use generic identities such as vegetable soup, curry, salad, or mixed food only when a more specific visible identity is not supported. When uncertain between a regional dish and a generic category, preserve the most specific grounded regional name, lower confidence, and request clarification rather than silently collapsing another visible serving.',
   'For countable foods such as eggs, rotis, chapatis, bread slices, idlis, fruit, and packaged items, count every visible unit instead of defaulting to one. For cut eggs, count halves or quarters and convert them back to whole eggs. For stacked breads, inspect visible edges and layers. Put the concise count reasoning in quantityEvidence, such as "six halves = three whole eggs" or "three visible roti layers".',
   'If a count is partly occluded or cannot be determined reliably, lower confidence, set requiresClarification true, set quantityEvidence to the visible lower bound, and add one concise count clarification question.',
+  'Never use a habitual or default count for a photographed stack. If exactly two roti or chapati discs/layers are visible, return quantity 2—not 3—and explain the count in quantityEvidence. If the stack is partly hidden, return the visible lower bound and ask for confirmation rather than inventing an extra piece.',
+  'Keep a prepared dish together when its identity is visible: a green spinach gravy with paneer cubes is palak paneer (or saag paneer), not a standalone paneer serving. Likewise, retain the specific curry, sabzi, dal, or rice preparation instead of reducing it to one ingredient.',
+  'Do not promote garnish or tiny accompaniments into full servings. Onion slices, coriander, tomato pieces, spices, papad fragments, and decorative toppings belong in additions or exclusions unless a clearly separable serving occupies its own pile or container with visible-portion evidence.',
   'Never emit alternative guesses as separate detected items. In particular, one visible rice portion must not become both fried rice and steamed rice; choose the best-supported identity and lower confidence or ask one clarification when uncertain.',
   'Recognise common home-cooked and regional preparations from visible shape, grain, sauce, garnish, and cooking style. Look explicitly for Indian flatbreads such as roti or chapati, dry sabji, dal, rice, curries, sides, and beverages rather than collapsing or omitting them.',
   'Prefer a specific regional dish identity when the visual evidence supports it, including tapioca/sago pearl preparations, flattened-rice dishes, lentil dishes, rice dishes, breads, curries, snacks, fruit, vegetables, and beverages.',
@@ -334,6 +337,17 @@ export function sanitizeMealParseResult(result) {
       packagedLabelEvidence: rawItem?.packagedLabelEvidence ?? null,
       aiNutritionEstimate: rawItem?.aiNutritionEstimate ?? null
     };
+    const evidenceQuantity = quantityFromEvidence(item);
+    if (evidenceQuantity != null && isDiscreteFood(item)) {
+      const providerQuantity = Number(item.quantity);
+      const countDisagrees = Number.isFinite(providerQuantity)
+        && Math.abs(providerQuantity - evidenceQuantity) > 0.0001;
+      item.quantity = evidenceQuantity;
+      item.requiresClarification = Boolean(item.requiresClarification || countDisagrees);
+      if (countDisagrees) {
+        clarificationQuestions.push(`How many ${item.regionalName || item.originalText} were visible? I kept the evidence-based count until you confirm it.`);
+      }
+    }
     const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
     if (!identity || !byIdentity.has(identity)) {
       byIdentity.set(identity || `unresolved-${byIdentity.size}`, item);
@@ -341,18 +355,245 @@ export function sanitizeMealParseResult(result) {
     }
     const existing = byIdentity.get(identity);
     const preferred = (item?.confidence ?? 0) > (existing?.confidence ?? 0) ? item : existing;
+    const countConflict = Number.isFinite(existing?.quantity)
+      && Number.isFinite(item?.quantity)
+      && Math.abs(existing.quantity - item.quantity) > 0.0001
+      && isDiscreteFood(existing);
     const preparationConflict = Boolean(existing?.preparationMethod && item?.preparationMethod
       && existing.preparationMethod.toLowerCase() !== item.preparationMethod.toLowerCase());
-    byIdentity.set(identity, {
+    const reconciled = {
       ...preferred,
       preparationMethod: preparationConflict ? null : preferred.preparationMethod,
       confidence: Math.min(preferred.confidence, 0.65),
-      requiresClarification: true
-    });
-    const question = `Please confirm the preparation for ${identity}.`;
-    if (!clarificationQuestions.includes(question)) clarificationQuestions.push(question);
+      requiresClarification: true,
+      ...(countConflict ? {
+        quantity: Math.min(existing.quantity, item.quantity),
+        confidence: Math.min(preferred.confidence, 0.70),
+        quantityEvidence: [existing.quantityEvidence, item.quantityEvidence].filter(Boolean).join(' / ') || null
+      } : {})
+    };
+    if (countConflict && Number.isFinite(preferred.estimatedGrams) && preferred.quantity > 0) {
+      reconciled.estimatedGrams = preferred.estimatedGrams * reconciled.quantity / preferred.quantity;
+    }
+    byIdentity.set(identity, reconciled);
+    if (preparationConflict) {
+      const question = `Please confirm the preparation for ${identity}.`;
+      if (!clarificationQuestions.includes(question)) clarificationQuestions.push(question);
+    }
+    if (countConflict) {
+      const question = `How many ${preferred.regionalName || preferred.originalText} were visible? I kept the lower count until you confirm it.`;
+      if (!clarificationQuestions.includes(question)) clarificationQuestions.push(question);
+    }
   }
-  return { ...result, detectedItems: [...byIdentity.values()], clarificationQuestions };
+  let detectedItems = promotePreparedDishIdentities([...byIdentity.values()], result.mealDescription);
+  detectedItems = collapseSemanticFoodDuplicates(detectedItems, clarificationQuestions);
+  const removedImageAccoutrements = result.visualCoverage != null
+    ? removeUnsupportedImageAccoutrements(detectedItems)
+    : { items: detectedItems, removed: false };
+  detectedItems = removedImageAccoutrements.items;
+
+  let visualCoverage = result.visualCoverage;
+  if (removedImageAccoutrements.removed && visualCoverage) {
+    visualCoverage = {
+      ...visualCoverage,
+      // A provider that reported a complete inventory while also returning
+      // unsubstantiated garnish is no longer allowed to take the fast path.
+      inventoryComplete: false,
+      distinctServingCount: detectedItems.length,
+      coverageConfidence: Math.min(visualCoverage.coverageConfidence ?? 0, 0.70),
+      occludedRegions: [...new Set([
+        ...(Array.isArray(visualCoverage.occludedRegions) ? visualCoverage.occludedRegions : []),
+        'minor accompaniments lacked independent portion evidence'
+      ])]
+    };
+    clarificationQuestions.push('Please confirm any small side or garnish that should be logged separately.');
+  }
+  return {
+    ...result,
+    detectedItems,
+    visualCoverage,
+    clarificationQuestions: [...new Set(clarificationQuestions.map(value => String(value).trim()).filter(Boolean))]
+  };
+}
+
+// Preserve a prepared dish when the provider sees the defining sauce or leaf
+// base but emits only the ingredient (a recurring "paneer" result for a green
+// palak-paneer bowl). This is a semantic correction, not a nutrition guess:
+// the promoted identity still goes through the canonical catalog and its
+// traceable nutrition record on iOS.
+function promotePreparedDishIdentities(items, mealDescription = '') {
+  const mealCue = String(mealDescription ?? '').toLowerCase();
+  return items.map(item => {
+    const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
+    if (identity !== 'paneer') return item;
+    const evidence = [
+      item?.originalText,
+      item?.regionalName,
+      item?.preparationMethod,
+      ...(Array.isArray(item?.additions) ? item.additions : []),
+      mealCue
+    ].filter(Boolean).join(' ').toLowerCase();
+    const specificCue = /\b(?:palak paneer|saag paneer|spinach gravy|spinach curry|green spinach gravy|leafy spinach gravy)\b/.test(evidence);
+    if (!specificCue) return item;
+    return {
+      ...item,
+      canonicalSearchName: 'palak paneer',
+      category: 'vegetarianCurry',
+      preparationMethod: item.preparationMethod || 'spinach gravy',
+      confidence: Math.min(Number(item.confidence) || 0, 0.90),
+      requiresClarification: Boolean(item.requiresClarification)
+    };
+  });
+}
+
+/**
+ * Vision models frequently emit an ingredient and the dish containing that
+ * ingredient as two rows ("paneer" + "palak paneer"). That is one bowl, not
+ * two servings. Collapse only clear token-subset/family relationships; do not
+ * merge unrelated foods merely because they share a word.
+ */
+function collapseSemanticFoodDuplicates(items, clarificationQuestions) {
+  const keep = [];
+  for (const item of items) {
+    const current = foodTokens(item);
+    const containingIndex = keep.findIndex(existing => {
+      const existingTokens = foodTokens(existing);
+      return existingTokens.size > current.size
+        && isRelatedFoodFamily(item, existing)
+        && isTokenSubset(current, existingTokens);
+    });
+    if (containingIndex >= 0) {
+      const existing = keep[containingIndex];
+      // The current item is the more specific prepared dish. Keep its
+      // identity even when the ingredient-only observation scored higher.
+      keep[containingIndex] = enrichSpecificObservation(existing, item);
+      continue;
+    }
+
+    const containedIndex = keep.findIndex(existing => {
+      const existingTokens = foodTokens(existing);
+      return current.size > existingTokens.size
+        && isRelatedFoodFamily(existing, item)
+        && isTokenSubset(existingTokens, current);
+    });
+    if (containedIndex >= 0) {
+      const existing = keep[containedIndex];
+      // The current item is the more specific prepared dish.
+      keep[containedIndex] = enrichSpecificObservation(item, existing);
+      continue;
+    }
+
+    const familyIndex = keep.findIndex(existing => semanticFamily(existing) && semanticFamily(existing) === semanticFamily(item));
+    if (familyIndex >= 0) {
+      const existing = keep[familyIndex];
+      const winner = strongerObservation(existing, item);
+      const countDisagrees = Number.isFinite(existing.quantity) && Number.isFinite(item.quantity)
+        && Math.abs(existing.quantity - item.quantity) > 0.0001
+        && isDiscreteFood(existing);
+      if (countDisagrees) {
+        winner.quantity = Math.min(existing.quantity, item.quantity);
+        winner.confidence = Math.min(winner.confidence, 0.70);
+        winner.requiresClarification = true;
+        winner.quantityEvidence = [existing.quantityEvidence, item.quantityEvidence].filter(Boolean).join(' / ') || null;
+        clarificationQuestions.push(`How many ${winner.regionalName || winner.originalText} were visible? I kept the lower count until you confirm it.`);
+      }
+      keep[familyIndex] = winner;
+      continue;
+    }
+    keep.push(item);
+  }
+  return keep;
+}
+
+function strongerObservation(first, second) {
+  const score = value => (Number(value?.confidence) || 0)
+    + (value?.quantityEvidence ? 0.12 : 0)
+    + (value?.estimatedGrams ? 0.06 : 0)
+    + (value?.preparationMethod ? 0.03 : 0);
+  return score(second) > score(first) ? second : first;
+}
+
+function enrichSpecificObservation(specific, supporting) {
+  return {
+    ...specific,
+    quantity: specific.quantity ?? supporting.quantity,
+    unit: specific.unit || supporting.unit,
+    estimatedGrams: specific.estimatedGrams ?? supporting.estimatedGrams,
+    quantityEvidence: specific.quantityEvidence || supporting.quantityEvidence,
+    preparationMethod: specific.preparationMethod || supporting.preparationMethod,
+    confidence: Math.max(Number(specific.confidence) || 0, Math.min(Number(supporting.confidence) || 0, 0.92))
+  };
+}
+
+function foodTokens(item) {
+  return new Set(normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText).split(' ').filter(Boolean));
+}
+
+function isTokenSubset(subset, superset) {
+  return [...subset].every(token => superset.has(token));
+}
+
+function isRelatedFoodFamily(first, second) {
+  const firstFamily = semanticFamily(first);
+  const secondFamily = semanticFamily(second);
+  return firstFamily === secondFamily
+    || ['vegetarianCurry', 'dairyOrSide'].includes(first?.category)
+    || ['vegetarianCurry', 'dairyOrSide'].includes(second?.category);
+}
+
+function semanticFamily(item) {
+  const value = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
+  if (/\b(?:roti|chapati|phulka|flatbread)\b/.test(value)) return 'flatbread';
+  if (/\b(?:rice|chawal|chaawal)\b/.test(value)) return 'rice';
+  if (/\b(?:dal|daal|lentil)\b/.test(value)) return 'lentil';
+  if (/\b(?:egg|eggs|anda|ande)\b/.test(value)) return 'egg';
+  return null;
+}
+
+function isDiscreteFood(item) {
+  const unit = String(item?.unit ?? '').toLowerCase().trim();
+  return ['piece', 'pieces', 'whole', 'whole egg', 'egg', 'eggs', 'roti', 'rotis', 'chapati', 'chapatis', 'naan', 'paratha', 'idli', 'slice', 'package'].includes(unit);
+}
+
+function quantityFromEvidence(item) {
+  const evidence = typeof item?.quantityEvidence === 'string' ? item.quantityEvidence.trim() : '';
+  if (!evidence) return null;
+  const numberWords = { one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7, eight: 8, nine: 9, ten: 10 };
+  // Prefer the normalized whole-egg count in evidence such as
+  // “six halves = three whole eggs”.
+  const wholeMatch = evidence.match(/(?:=|equals|equivalent\s+to)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:whole|full)\b/i);
+  const visibleMatch = evidence.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|distinct|separate|counted|observed|shown|layers?|discs?|pieces?|whole)\b)/i);
+  const match = wholeMatch?.[1] ?? visibleMatch?.[1];
+  if (!match) return null;
+  const normalized = match.toLowerCase();
+  const value = numberWords[normalized] ?? Number(normalized);
+  return Number.isFinite(value) && value > 0 ? value : null;
+}
+
+function removeUnsupportedImageAccoutrements(items) {
+  const minorWords = ['onion', 'pyaz', 'coriander', 'cilantro', 'tomato', 'garnish', 'topping', 'sprinkle', 'pickle'];
+  const substantiveCount = items.filter(item => !minorWords.some(word => normalizeIdentity(item?.canonicalSearchName || item?.originalText) === word)).length;
+  if (substantiveCount === 0) return { items, removed: false };
+  let removed = false;
+  const filtered = items.filter(item => {
+    const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
+    const isMinor = minorWords.some(word => identity === word || identity.startsWith(`${word} `));
+    // Papad can be a real side, so retain it only when the model supplied
+    // explicit visible-portion evidence instead of a speculative fragment.
+    const isPapad = /\b(?:papad|poppadom)\b/.test(identity);
+    const evidence = typeof item?.quantityEvidence === 'string' ? item.quantityEvidence.trim() : '';
+    // A generic “visible” note is not enough to turn a garnish or fragment
+    // into a meal component. Keep these only when the evidence says it is a
+    // distinct serving; the iOS reconciliation layer can also retain an item
+    // when an independent vision pass corroborates it.
+    const hasStandaloneEvidence = /\b(?:separate|distinct|serving|plate|bowl|whole|piece|pieces)\b/i.test(evidence);
+    if ((isMinor || isPapad) && !hasStandaloneEvidence) {
+      removed = true;
+      return false;
+    }
+    return true;
+  });
+  return { items: filtered, removed };
 }
 
 export function validateMealParseResult(result, { requireVisualCoverage = false } = {}) {

@@ -81,7 +81,7 @@
       "category": "vegetarianCurry", "dietaryClassification": "vegetarian", "allergens": ["milk"], "methods": ["curry or dry sauté"],
       "foods": [
         {"id":"paneer-butter-masala","name":"Paneer butter masala","aliases":["paneer butter masala","butter paneer"],"ingredients":["paneer","tomato","butter","cream"],"nutrition":{"caloriesKcal":280,"proteinGrams":12,"carbohydrateGrams":10,"fatGrams":21,"fibreGrams":2},"serving":{"quantity":1,"unit":"katori","grams":180}},
-        {"id":"palak-paneer","name":"Palak paneer","aliases":["palak paneer","saag paneer"],"ingredients":["spinach","paneer"],"serving":{"quantity":1,"unit":"katori","grams":180}},
+        {"id":"palak-paneer","name":"Palak paneer","aliases":["palak paneer","saag paneer","palak paneer sabji","spinach paneer curry","palak paneer curry"],"ingredients":["spinach","paneer","cooking oil"],"methods":["spinach gravy with paneer; oil varies"],"nutrition":{"caloriesKcal":150,"proteinGrams":8,"carbohydrateGrams":7,"fatGrams":10,"fibreGrams":2.5},"serving":{"quantity":1,"unit":"katori","grams":180},"dataSource":"Diafit curated palak-paneer reference — spinach, paneer and cooking fat vary","dataVersion":"2026.08","confidence":"medium"},
         {"id":"matar-paneer","name":"Matar paneer","aliases":["matar paneer","peas paneer"],"ingredients":["peas","paneer"],"serving":{"quantity":1,"unit":"katori","grams":180}},
         {"id":"shahi-paneer","name":"Shahi paneer","aliases":["shahi paneer"],"ingredients":["paneer","cashew","cream"],"serving":{"quantity":1,"unit":"katori","grams":180}},
         {"id":"kadai-paneer","name":"Kadai paneer","aliases":["kadai paneer","karahi paneer"],"ingredients":["paneer","bell pepper"],"serving":{"quantity":1,"unit":"katori","grams":180}},
