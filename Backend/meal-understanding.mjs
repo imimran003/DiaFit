@@ -155,7 +155,8 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'For countable foods such as eggs, rotis, chapatis, bread slices, idlis, fruit, and packaged items, count every visible unit instead of defaulting to one. For cut eggs, count halves or quarters and convert them back to whole eggs. For stacked breads, inspect visible edges and layers. Put the concise count reasoning in quantityEvidence, such as "six halves = three whole eggs" or "three visible roti layers".',
   'If a count is partly occluded or cannot be determined reliably, lower confidence, set requiresClarification true, set quantityEvidence to the visible lower bound, and add one concise count clarification question.',
   'Never use a habitual or default count for a photographed stack. If exactly two roti or chapati discs/layers are visible, return quantity 2—not 3—and explain the count in quantityEvidence. If the stack is partly hidden, return the visible lower bound and ask for confirmation rather than inventing an extra piece.',
-  'Keep a prepared dish together when its identity is visible: a green spinach gravy with paneer cubes is palak paneer (or saag paneer), not a standalone paneer serving. Likewise, retain the specific curry, sabzi, dal, or rice preparation instead of reducing it to one ingredient.',
+  'Keep a prepared dish together when its identity is visible: paneer cubes sitting in green, leafy, spinach-based gravy are palak paneer (or saag paneer), not a standalone paneer serving. Use canonicalSearchName palak paneer, category vegetarianCurry, and preparationMethod spinach gravy whenever that visual evidence is present. Likewise, retain the specific curry, sabzi, dal, or rice preparation instead of reducing it to one ingredient.',
+  'Before finalising an image response, run a dish-and-count audit: if a paneer bowl and stacked roti are visible, re-check whether the bowl is palak paneer/saag paneer and count the exposed roti discs. Two visible discs means quantity 2, never a default 3; use the lower visible bound and ask for confirmation if any layer is hidden.',
   'Do not promote garnish or tiny accompaniments into full servings. Onion slices, coriander, tomato pieces, spices, papad fragments, and decorative toppings belong in additions or exclusions unless a clearly separable serving occupies its own pile or container with visible-portion evidence.',
   'Never emit alternative guesses as separate detected items. In particular, one visible rice portion must not become both fried rice and steamed rice; choose the best-supported identity and lower confidence or ask one clarification when uncertain.',
   'Recognise common home-cooked and regional preparations from visible shape, grain, sauce, garnish, and cooking style. Look explicitly for Indian flatbreads such as roti or chapati, dry sabji, dal, rice, curries, sides, and beverages rather than collapsing or omitting them.',
@@ -423,18 +424,33 @@ export function sanitizeMealParseResult(result) {
 // traceable nutrition record on iOS.
 function promotePreparedDishIdentities(items, mealDescription = '') {
   const mealCue = String(mealDescription ?? '').toLowerCase();
+  const hasPaneerObservation = items.some(item => isPaneerIdentity(item));
+  const hasSpecificPreparedDish = items.some(item => {
+    const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
+    return identity === 'palak paneer' || identity === 'saag paneer';
+  });
+  const hasGreenPreparedObservation = items.some(item => {
+    const evidence = foodEvidence(item, mealCue);
+    return /\b(?:spinach|palak|saag|leafy|green)\b/.test(evidence)
+      && /\b(?:gravy|curry|sabji|sabzi|sauce|masala|bowl|dish)\b/.test(evidence);
+  });
   return items.map(item => {
     const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
-    if (identity !== 'paneer') return item;
-    const evidence = [
-      item?.originalText,
-      item?.regionalName,
-      item?.preparationMethod,
-      ...(Array.isArray(item?.additions) ? item.additions : []),
-      mealCue
-    ].filter(Boolean).join(' ').toLowerCase();
+    if (!isPaneerIdentity(item)) return item;
+    const evidence = foodEvidence(item, mealCue);
     const specificCue = /\b(?:palak paneer|saag paneer|spinach gravy|spinach curry|green spinach gravy|leafy spinach gravy)\b/.test(evidence);
-    if (!specificCue) return item;
+    // Some vision responses describe the appearance rather than naming the
+    // dish. Preserve the prepared-food identity when paneer is paired with a
+    // green/leafy gravy cue, instead of allowing a plain ingredient row to
+    // reach nutrition lookup as if it were raw paneer.
+    const greenLeafyCue = /\b(?:spinach|palak|saag|leafy|green)\b/.test(evidence)
+      && /\b(?:gravy|curry|sabji|sabzi|sauce|masala|bowl|dish)\b/.test(evidence);
+    // A provider may put the green-gravy evidence on a neighbouring generic
+    // row rather than on the paneer row. Only use that cross-item cue when a
+    // paneer observation and a green prepared observation coexist; this does
+    // not turn plain paneer into a curry in isolation.
+    if (!specificCue && !greenLeafyCue
+        && !(hasPaneerObservation && hasGreenPreparedObservation && !hasSpecificPreparedDish)) return item;
     return {
       ...item,
       canonicalSearchName: 'palak paneer',
@@ -444,6 +460,23 @@ function promotePreparedDishIdentities(items, mealDescription = '') {
       requiresClarification: Boolean(item.requiresClarification)
     };
   });
+}
+
+function isPaneerIdentity(item) {
+  return /^(?:paneer|cottage cheese)$/.test(
+    normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText)
+  );
+}
+
+function foodEvidence(item, mealCue) {
+  return [
+    item?.originalText,
+    item?.canonicalSearchName,
+    item?.regionalName,
+    item?.preparationMethod,
+    ...(Array.isArray(item?.additions) ? item.additions : []),
+    mealCue
+  ].filter(Boolean).join(' ').toLowerCase();
 }
 
 /**
@@ -562,8 +595,10 @@ function quantityFromEvidence(item) {
   // Prefer the normalized whole-egg count in evidence such as
   // “six halves = three whole eggs”.
   const wholeMatch = evidence.match(/(?:=|equals|equivalent\s+to)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:whole|full)\b/i);
-  const visibleMatch = evidence.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|distinct|separate|counted|observed|shown|layers?|discs?|pieces?|whole)\b)/i);
-  const match = wholeMatch?.[1] ?? visibleMatch?.[1];
+  const visibleMatch = evidence.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|distinct|separate|counted|observed|shown|stacked|layers?|discs?|pieces?|rotis?|chapatis?|flatbreads?|whole)\b)/i);
+  const stackMatch = evidence.match(/\b(?:stack|pile|count|showing|shows|of)\s*(?:of\s*)?(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\b/i);
+  const trailingCountMatch = evidence.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:visible\s+)?(?:roti|rotis|chapati|chapatis|flatbread|flatbreads|pieces?|discs?)\b/i);
+  const match = wholeMatch?.[1] ?? visibleMatch?.[1] ?? stackMatch?.[1] ?? trailingCountMatch?.[1];
   if (!match) return null;
   const normalized = match.toLowerCase();
   const value = numberWords[normalized] ?? Number(normalized);

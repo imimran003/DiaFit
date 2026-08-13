@@ -274,6 +274,40 @@ const ingredientOnlyPalak = sanitizeMealParseResult({
 assert.equal(ingredientOnlyPalak.detectedItems[0].canonicalSearchName, 'palak paneer');
 assert.equal(ingredientOnlyPalak.detectedItems[0].category, 'vegetarianCurry');
 
+// Providers sometimes put the visual cue on a neighbouring description row:
+// the bowl is returned as plain paneer while the same response mentions green
+// spinach gravy elsewhere. The normalizer must still keep one palak-paneer
+// serving, not raw paneer plus a hidden curry.
+const crossRowPalak = sanitizeMealParseResult({
+  ...parsed,
+  mealDescription: 'A bowl of paneer in green spinach gravy beside stacked rotis',
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'Paneer', canonicalSearchName: 'paneer', category: 'dairyOrSide', quantity: 1, unit: 'medium bowl', confidence: 0.96 },
+    { ...parsed.detectedItems[0], originalText: 'Roti stack', canonicalSearchName: 'roti', category: 'bread', quantity: 3, unit: 'piece', quantityEvidence: 'two visible roti layers', confidence: 0.94 }
+  ],
+  visualCoverage
+});
+assert.deepEqual(crossRowPalak.detectedItems.map(item => item.canonicalSearchName), ['palak paneer', 'roti']);
+assert.equal(crossRowPalak.detectedItems.find(item => item.canonicalSearchName === 'palak paneer').category, 'vegetarianCurry');
+assert.equal(crossRowPalak.detectedItems.find(item => item.canonicalSearchName === 'roti').quantity, 2);
+
+const rotiEvidenceVariants = [
+  ['two visible roti discs', 2],
+  ['stack showing 2 flatbreads', 2],
+  ['counted: two chapatis', 2]
+];
+for (const [quantityEvidence, expectedQuantity] of rotiEvidenceVariants) {
+  const result = sanitizeMealParseResult({
+    ...parsed,
+    detectedItems: [
+      { ...parsed.detectedItems[0], originalText: 'Roti stack', canonicalSearchName: 'roti', category: 'bread', quantity: 3, unit: 'piece', quantityEvidence, confidence: 0.93 }
+    ],
+    visualCoverage
+  });
+  assert.equal(result.detectedItems[0].quantity, expectedQuantity);
+  assert.equal(result.detectedItems[0].requiresClarification, true);
+}
+
 const evidenceCorrectedCount = sanitizeMealParseResult({
   ...parsed,
   detectedItems: [

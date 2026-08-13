@@ -314,6 +314,24 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
                 recovery: recoveryParse
             )
         }
+
+        // A recurring high-impact error is a visually obvious prepared dish
+        // being reduced to its ingredient ("paneer") while the adjacent
+        // flatbread stack is over-counted. This focused pass is deliberately
+        // narrower than a general retry: it asks the provider to adjudicate
+        // the two high-impact facts and then reconciles the answer with the
+        // rest of the inventory. It runs for paneer + bread plates or when
+        // the provider describes a green prepared dish.
+        if inventoryVerification.needsDishAndCountAudit(selectedParse),
+           let auditedParse = try? await understanding.parse(
+               text: inventoryVerification.dishAndCountPrompt(after: selectedParse),
+               image: image
+           ) {
+            selectedParse = inventoryVerification.preferred(
+                primary: selectedParse,
+                verified: auditedParse
+            )
+        }
         let parse = integrity.audit(selectedParse)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
 
@@ -404,6 +422,21 @@ struct PhotoInventoryVerificationService: Sendable {
         return substantiveCount < 2 && parse.detectedItems.contains(where: isSalientIngredient)
     }
 
+    func needsDishAndCountAudit(_ parse: MealParseResult) -> Bool {
+        let hasPaneer = parse.detectedItems.contains { isPaneer($0) }
+        let breadItems = parse.detectedItems.filter { isFlatbread($0) }
+        let hasPreparedGreenCue = parse.detectedItems.contains { item in
+            let evidence = evidence(for: item, mealDescription: parse.mealDescription)
+            return evidence.range(of: #"\b(spinach|palak|saag|leafy|green)\b"#, options: .regularExpression) != nil
+                && evidence.range(of: #"\b(gravy|curry|sabji|sabzi|sauce|masala|bowl|dish)\b"#, options: .regularExpression) != nil
+        }
+        // A bread-only count is already independently checked by the normal
+        // inventory pass. Keep this focused audit for the high-impact failure
+        // pair (green paneer curry + flatbread) or an explicit green-prepared
+        // cue, avoiding a redundant provider call for ordinary roti fixtures.
+        return (hasPaneer && !breadItems.isEmpty) || hasPreparedGreenCue
+    }
+
     func prompt(after parse: MealParseResult) -> String {
         let firstPass = parse.detectedItems
             .map { $0.regionalName ?? $0.originalText }
@@ -451,6 +484,28 @@ struct PhotoInventoryVerificationService: Sendable {
         are present. Count visible units conservatively, preserve regional names, and do not invent anything hidden.
         If the photograph truly contains only one food, explain why in mealDescription; otherwise do not return a
         one-item garnish result.
+        """
+    }
+
+    func dishAndCountPrompt(after parse: MealParseResult) -> String {
+        let current = parse.detectedItems
+            .map { "\($0.regionalName ?? $0.originalText) (quantity \($0.quantity.map { String($0) } ?? "unknown"), unit \($0.unit ?? "unknown"))" }
+            .joined(separator: ", ")
+        return """
+        Perform a focused final audit of this photographed Indian meal. The current untrusted inventory is: \(current).
+        Return the complete corrected inventory exactly once; do not return only the correction. The current labels
+        are untrusted: inspect the pixels again instead of echoing them.
+        1) If paneer cubes are visibly sitting in green leafy spinach/palak/saag gravy, identify the serving as
+        palak paneer (or saag paneer), category vegetarianCurry, preparation spinach gravy. Do not emit plain paneer
+        for that same bowl and do not add a second paneer component. A bowl of paneer in green gravy is a prepared
+        curry even when the first pass omitted the word spinach.
+        2) Count the visible roti/chapati/phulka discs or stack layers. If two are visible, quantity must be 2 pieces,
+        never a habitual 3. If part of a stack is hidden, use the visible lower bound, include quantityEvidence, and
+        ask one count clarification. Never infer a count from a default serving.
+        3) Onion slices, garnish, tiny papad fragments, and decorative sides are not meal components unless a clearly
+        separate serving is visible with independent portion evidence.
+        Preserve every other substantive bowl, pile, or serving in the frame once, with canonical names, quantities,
+        and evidence. This is visual adjudication, not a nutrition estimate.
         """
     }
 
@@ -695,6 +750,25 @@ struct PhotoInventoryVerificationService: Sendable {
         return isDiscreteUnit(item.unit)
     }
 
+    private func isPaneer(_ item: ParsedFoodItem) -> Bool {
+        let value = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        return value == "paneer" || value == "cottage cheese"
+    }
+
+    private func isFlatbread(_ item: ParsedFoodItem) -> Bool {
+        let value = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        return value.range(of: #"\b(roti|chapati|phulka|flatbread|naan|paratha)\b"#, options: .regularExpression) != nil
+            || item.category == .bread
+    }
+
+    private func evidence(for item: ParsedFoodItem, mealDescription: String) -> String {
+        [item.originalText, item.canonicalSearchName, item.regionalName, item.preparationMethod,
+         item.additions.joined(separator: " "), mealDescription]
+            .compactMap { $0 }
+            .joined(separator: " ")
+            .lowercased()
+    }
+
     /// Removes an ingredient-level observation when a more specific prepared
     /// dish from the other pass contains it (for example paneer -> palak
     /// paneer). Token matching is intentionally generic and catalog-backed.
@@ -921,9 +995,28 @@ struct PhotoParseIntegrityService: Sendable {
     func audit(_ parse: MealParseResult) -> MealParseResult {
         var audited = parse
         var questions = audited.clarificationQuestions
+        audited.detectedItems = promotePreparedDishIdentities(
+            audited.detectedItems,
+            mealDescription: audited.mealDescription
+        )
         audited.detectedItems = audited.detectedItems.map { item in
             guard isVisuallyCountable(item) else { return item }
             let evidence = item.quantityEvidence?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if let evidenceQuantity = evidenceBasedQuantity(evidence),
+               let providerQuantity = item.quantity,
+               abs(providerQuantity - evidenceQuantity) > 0.0001 {
+                var reviewed = item
+                reviewed.quantity = evidenceQuantity
+                reviewed.confidence = min(reviewed.confidence, 0.70)
+                reviewed.requiresClarification = true
+                if let weight = reviewed.estimatedGrams, providerQuantity > 0 {
+                    reviewed.estimatedGrams = weight * evidenceQuantity / providerQuantity
+                }
+                let name = reviewed.regionalName ?? reviewed.originalText
+                let question = "How many \(name) were visible? I kept the evidence-based count until you confirm it."
+                if !questions.contains(question) { questions.append(question) }
+                return reviewed
+            }
             guard evidence.isEmpty else { return item }
 
             var reviewed = item
@@ -939,11 +1032,130 @@ struct PhotoParseIntegrityService: Sendable {
         return audited
     }
 
+    /// A provider's numeric count is a hypothesis; explicit visual evidence
+    /// such as “two visible roti layers” is stronger. Keep this parser small
+    /// and provider-independent so a stale backend response cannot turn a
+    /// photographed two-piece stack into three servings (or scale nutrition
+    /// from the wrong base quantity).
+    private func evidenceBasedQuantity(_ evidence: String) -> Double? {
+        guard !evidence.isEmpty else { return nil }
+        let numberWords: [String: Double] = [
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "six": 6, "seven": 7, "eight": 8, "nine": 9, "ten": 10
+        ]
+        // Cut eggs are commonly described as halves or quarters. Their piece
+        // count is not their whole-food count: only use an explicit equation
+        // ("four halves = two eggs") and never promote the left-hand piece
+        // count to four whole eggs. If two verification passes disagree, use
+        // the lower whole-food count until the member confirms it.
+        if evidence.range(of: #"(?i)\b(?:half|halves|quarter|quarters)\b"#, options: .regularExpression) != nil {
+            let equationValues = capturedQuantities(
+                in: evidence,
+                pattern: #"(?i)(?:=|equals|equivalent\s+to)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\b"#,
+                numberWords: numberWords
+            )
+            return equationValues.min()
+        }
+        let patterns = [
+            #"(?i)(?:=|equals|equivalent\s+to)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:whole|full)\b"#,
+            #"(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|distinct|separate|counted|observed|shown|stacked|layers?|discs?|pieces?|rotis?|chapatis?|flatbreads?|whole)\b)"#,
+            #"(?i)\b(?:stack|pile|count|showing|shows|of)\s*(?:of\s*)?(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\b"#,
+            #"(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:visible\s+)?(?:roti|rotis|chapati|chapatis|flatbread|flatbreads|pieces?|discs?)\b"#
+        ]
+        var values: [Double] = []
+        for pattern in patterns {
+            values.append(contentsOf: capturedQuantities(in: evidence, pattern: pattern, numberWords: numberWords))
+        }
+        // Evidence can contain both observations after independent passes,
+        // e.g. "three visible roti layers / two visible roti layers". The
+        // minimum is the safe lower bound and prevents a later audit from
+        // reintroducing an over-count.
+        return values.min()
+    }
+
+    private func capturedQuantities(
+        in evidence: String,
+        pattern: String,
+        numberWords: [String: Double]
+    ) -> [Double] {
+        guard let regex = try? NSRegularExpression(pattern: pattern, options: []) else { return [] }
+        let fullRange = NSRange(evidence.startIndex..<evidence.endIndex, in: evidence)
+        return regex.matches(in: evidence, options: [], range: fullRange).compactMap { match in
+            guard match.numberOfRanges > 1 else { return nil }
+            let capturedRange = match.range(at: 1)
+            guard capturedRange.location != NSNotFound,
+                  let swiftRange = Range(capturedRange, in: evidence) else { return nil }
+            let captured = String(evidence[swiftRange]).lowercased()
+            let value = numberWords[captured] ?? Double(captured)
+            guard let value, value > 0, value.isFinite else { return nil }
+            return value
+        }
+    }
+
+    private func promotePreparedDishIdentities(
+        _ items: [ParsedFoodItem],
+        mealDescription: String
+    ) -> [ParsedFoodItem] {
+        let mealCue = mealDescription.lowercased()
+        let hasPaneer = items.contains { isPaneer($0) }
+        let hasSpecificDish = items.contains {
+            let key = identityKey($0).replacingOccurrences(of: "-", with: " ")
+            return key == "palak paneer" || key == "saag paneer"
+        }
+        let hasGreenPreparedCue = items.contains { item in
+            let evidence = [
+                item.originalText,
+                item.canonicalSearchName,
+                item.regionalName ?? "",
+                item.preparationMethod ?? "",
+                item.additions.joined(separator: " "),
+                mealCue
+            ].joined(separator: " ").lowercased()
+            return evidence.range(of: #"\b(spinach|palak|saag|leafy|green)\b"#, options: .regularExpression) != nil
+                && evidence.range(of: #"\b(gravy|curry|sabji|sabzi|sauce|masala|bowl|dish)\b"#, options: .regularExpression) != nil
+        }
+
+        return items.map { item in
+            guard isPaneer(item), !hasSpecificDish else { return item }
+            let evidence = [
+                item.originalText,
+                item.canonicalSearchName,
+                item.regionalName ?? "",
+                item.preparationMethod ?? "",
+                item.additions.joined(separator: " "),
+                mealCue
+            ].joined(separator: " ").lowercased()
+            let explicitCue = evidence.range(of: #"\b(palak paneer|saag paneer|spinach gravy|spinach curry|green spinach gravy|leafy spinach gravy)\b"#, options: .regularExpression) != nil
+            let localGreenCue = evidence.range(of: #"\b(spinach|palak|saag|leafy|green)\b"#, options: .regularExpression) != nil
+                && evidence.range(of: #"\b(gravy|curry|sabji|sabzi|sauce|masala|bowl|dish)\b"#, options: .regularExpression) != nil
+            guard explicitCue || localGreenCue || (hasPaneer && hasGreenPreparedCue) else { return item }
+
+            var promoted = item
+            promoted.canonicalSearchName = "palak paneer"
+            promoted.category = .vegetarianCurry
+            promoted.preparationMethod = promoted.preparationMethod ?? "spinach gravy"
+            promoted.confidence = min(promoted.confidence, 0.90)
+            return promoted
+        }
+    }
+
     private func isVisuallyCountable(_ item: ParsedFoodItem) -> Bool {
         if item.category == .egg || item.category == .bread { return true }
         let unit = item.unit?.lowercased() ?? ""
         return ["whole", "whole egg", "egg", "eggs", "piece", "pieces", "roti", "chapati", "naan", "paratha"]
             .contains(unit)
+    }
+
+    private func isPaneer(_ item: ParsedFoodItem) -> Bool {
+        let value = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        return value == "paneer" || value == "cottage cheese"
+    }
+
+    private func identityKey(_ item: ParsedFoodItem) -> String {
+        [item.canonicalSearchName, item.regionalName, item.originalText]
+            .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty })?
+            .lowercased() ?? ""
     }
 }
 
