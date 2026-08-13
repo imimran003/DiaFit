@@ -96,7 +96,17 @@ struct AppDependencies: Sendable {
         )
         let coordinator = HybridMealAnalysisCoordinator(router: router)
         let photoRemote: (any FoodRecognitionService)? = backendUnderstanding.map {
-            StructuredPhotoRecognitionService(understanding: $0, coordinator: coordinator, catalog: catalog)
+            // Cap hosted verification at three provider passes: primary
+            // inventory, a focused dish/count audit when needed, and one
+            // spatial review for genuinely sparse plates. This preserves the
+            // quality gates while keeping a sleeping free-tier service from
+            // consuming the entire end-to-end photo timeout.
+            StructuredPhotoRecognitionService(
+                understanding: $0,
+                coordinator: coordinator,
+                catalog: catalog,
+                maximumProviderPasses: 3
+            )
         }
         let healthActivity: any HealthActivityProviding
         #if DEBUG

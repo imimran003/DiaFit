@@ -4186,7 +4186,10 @@ final class FoodAnalysisTests: XCTestCase {
             clarificationQuestions: [],
             confidence: 0.91
         )
-        let understanding = SequentialMealUnderstanding(results: [initial, initial, focusedAudit])
+        // The production path prioritises this high-impact audit immediately
+        // after the primary inventory, so it does not spend two extra calls
+        // before correcting the dish identity and roti count.
+        let understanding = SequentialMealUnderstanding(results: [initial, focusedAudit])
         let router = DefaultFoodResolutionRouter(
             catalog: catalog,
             normalisation: HybridFoodNormalisationService(catalog: catalog),
@@ -4196,13 +4199,14 @@ final class FoodAnalysisTests: XCTestCase {
         let remote = StructuredPhotoRecognitionService(
             understanding: understanding,
             coordinator: HybridMealAnalysisCoordinator(router: router),
-            catalog: catalog
+            catalog: catalog,
+            maximumProviderPasses: 2
         )
 
         let result = try await remote.analyse(fixtureFoodImage(), dishHint: nil)
         let callCount = await understanding.callCount
 
-        XCTAssertEqual(callCount, 4)
+        XCTAssertEqual(callCount, 2)
         XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["palak-paneer", "roti"]))
         XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 2)
         XCTAssertFalse(result.detectedItems.contains { $0.canonicalFoodId == "paneer" })

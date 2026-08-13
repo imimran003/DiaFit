@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { healthPayload, validateProductionConfiguration } from './production-config.mjs';
+import { healthPayload, resolveAnalysisTimeoutMs, validateProductionConfiguration } from './production-config.mjs';
 
 test('production configuration rejects development defaults and mock providers', () => {
   const errors = validateProductionConfiguration({ DIAFIT_DEPLOYMENT_ENV: 'production' });
@@ -28,4 +28,10 @@ test('production configuration accepts a live, authenticated provider setup', ()
 test('production health output does not disclose provider modes', () => {
   const payload = healthPayload({ deploymentEnvironment: 'production', mode: 'fixture', mealParserMode: 'mock', mealVisualMode: 'disabled', nutritionProviderMode: 'disabled' }, 'fixture-version');
   assert.deepEqual(payload, { status: 'ok', apiVersion: 'v1' });
+});
+
+test('analysis timeout keeps stale low overrides above the cold-start floor', () => {
+  assert.equal(resolveAnalysisTimeoutMs({ ANALYSIS_TIMEOUT_MS: '25000' }), 90_000);
+  assert.equal(resolveAnalysisTimeoutMs({ ANALYSIS_TIMEOUT_MS: '120000' }), 120_000);
+  assert.equal(resolveAnalysisTimeoutMs({ ANALYSIS_TIMEOUT_MS: 'not-a-number' }), 90_000);
 });

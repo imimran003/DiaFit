@@ -73,9 +73,14 @@ The bundle is not presented as IFCT data and should not be expanded with copied 
 - It has `GET /health`, a versioned `POST /v1/meal-analysis`, request timeouts, strict result validation, and redacted audit events. Raw photo bytes and bearer tokens are not logged or written to disk.
 - Fixture mode is an explicit development-only provider. It exercises the structural response, mixed-meal fixtures, and low-confidence situations; it is not computer vision and publishes no accuracy claim.
 - `BackendFoodUnderstandingService` calls `/v1/meal-parse`; `StructuredPhotoRecognitionService` converts its schema-constrained food identities into canonical matches and validated nutrition. The runtime constructs this path only when `DIAFIT_BACKEND_URL` and `DIAFIT_BACKEND_ACCESS_TOKEN` (or the legacy local `DIAFIT_DEVELOPMENT_TOKEN`) are supplied through the Xcode launch environment. In DEBUG builds, a configured launch stores only that temporary backend URL and app-to-backend access token in the device Keychain using `AfterFirstUnlockThisDeviceOnly`; if a simulator Keychain service is temporarily unavailable, the same debug-only credential is written to an app-container file with complete file protection and is verified on the next launch. This lets a developer reopen the installed app from the Home Screen without silently losing live recognition. A later configured launch replaces stale tunnel details. Release builds do not use this development persistence path and must obtain an authenticated backend session through the production account flow.
-- The phone bounds a structured vision request to 20 seconds for an image (10
-  seconds for text) while the backend provider deadline remains configurable.
-  The backend retries transient provider responses at most once by default;
+- The phone bounds each structured image request to 120 seconds for an image
+  (20 seconds for text), while the end-to-end photo session has a 150-second
+  deadline. The hosted composition caps optional verification at three provider
+  passes (primary inventory, focused dish/count audit, and one spatial review),
+  so a sleeping backend cannot turn quality checks into an unbounded wait. The
+  backend defaults to a 90-second provider deadline and clamps stale lower
+  `ANALYSIS_TIMEOUT_MS` overrides to that minimum. The backend retries transient
+  provider responses at most once by default;
   the client also retries one transient upload/network interruption with the
   same idempotency key. This ordering is
   intentional: the backend must finish or reject the request before the phone

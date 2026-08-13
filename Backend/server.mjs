@@ -6,7 +6,7 @@ import { dirname, join } from 'node:path';
 import { GeminiMealParser, OpenAIMealParser, MockMealParser, validateMealParseResult } from './meal-understanding.mjs';
 import { DisabledMealVisualGenerator, GeminiMealVisualGenerator, validateMealVisualRequest } from './meal-visual.mjs';
 import { JWKSAuthenticator, developmentPrincipal } from './auth.mjs';
-import { healthPayload, validateProductionConfiguration } from './production-config.mjs';
+import { healthPayload, resolveAnalysisTimeoutMs, validateProductionConfiguration } from './production-config.mjs';
 import {
   DisabledNutritionProvider,
   USDAFoodDataCentralProvider,
@@ -31,7 +31,11 @@ const config = {
   authAudience: process.env.DIAFIT_AUTH_AUDIENCE ?? '',
   developmentToken: process.env.DIAFIT_DEVELOPMENT_TOKEN ?? '',
   rateLimit: Number(process.env.RATE_LIMIT_PER_MINUTE ?? 20),
-  timeoutMs: Number(process.env.ANALYSIS_TIMEOUT_MS ?? 25_000)
+  // One Gemini image request may include a Render cold start. Keep the
+  // server's deadline above that wake-up window and let the iOS client apply
+  // the larger end-to-end session budget around its bounded verification
+  // passes. Deployments can still override this explicitly.
+  timeoutMs: resolveAnalysisTimeoutMs(process.env)
 };
 
 const productionConfigurationErrors = validateProductionConfiguration(process.env);

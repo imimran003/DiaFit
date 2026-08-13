@@ -249,15 +249,22 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
     let integrity = PhotoParseIntegrityService()
     let inventoryVerification: PhotoInventoryVerificationService
     let spatialReview = SpatialPlateReviewImageService()
+    /// A hosted provider call can take a meaningful amount of time after a
+    /// sleeping service wakes. Keep the number of sequential calls bounded so
+    /// one photo cannot consume the entire UI timeout through optional audits.
+    /// Tests keep the unlimited default so each quality gate remains covered.
+    let maximumProviderPasses: Int
 
     init(
         understanding: any FoodUnderstandingService,
         coordinator: HybridMealAnalysisCoordinator,
-        catalog: IndianFoodCatalogService = IndianFoodCatalogService()
+        catalog: IndianFoodCatalogService = IndianFoodCatalogService(),
+        maximumProviderPasses: Int = .max
     ) {
         self.understanding = understanding
         self.coordinator = coordinator
         self.inventoryVerification = PhotoInventoryVerificationService(catalog: catalog)
+        self.maximumProviderPasses = max(1, maximumProviderPasses)
     }
 
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
@@ -270,18 +277,43 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
             : "The member described this meal as \(trimmedHint). Use that as a hint, but inspect the entire photo and return every distinct visible serving exactly once."
         let primaryParse = try await understanding.parse(text: instruction, image: image)
         var selectedParse = primaryParse
-        if inventoryVerification.needsIndependentCheck(primaryParse),
-           let verifiedParse = try? await understanding.parse(
-               text: inventoryVerification.prompt(after: primaryParse),
-               // Keep the original composition for the first independent
-               // pass. A collage can make a bowl look like a different dish
-               // and was the source of the recurring stale “vegetable soup”
-               // result in otherwise unrelated photos.
-               image: image
-           ) {
-            selectedParse = inventoryVerification.preferred(primary: primaryParse, verified: verifiedParse)
-        } else {
-            selectedParse = primaryParse
+        var providerPassesUsed = 1
+        var focusedAuditApplied = false
+
+        // Prioritise the high-impact dish/count audit before broad verification.
+        // A paneer bowl beside a roti stack is exactly the case where a generic
+        // independent pass used to consume time and still return "paneer" + 3
+        // rotis. One focused, full-frame request gives the provider the right
+        // adjudication prompt without spending two calls first.
+        if providerPassesUsed < maximumProviderPasses,
+           inventoryVerification.needsDishAndCountAudit(primaryParse) {
+            providerPassesUsed += 1
+            if let auditedParse = try? await understanding.parse(
+                text: inventoryVerification.dishAndCountPrompt(after: primaryParse),
+                image: image
+            ) {
+                selectedParse = inventoryVerification.preferred(
+                    primary: primaryParse,
+                    verified: auditedParse
+                )
+                focusedAuditApplied = true
+            }
+        }
+
+        if !focusedAuditApplied,
+           providerPassesUsed < maximumProviderPasses,
+           inventoryVerification.needsIndependentCheck(primaryParse) {
+            providerPassesUsed += 1
+            if let verifiedParse = try? await understanding.parse(
+                text: inventoryVerification.prompt(after: primaryParse),
+                // Keep the original composition for the first independent
+                // pass. A collage can make a bowl look like a different dish
+                // and was the source of the recurring stale “vegetable soup”
+                // result in otherwise unrelated photos.
+                image: image
+            ) {
+                selectedParse = inventoryVerification.preferred(primary: primaryParse, verified: verifiedParse)
+            }
         }
 
         // A single broad label is not a safe inventory for a plate photo. If
@@ -289,13 +321,16 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
         // a small garnish/ingredient, spend one additional pass on spatial
         // crops. This is deliberately quality-gated, so ordinary single-food
         // photos do not incur an unnecessary third request.
-        if inventoryVerification.needsExpandedInventory(selectedParse),
-           let montage = spatialReview.make(from: image),
-           let spatialParse = try? await understanding.parse(
-               text: inventoryVerification.spatialPrompt(after: selectedParse),
-               image: montage
-           ) {
-            selectedParse = inventoryVerification.preferred(primary: selectedParse, verified: spatialParse)
+        if providerPassesUsed < maximumProviderPasses,
+           inventoryVerification.needsExpandedInventory(selectedParse),
+           let montage = spatialReview.make(from: image) {
+            providerPassesUsed += 1
+            if let spatialParse = try? await understanding.parse(
+                text: inventoryVerification.spatialPrompt(after: selectedParse),
+                image: montage
+            ) {
+                selectedParse = inventoryVerification.preferred(primary: selectedParse, verified: spatialParse)
+            }
         }
 
         // A provider can repeat the same salient garnish across the full-frame
@@ -304,15 +339,18 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
         // when the result is still sparse after the spatial review, so normal
         // single-food photographs keep the fast path and do not pay for an
         // extra request.
-        if inventoryVerification.needsRecoveryPass(selectedParse),
-           let recoveryParse = try? await understanding.parse(
-               text: inventoryVerification.recoveryPrompt(after: selectedParse),
-               image: image
-           ) {
-            selectedParse = inventoryVerification.adjudicated(
-                previous: selectedParse,
-                recovery: recoveryParse
-            )
+        if providerPassesUsed < maximumProviderPasses,
+           inventoryVerification.needsRecoveryPass(selectedParse) {
+            providerPassesUsed += 1
+            if let recoveryParse = try? await understanding.parse(
+                text: inventoryVerification.recoveryPrompt(after: selectedParse),
+                image: image
+            ) {
+                selectedParse = inventoryVerification.adjudicated(
+                    previous: selectedParse,
+                    recovery: recoveryParse
+                )
+            }
         }
 
         // A recurring high-impact error is a visually obvious prepared dish
@@ -322,15 +360,19 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
         // the two high-impact facts and then reconciles the answer with the
         // rest of the inventory. It runs for paneer + bread plates or when
         // the provider describes a green prepared dish.
-        if inventoryVerification.needsDishAndCountAudit(selectedParse),
-           let auditedParse = try? await understanding.parse(
-               text: inventoryVerification.dishAndCountPrompt(after: selectedParse),
-               image: image
-           ) {
-            selectedParse = inventoryVerification.preferred(
-                primary: selectedParse,
-                verified: auditedParse
-            )
+        if !focusedAuditApplied,
+           providerPassesUsed < maximumProviderPasses,
+           inventoryVerification.needsDishAndCountAudit(selectedParse) {
+            providerPassesUsed += 1
+            if let auditedParse = try? await understanding.parse(
+                text: inventoryVerification.dishAndCountPrompt(after: selectedParse),
+                image: image
+            ) {
+                selectedParse = inventoryVerification.preferred(
+                    primary: selectedParse,
+                    verified: auditedParse
+                )
+            }
         }
         let parse = integrity.audit(selectedParse)
         guard !parse.detectedItems.isEmpty else { throw FoodAnalysisError.malformedProviderResponse }
@@ -1337,8 +1379,10 @@ struct PhotoAnalysisOrchestrator: Sendable {
                 // The hosted free tier may need roughly a minute to wake. Keep
                 // this above the URLSession timeout and the backend's 90 s
                 // request budget, while still providing a finite recovery
-                // state if the service genuinely cannot respond.
-                let remoteResult = try await withPhotoAnalysisTimeout(seconds: 105) {
+                // state if the service genuinely cannot respond. The remote
+                // service itself caps optional verification passes so this is
+                // a session deadline, not an invitation to run unbounded work.
+                let remoteResult = try await withPhotoAnalysisTimeout(seconds: 150) {
                     try await remote.analyse(image, dishHint: description)
                 }
                 let elapsedMilliseconds = Int(Date().timeIntervalSince(remoteStartedAt) * 1_000)

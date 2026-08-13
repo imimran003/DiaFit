@@ -229,13 +229,13 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         request.httpMethod = "POST"
         // Render's free tier can suspend the service. The first request after
         // suspension is therefore a cold start (often 50+ seconds) before
-        // the provider even receives the photo. A 20-second image timeout
+        // the provider even receives the photo. A short image timeout
         // turned every legitimate cold start into "Retry AI recognition".
         // Keep text requests responsive, but allow an image request to cover
         // the host wake-up plus one bounded Gemini attempt. The server uses
         // the same budget, so the client never abandons a request that the
         // backend is still safely processing.
-        request.timeoutInterval = image == nil ? 20 : 100
+        request.timeoutInterval = image == nil ? 20 : 120
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue(idempotencyKey, forHTTPHeaderField: "Idempotency-Key")
@@ -312,9 +312,18 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
             do {
                 let result = try await session.data(for: request)
                 let statusCode = (result.1 as? HTTPURLResponse)?.statusCode
+                // A 504 is the backend's explicit provider deadline. Retrying
+                // the same full-resolution photo immediately would start a
+                // second cold-start/provider run and consume the entire
+                // session budget, which surfaced to users as another generic
+                // "AI timed out" state. The backend already retries its
+                // provider call; only retry transport/rate-limit failures and
+                // transient upstream responses that can succeed quickly.
                 let shouldRetryHTTP = statusCode == 408
                     || statusCode == 429
-                    || statusCode.map { (500...599).contains($0) } == true
+                    || statusCode == 500
+                    || statusCode == 502
+                    || statusCode == 503
                 if attempt == 0, shouldRetryHTTP {
                     FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
                         "status": "retrying",

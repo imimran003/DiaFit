@@ -36,9 +36,10 @@ why photo recognition stops when the Mac sleeps or shuts down. The checked-in
 
 This blueprint is for one-person testing, not public release. Render's Free
 web service sleeps after inactivity and may take about a minute to wake. The
-app intentionally allows that cold-start window for photo recognition, so the
-first scan after idle can remain on “Checking the full plate…” for up to about
-two minutes before showing a recoverable timeout. Its filesystem is ephemeral,
+app intentionally allows that cold-start window for photo recognition, while
+bounding optional verification passes so the first scan after idle can remain
+on “Checking the full plate…” for up to about two and a half minutes before
+showing a recoverable timeout. Its filesystem is ephemeral,
 which is safe here because the backend does not store
 meal photos or user diary data. Do not share the development token or expose
 this endpoint to other users.

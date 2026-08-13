@@ -125,7 +125,8 @@ than displayed as a plausible partial meal.
 Provider transport is now bounded and idempotent: OpenAI and Gemini retry only
 transient HTTP/network failures (at most three attempts, two by default), obey
 the route abort signal, and honour a capped `Retry-After`. The iOS request has
-a 20-second image/10-second text deadline, and the day thread cancels stale
+a 120-second image/20-second text request deadline, a 150-second bounded photo
+session, and the day thread cancels stale
 photo tasks when a new request starts or the view disappears. A delayed result
 cannot update another meal or a deleted draft.
 

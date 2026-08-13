@@ -12,6 +12,18 @@ function isHTTPS(value) {
 }
 
 /**
+ * Resolve the server-side photo/provider deadline. A stale low dashboard
+ * variable must not reintroduce the cold-start timeout this service is meant
+ * to avoid; explicit values remain useful when they are above the safe floor.
+ */
+export function resolveAnalysisTimeoutMs(env = process.env) {
+  const configured = Number(env.ANALYSIS_TIMEOUT_MS);
+  return Number.isFinite(configured) && configured > 0
+    ? Math.max(configured, 90_000)
+    : 90_000;
+}
+
+/**
  * Production is deliberately fail-closed. A deployment cannot accidentally
  * expose the development bearer-token guard or a mock parser because an
  * environment variable was omitted.
