@@ -3935,6 +3935,84 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
         XCTAssertTrue(store.days.flatMap(\.meals).isEmpty)
     }
+
+    func testPhotoInventoryReconcilesCoverageAfterDisjointVerificationPasses() {
+        let primaryCoverage = MealVisualCoverage(
+            scannedRegions: ["full frame", "main bowl"],
+            visibleServingCount: 1,
+            distinctServingCount: 1,
+            occludedRegions: [],
+            inventoryComplete: false,
+            coverageConfidence: 0.91
+        )
+        let spatialCoverage = MealVisualCoverage(
+            scannedRegions: ["spatial montage", "plate edge"],
+            visibleServingCount: 1,
+            distinctServingCount: 1,
+            occludedRegions: [],
+            inventoryComplete: false,
+            coverageConfidence: 0.88
+        )
+        let primary = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Kadhi", canonicalSearchName: "kadhi",
+                    category: .vegetarianCurry, quantity: 1, unit: "katori",
+                    estimatedGrams: 150, confidence: 0.91
+                )
+            ],
+            unresolvedItems: [], mealDescription: "Kadhi", clarificationQuestions: [],
+            confidence: 0.91, visualCoverage: primaryCoverage
+        )
+        let spatial = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Two rotis", canonicalSearchName: "roti",
+                    regionalName: "roti", category: .bread, quantity: 2, unit: "piece",
+                    quantityEvidence: "two stacked flatbreads", estimatedGrams: 70,
+                    confidence: 0.90
+                )
+            ],
+            unresolvedItems: [], mealDescription: "Two rotis", clarificationQuestions: [],
+            confidence: 0.90, visualCoverage: spatialCoverage
+        )
+
+        let selected = PhotoInventoryVerificationService(catalog: catalog)
+            .preferred(primary: primary, verified: spatial)
+
+        XCTAssertEqual(Set(selected.detectedItems.map { $0.regionalName ?? $0.originalText }), Set(["roti", "Kadhi"]))
+        XCTAssertEqual(selected.visualCoverage?.distinctServingCount, 2)
+        XCTAssertEqual(selected.visualCoverage?.visibleServingCount, 2)
+        XCTAssertEqual(selected.visualCoverage?.inventoryComplete, true)
+    }
+
+    func testBackendStatusMapsToActionablePhotoRecoveryErrors() {
+        XCTAssertEqual(FoodAnalysisError.backend(statusCode: 401), .unauthenticatedBackend)
+        XCTAssertEqual(FoodAnalysisError.backend(statusCode: 429), .backendRateLimited)
+        XCTAssertEqual(FoodAnalysisError.backend(statusCode: 413), .unsupportedImage)
+        XCTAssertEqual(FoodAnalysisError.backend(statusCode: 422), .backendRequestRejected)
+        XCTAssertEqual(FoodAnalysisError.backend(statusCode: 504), .photoAnalysisTimedOut)
+        XCTAssertEqual(FoodAnalysisError.backend(statusCode: 503), .endpointUnavailable)
+    }
+
+    func testCompleteEggSproutAndNutPlateDoesNotFallBackToRetry() {
+        var result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(
+                description: "2 boiled eggs with mixed sprouts and walnuts",
+                imageType: .originalPhoto
+            )
+        result.visualCoverage = MealVisualCoverage(
+            scannedRegions: ["full plate", "egg pile", "sprout pile", "nut pile"],
+            visibleServingCount: result.detectedItems.count,
+            distinctServingCount: result.detectedItems.count,
+            occludedRegions: [],
+            inventoryComplete: true,
+            coverageConfidence: 0.9
+        )
+
+        XCTAssertGreaterThanOrEqual(result.detectedItems.count, 3)
+        XCTAssertFalse(PhotoAnalysisCompletenessEvaluator().requiresInventoryRecovery(result))
+    }
 }
 
 private struct StubMealUnderstanding: FoodUnderstandingService {

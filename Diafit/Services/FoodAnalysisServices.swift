@@ -133,12 +133,14 @@ struct GeneratedMealImageKey: Hashable, Sendable {
     let visualStyleVersion: String
 }
 
-enum FoodAnalysisError: LocalizedError {
+enum FoodAnalysisError: LocalizedError, Equatable {
     case endpointUnavailable
     case malformedProviderResponse
     case unsupportedImage
     case imageTooLarge
     case unauthenticatedBackend
+    case backendRateLimited
+    case backendRequestRejected
     case photoAnalysisTimedOut
 
     var errorDescription: String? {
@@ -148,7 +150,23 @@ enum FoodAnalysisError: LocalizedError {
         case .unsupportedImage: return "Choose a JPEG, HEIC, or PNG photo to continue."
         case .imageTooLarge: return "That photo is too large to process. Try a smaller image."
         case .unauthenticatedBackend: return "Secure photo analysis needs an authenticated account. You can still describe the meal."
+        case .backendRateLimited: return "The AI service is busy right now. Wait a moment and try again."
+        case .backendRequestRejected: return "That photo request was rejected. Choose another photo or try again."
         case .photoAnalysisTimedOut: return "Photo analysis took too long. Retry once on a stronger connection or name the visible foods."
+        }
+    }
+
+    /// Converts the backend's stable HTTP boundary into a user-safe recovery
+    /// state. Provider details never cross into the UI; the status code is
+    /// enough to distinguish credentials, throttling, input and outages.
+    static func backend(statusCode: Int) -> FoodAnalysisError {
+        switch statusCode {
+        case 401, 403: return .unauthenticatedBackend
+        case 413, 415: return .unsupportedImage
+        case 422: return .backendRequestRejected
+        case 429: return .backendRateLimited
+        case 408, 504: return .photoAnalysisTimedOut
+        default: return .endpointUnavailable
         }
     }
 }
@@ -198,8 +216,11 @@ struct HTTPFoodRecognitionService: FoodRecognitionService {
         ))
 
         let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
+        guard let http = response as? HTTPURLResponse else {
             throw FoodAnalysisError.endpointUnavailable
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            throw FoodAnalysisError.backend(statusCode: http.statusCode)
         }
         do {
             let decoder = JSONDecoder()
@@ -515,7 +536,63 @@ struct PhotoInventoryVerificationService: Sendable {
         selected.clarificationQuestions = SemanticQuestionDeduplicator.uniqueStrings(
             primary.clarificationQuestions + verified.clarificationQuestions
         )
+        selected.visualCoverage = reconciledCoverage(
+            primary: primary.visualCoverage,
+            verified: verified.visualCoverage,
+            mergedServingCount: merged.count
+        )
         return selected
+    }
+
+    /// Verification can discover disjoint physical servings: the first scan
+    /// may see the curry bowl while a spatial pass sees the stacked roti. The
+    /// old implementation retained only the second scan's count, so the
+    /// merged result was immediately rejected as an incomplete inventory and
+    /// the review card showed “Retry AI recognition” forever. Reconcile the
+    /// evidence with the merged component set instead of throwing away the
+    /// valid discovery.
+    private func reconciledCoverage(
+        primary: MealVisualCoverage?,
+        verified: MealVisualCoverage?,
+        mergedServingCount: Int
+    ) -> MealVisualCoverage? {
+        guard primary != nil || verified != nil else { return nil }
+        let coverages = [primary, verified].compactMap { $0 }
+        let scannedRegions = SemanticQuestionDeduplicator.uniqueStrings(
+            coverages.flatMap(\.scannedRegions)
+        )
+        let occludedRegions = SemanticQuestionDeduplicator.uniqueStrings(
+            coverages.flatMap(\.occludedRegions)
+        )
+        let coverageConfidence = coverages.map(\.coverageConfidence).min() ?? 0
+        let maximumReportedServingCount = coverages.map(\.visibleServingCount).max() ?? 0
+        // The independent and spatial passes intentionally inspect different
+        // evidence. Each pass may honestly say “incomplete” because it saw
+        // only its own crop; the union is complete when the two scans have no
+        // occluded region, their combined component set covers every serving
+        // either pass reported, and both passes meet the confidence floor.
+        // Keeping the per-pass boolean here used to turn a valid Kadhi + roti
+        // (or eggs + sprouts) union into an endless retry state.
+        let inventoryComplete: Bool
+        if coverages.count >= 2 {
+            inventoryComplete = occludedRegions.isEmpty
+                && mergedServingCount >= maximumReportedServingCount
+                && coverageConfidence >= 0.82
+        } else {
+            inventoryComplete = coverages.first?.inventoryComplete == true
+        }
+        let visibleServingCount = max(
+            mergedServingCount,
+            maximumReportedServingCount
+        )
+        return MealVisualCoverage(
+            scannedRegions: scannedRegions,
+            visibleServingCount: visibleServingCount,
+            distinctServingCount: mergedServingCount,
+            occludedRegions: occludedRegions,
+            inventoryComplete: inventoryComplete,
+            coverageConfidence: coverageConfidence
+        )
     }
 
     private func identityKey(_ item: ParsedFoodItem) -> String {
@@ -847,6 +924,19 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
         let genericVisualIdentities = [
             "vegetable-soup", "soup", "mixed-food", "mixed-dish", "food", "meal", "dish", "curry"
         ]
+        // A small garnish is suspicious when it is all the model found, not
+        // when it accompanies two or more independently identified servings
+        // (for example eggs + sprouts + nuts). The old unconditional check
+        // made complete breakfast plates fall back to “Retry AI recognition”.
+        let substantiveServingCount = result.detectedItems.reduce(into: 0) { count, item in
+            let identity = item.canonicalFoodId
+                .replacingOccurrences(of: "_", with: "-")
+                .lowercased()
+            let source = item.displayName.lowercased()
+            let isSmall = smallVisualIdentities.contains { identity == $0 || identity.contains($0) || source.contains($0) }
+            let isGeneric = genericVisualIdentities.contains { identity == $0 || source == $0.replacingOccurrences(of: "-", with: " ") }
+            if !isSmall && !isGeneric { count += 1 }
+        }
 
         for item in result.detectedItems {
             let identity = item.canonicalFoodId
@@ -861,7 +951,7 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
                 ])
                 return true
             }
-            if result.detectedItems.count <= 2,
+            if substantiveServingCount < 2,
                smallVisualIdentities.contains(where: { identity == $0 || identity.contains($0) || source.contains($0) }) {
                 FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
                     "reason": "salient-small-inventory",
@@ -874,7 +964,7 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
             // A one-piece serving with only a gram or two is another useful,
             // provider-independent signal that the classifier surfaced a
             // garnish rather than the meal occupying the plate.
-            if result.detectedItems.count <= 2,
+            if substantiveServingCount < 2,
                item.estimatedWeightGrams.map({ $0 > 0 && $0 <= 5 }) == true {
                 FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
                     "reason": "garnish-weight",
@@ -910,6 +1000,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
     func analyse(image: PreparedFoodImage, description: String) async -> MealAnalysisResult {
         let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
         var remoteFailed = false
+        var remoteFailure: FoodAnalysisError?
         var remoteIncomplete: MealAnalysisResult?
         var remoteNeedsInventoryRecovery = false
 
@@ -959,9 +1050,10 @@ struct PhotoAnalysisOrchestrator: Sendable {
             } catch {
                 let elapsedMilliseconds = Int(Date().timeIntervalSince(remoteStartedAt) * 1_000)
                 remoteFailed = true
+                remoteFailure = normalizedRemoteFailure(error)
                 FoodLoggingDiagnostics.record("photo.classification", fields: [
                     "route": "structured-backend-failed",
-                    "reason": safeRemoteFailureReason(error),
+                    "reason": safeRemoteFailureReason(remoteFailure ?? error),
                     "elapsedMs": String(elapsedMilliseconds)
                 ])
             }
@@ -1061,7 +1153,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
                 warning = "Secure AI recognition is not configured. The private on-device label was withheld until the full plate can be scanned."
                 modelVersion = "On-device whole-image suggestions withheld"
             } else if remoteFailed {
-                warning = "Live recognition is unavailable. The private on-device label was withheld because it may omit foods elsewhere in the photo."
+                warning = remoteFailureWarning(remoteFailure)
                 modelVersion = "On-device whole-image suggestions withheld after backend failure"
             } else {
                 warning = "AI returned only a partial plate inventory. Retry recognition or name the visible foods before saving."
@@ -1095,7 +1187,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
                     image: image,
                     modelVersion: "On-device whole-image suggestions withheld",
                     warning: remoteFailed
-                        ? "Live recognition is unavailable. The private whole-image suggestions were too broad to identify this plate safely."
+                        ? remoteFailureWarning(remoteFailure)
                         : "Secure AI recognition is not configured. The private whole-image suggestions were too broad to identify this plate safely."
                 )
             }
@@ -1129,8 +1221,8 @@ struct PhotoAnalysisOrchestrator: Sendable {
             return result
         } else if remoteFailed {
             let warning = result.detectedItems.isEmpty
-                ? "Secure AI recognition is unavailable. Add the food name below without losing your photo."
-                : "Secure AI recognition is unavailable, so this private on-device estimate needs your review."
+                ? remoteFailureWarning(remoteFailure)
+                : "\(remoteFailureWarning(remoteFailure)) The private on-device estimate still needs your review."
             result.warnings.insert(warning, at: 0)
         } else if candidates.isEmpty && trimmedDescription.isEmpty {
             result.warnings.insert(
@@ -1185,10 +1277,41 @@ struct PhotoAnalysisOrchestrator: Sendable {
             case .unsupportedImage: return "unsupported-image"
             case .imageTooLarge: return "image-too-large"
             case .unauthenticatedBackend: return "unauthenticated"
+            case .backendRateLimited: return "rate-limited"
+            case .backendRequestRejected: return "request-rejected"
             case .photoAnalysisTimedOut: return "analysis-timeout"
             }
         }
         return "provider-error"
+    }
+
+    /// URLSession and timeout errors do not always arrive as FoodAnalysisError.
+    /// Normalize them once so the review UI can give a specific recovery action
+    /// instead of presenting every failure as the same retry state.
+    private func normalizedRemoteFailure(_ error: Error) -> FoodAnalysisError {
+        if let error = error as? FoodAnalysisError { return error }
+        if let urlError = error as? URLError,
+           urlError.code == .timedOut || urlError.code == .cannotConnectToHost || urlError.code == .networkConnectionLost {
+            return urlError.code == .timedOut ? .photoAnalysisTimedOut : .endpointUnavailable
+        }
+        return .endpointUnavailable
+    }
+
+    private func remoteFailureWarning(_ error: FoodAnalysisError?) -> String {
+        switch error ?? .endpointUnavailable {
+        case .unauthenticatedBackend:
+            return "Secure AI recognition needs a valid backend connection. Check the app's backend settings, then retry."
+        case .backendRateLimited:
+            return "Live recognition (AI) is busy right now. Wait a moment, then retry recognition."
+        case .backendRequestRejected, .unsupportedImage, .imageTooLarge:
+            return "This photo could not be accepted. Choose a clear JPEG, HEIC, or PNG and retry recognition."
+        case .photoAnalysisTimedOut:
+            return "Live recognition (AI) timed out. Check the connection and retry recognition."
+        case .malformedProviderResponse:
+            return "Secure AI recognition returned an unreadable result. Nothing was saved; retry recognition."
+        case .endpointUnavailable:
+            return "Live recognition (AI) is unavailable because the AI backend could not be reached. Keep the configured server online or check the connection, then retry recognition."
+        }
     }
 
     private func withPhotoAnalysisTimeout<T: Sendable>(

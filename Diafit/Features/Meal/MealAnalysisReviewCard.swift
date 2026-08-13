@@ -115,6 +115,7 @@ struct MealAnalysisReviewCard: View {
                 EmptyAnalysisState(
                     query: $componentQuery,
                     errorMessage: componentError,
+                    recoveryMessage: result.warnings.first,
                     hasPhoto: editableDraft.transientImageData != nil,
                     isRetrying: isRetryingAnalysis,
                     retryAnalysis: retryAnalysis,
@@ -765,6 +766,7 @@ private struct DetectedItemEditor: View {
 private struct EmptyAnalysisState: View {
     @Binding var query: String
     let errorMessage: String?
+    let recoveryMessage: String?
     let hasPhoto: Bool
     let isRetrying: Bool
     let retryAnalysis: () -> Void
@@ -783,6 +785,15 @@ private struct EmptyAnalysisState: View {
                     .font(DiafitType.caption)
                     .foregroundStyle(Color.quietInk)
                     .lineSpacing(2)
+
+                if let recoveryMessage,
+                   !recoveryMessage.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    Text(recoveryMessage)
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.coral)
+                        .lineSpacing(2)
+                        .accessibilityLabel("Photo analysis status: \(recoveryMessage)")
+                }
 
                 Button(action: retryAnalysis) {
                     HStack(spacing: 8) {

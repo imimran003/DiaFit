@@ -1,0 +1,40 @@
+services:
+  - type: web
+    name: diafit-analysis
+    runtime: node
+    rootDir: Backend
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    plan: free
+    envVars:
+      # Private testing deployment. It is HTTPS, but it intentionally keeps
+      # the development token until the app has a real account/JWKS flow.
+      - key: DIAFIT_DEPLOYMENT_ENV
+        value: development
+      - key: HOST
+        value: 0.0.0.0
+      - key: DIAFIT_ANALYSIS_MODE
+        value: fixture
+      - key: DIAFIT_AUTH_MODE
+        value: development-token
+      - key: DIAFIT_DEVELOPMENT_TOKEN
+        sync: false
+      - key: DIAFIT_MEAL_PARSER_MODE
+        value: gemini
+      - key: GEMINI_MEAL_MODEL
+        value: gemini-3.1-flash-lite
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: DIAFIT_MEAL_VISUAL_MODE
+        value: disabled
+      - key: DIAFIT_NUTRITION_PROVIDER_MODE
+        value: disabled
+      - key: RATE_LIMIT_PER_MINUTE
+        value: 20
+      - key: ANALYSIS_TIMEOUT_MS
+        value: 25000
+      - key: MEAL_PARSE_PROVIDER_ATTEMPTS
+        value: 2
+      - key: MEAL_PARSE_RETRY_BASE_MS
+        value: 250

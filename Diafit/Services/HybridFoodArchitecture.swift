@@ -246,14 +246,17 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
             idempotencyKey: idempotencyKey
         ))
         let (data, response) = try await perform(request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
-            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+        guard let http = response as? HTTPURLResponse else {
+            throw FoodAnalysisError.endpointUnavailable
+        }
+        guard (200..<300).contains(http.statusCode) else {
+            let status = http.statusCode
             FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
                 "status": "http-error",
                 "statusCode": String(status),
                 "responseBytes": String(data.count)
             ])
-            throw FoodAnalysisError.endpointUnavailable
+            throw FoodAnalysisError.backend(statusCode: status)
         }
         do {
             let result = try Self.decodeResponse(data)
