@@ -156,6 +156,10 @@ struct FoodUnderstandingPipeline: Sendable {
             "along", "alongside", "served", "together", "accompanied", "by", "a", "an", "the", "some",
             "for", "as", "of", "today", "yesterday", "same", "breakfast", "lunch", "dinner", "supper",
             "snack", "snacks", "morning", "afternoon", "evening", "mid", "before", "after", "at", "in",
+            // Portion and texture adjectives describe a serving, not a
+            // separate food noun. Keeping them structural prevents a valid
+            // compound meal from being downgraded to a partial match.
+            "thin", "thick", "small", "medium", "large", "mini", "big", "homemade", "home", "style",
             "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "half",
             "quarter", "pair", "couple", "scoop", "scoops", "serving", "servings", "bowl", "bowls",
             "katori", "katoris", "cup", "cups", "glass", "glasses", "piece", "pieces", "slice", "slices",
@@ -288,7 +292,17 @@ enum FoodInputNormalizer {
         "khichadi": "khichdi",
         "rotis": "roti",
         "chapatis": "chapati",
-        "phulkas": "phulka"
+        "phulkas": "phulka",
+        // Common typed spellings are normalized before alias matching. This
+        // keeps compound text deterministic even when a provider is slow or
+        // unavailable; it is a language normalization rule, not a meal
+        // phrase special case.
+        "omlet": "omelette",
+        "omelet": "omelette",
+        "omelets": "omelette",
+        "omlets": "omelette",
+        "parathas": "paratha",
+        "breads": "bread"
     ]
 
     fileprivate static func normalize(_ value: String) -> NormalizedFoodInput {

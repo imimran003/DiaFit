@@ -874,8 +874,19 @@ function defaultMockMealParser(input) {
   if (sabudanaMentioned) detectedItems.push(food('sabudana khichdi', 1, 'medium bowl', 'sabudana khichdi', 0.9));
   else if (/\bkhich(?:di|uri)\b/.test(normalized)) detectedItems.push(food('khichdi', 1, 'medium bowl', 'khichdi', 0.88));
   if (/\b(?:rice|chawal|chaawal)\b/.test(normalized)) detectedItems.push(food('rice', 1, 'cup', 'cooked white rice', 0.9));
-  if (/\b(?:chai|tea)\b/.test(normalized) && !/black\s+coffee/.test(normalized)) detectedItems.push(food('chai', 1, 'cup', 'chai', 0.78, null, [], true));
-  if (/\bparathas?\b/.test(normalized)) detectedItems.push(food('paratha', 1, 'piece', 'paratha', 0.8, null, [], true));
+  if (/\b(?:chai|tea)\b/.test(normalized) && !/black\s+coffee/.test(normalized)) {
+    const milkTea = /\b(?:milk\s+tea|milk\s+chai|chai\s+with\s+milk)\b/.test(normalized);
+    detectedItems.push(food(milkTea ? 'milk tea' : 'chai', 1, 'cup', milkTea ? 'chai with milk' : 'chai', 0.78, null, [], true));
+  }
+  if (/\bparathas?\b/.test(normalized)) {
+    detectedItems.push(food('paratha', quantityBefore(normalized, 'parathas?'), 'piece', 'paratha', 0.8, null, [], true));
+  }
+  if (/\b(?:whole\s+wheat\s+)?bread\b/.test(normalized)) {
+    detectedItems.push(food('whole wheat bread', quantityBefore(normalized, '(?:whole\\s+wheat\\s+)?bread'), 'slice', 'whole wheat bread', 0.82));
+  }
+  if (/\b(?:omlet|omelet|omelette)\b/.test(normalized)) {
+    detectedItems.push(food('omelette', quantityBefore(normalized, '(?:omlet|omelet|omelette)s?'), 'piece', 'omelette', 0.88, 'plain omelette', [], true));
+  }
   if (/\bbanana\b/.test(normalized)) detectedItems.push(food('banana', 1, 'piece', 'banana', 0.9));
   if (/\boats?\b/.test(normalized)) detectedItems.push(food('oats', 1, 'cup', 'oats', 0.9));
   const wheyMentioned = /whey|protein\s+shake|protein\s+powder/.test(normalized);
@@ -944,6 +955,12 @@ function inferPackagedProduct(item) {
 }
 
 function numberWord(value) { return ({ one: 1, two: 2, three: 3, four: 4 }[value] ?? Number(value)); }
+
+function quantityBefore(normalized, foodPattern) {
+  const expression = new RegExp(`(?:^|\\s)(\\d+|one|two|three|four)\\s+(?:(?:thin|thick|small|medium|large|whole|wheat)\\s+)*${foodPattern}\\b`);
+  const match = normalized.match(expression);
+  return match ? numberWord(match[1]) : 1;
+}
 
 function waterQuantity(normalized) {
   const millilitres = normalized.match(/(\d+(?:\.\d+)?)\s*(?:ml|millilit(?:re|er)s?)/);

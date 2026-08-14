@@ -2593,6 +2593,59 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(visual.source, .deterministicPlaceholder)
     }
 
+    /// Regression for manual compound logging: a provider response must not
+    /// erase later components when the user supplies explicit quantities.
+    func testManualCompoundTextKeepsEveryComponentAndQuantity() {
+        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(
+            "Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 1 omlet"
+        )
+
+        XCTAssertEqual(
+            Set(trace.components.map { $0.food.canonicalId }),
+            Set(["chai-with-milk", "paratha", "whole-wheat-bread", "omelette"])
+        )
+        XCTAssertTrue(trace.unresolvedTokens.isEmpty, "Only food nouns should become entities in this compound input")
+        XCTAssertEqual(trace.components.first(where: { $0.food.canonicalId == "paratha" })?.quantity, 2)
+        XCTAssertEqual(trace.components.first(where: { $0.food.canonicalId == "whole-wheat-bread" })?.quantity, 1)
+        XCTAssertEqual(trace.components.first(where: { $0.food.canonicalId == "omelette" })?.quantity, 1)
+    }
+
+    func testPartialStructuredProviderCannotDropLocalManualComponents() async throws {
+        let chaiOnly = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "milk tea",
+                    canonicalSearchName: "chai with milk",
+                    quantity: 1,
+                    unit: "glass",
+                    confidence: 0.88
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "milk tea",
+            clarificationQuestions: [],
+            confidence: 0.88
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: StubMealUnderstanding(result: chaiOnly),
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+
+        let result = await router.resolve(
+            text: "Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 1 omlet"
+        )
+
+        XCTAssertEqual(
+            Set(result.items.compactMap { $0.canonical?.food.canonicalId }),
+            Set(["chai-with-milk", "paratha", "whole-wheat-bread", "omelette"])
+        )
+        XCTAssertEqual(result.items.first(where: { $0.canonical?.food.canonicalId == "paratha" })?.parsedItem.quantity, 2)
+        XCTAssertEqual(result.items.first(where: { $0.canonical?.food.canonicalId == "whole-wheat-bread" })?.parsedItem.quantity, 1)
+        XCTAssertEqual(result.items.first(where: { $0.canonical?.food.canonicalId == "omelette" })?.parsedItem.quantity, 1)
+        XCTAssertFalse(result.items.contains { $0.canonical == nil })
+    }
+
     func testBeverageVariationsNormaliseToCanonicalRecords() {
         let examples: [(String, String)] = [
             ("black coffee", "black-coffee"),

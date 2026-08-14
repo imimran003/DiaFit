@@ -36,6 +36,12 @@ const khichdi = await new MockMealParser().parse({ text: 'khichdi' });
 assert.equal(khichdi.detectedItems[0].canonicalSearchName, 'khichdi');
 const sabudana = await new MockMealParser().parse({ text: 'sabodana' });
 assert.equal(sabudana.detectedItems[0].canonicalSearchName, 'sabudana khichdi');
+const manualCompound = await new MockMealParser().parse({ text: 'Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 2 omlet' });
+assert.deepEqual(
+  manualCompound.detectedItems.map(item => item.canonicalSearchName),
+  ['chai with milk', 'paratha', 'whole wheat bread', 'omelette']
+);
+assert.deepEqual(manualCompound.detectedItems.map(item => item.quantity), [1, 2, 1, 2]);
 
 const imageInput = buildMealParseInput({
   text: 'Identify every visible food in this meal photo.',

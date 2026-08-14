@@ -1837,7 +1837,8 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
 
     func resolve(parse: MealParseResult, originalInput: String) async -> FoodResolutionResult {
         let normalized = normalize(originalInput)
-        let resolved = await resolveAI(parse).map { completeWithCuratedFallback($0) }
+        let providerItems = await resolveAI(parse).map { completeWithCuratedFallback($0) }
+        let resolved = await mergeProviderItemsWithLocal(providerItems, input: originalInput)
         let matches = resolved.compactMap(\.canonical)
         let questions = clarification.questions(for: parse, matches: matches)
             + localQuestions(for: resolved, input: normalized)
@@ -1907,7 +1908,13 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         if let understanding {
             do {
                 let parse = try await understanding.parse(text: text, image: nil)
-                let resolved = await resolveAI(parse)
+                let providerItems = await resolveAI(parse)
+                // A structured provider is an enrichment source, not an
+                // authority over the user's words. If it returns only the
+                // first salient component, retain every deterministic local
+                // component (including explicit quantities) before building
+                // the editable review model.
+                let resolved = await mergeProviderItemsWithLocal(providerItems, input: text)
                 let matches = resolved.compactMap(\.canonical)
                 let questions = clarification.questions(for: parse, matches: matches) + localQuestions(for: resolved, input: normalized)
                 let unresolved = parse.unresolvedItems + resolved.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
@@ -1946,7 +1953,8 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
     private func resolveIncompleteLocal(text: String, normalized: String, local: [FoodResolutionItem], understanding: any FoodUnderstandingService) async -> FoodResolutionResult {
         do {
             let parse = try await understanding.parse(text: text, image: nil)
-            let aiItems = await resolveAI(parse).map { completeWithCuratedFallback($0) }
+            let providerItems = await resolveAI(parse).map { completeWithCuratedFallback($0) }
+            let aiItems = await mergeProviderItemsWithLocal(providerItems, input: text)
             let questions = clarification.questions(for: parse, matches: aiItems.compactMap(\.canonical))
                 + localQuestions(for: aiItems, input: normalized)
             let unresolved = parse.unresolvedItems + aiItems.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
@@ -1957,6 +1965,50 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
             return result(text: text, normalized: normalized, items: fallbackItems, unresolved: [],
                           extraQuestions: localQuestions(for: fallbackItems, input: normalized), attemptedAI: true)
         }
+    }
+
+    /// Providers can under-segment a compound sentence (for example, return
+    /// only `chai` from a sentence that also contains paratha, bread and an
+    /// omelette). Local canonical spans are deterministic evidence of what the
+    /// member typed, so provider output may enrich those spans but must never
+    /// delete them. Explicit local quantities win because they are directly
+    /// supported by the user's text and have already been scaled for nutrition.
+    private func mergeProviderItemsWithLocal(_ providerItems: [FoodResolutionItem], input: String) async -> [FoodResolutionItem] {
+        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(input)
+        guard !trace.components.isEmpty else { return providerItems }
+
+        let localItems = await resolveLocal(trace.components).map { completeWithCuratedFallback($0) }
+        var merged: [FoodResolutionItem] = []
+        var consumedProviderIndices = Set<Int>()
+
+        for localItem in localItems {
+            guard let localID = localItem.canonical?.food.canonicalId else {
+                merged.append(localItem)
+                continue
+            }
+            if let providerIndex = providerItems.indices.first(where: { index in
+                guard !consumedProviderIndices.contains(index) else { return false }
+                return providerItems[index].canonical?.food.canonicalId == localID
+            }) {
+                consumedProviderIndices.insert(providerIndex)
+                // An explicit number/unit in the sentence is stronger than a
+                // provider's default or visual guess. Keeping the local item
+                // also preserves nutrition that was calculated for that exact
+                // quantity rather than silently reusing a one-serving value.
+                if localItem.parsedItem.quantityEvidence != nil {
+                    merged.append(localItem)
+                } else {
+                    merged.append(providerItems[providerIndex])
+                }
+            } else {
+                merged.append(localItem)
+            }
+        }
+
+        for (index, providerItem) in providerItems.enumerated() where !consumedProviderIndices.contains(index) {
+            merged.append(providerItem)
+        }
+        return merged
     }
 
     private func completeWithCuratedFallback(_ item: FoodResolutionItem) -> FoodResolutionItem {
@@ -1974,6 +2026,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
                                                 regionalName: component.food.regionalNames.first,
                                                 quantity: component.quantity,
                                                 unit: component.servingUnit.rawValue,
+                                                quantityEvidence: component.quantityWasExplicit ? "explicit quantity in user text" : nil,
                                                 estimatedGrams: nil,
                                                 preparationMethod: component.preparationMethod,
                                                 additions: component.modifiers)
