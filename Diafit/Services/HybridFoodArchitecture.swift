@@ -2163,7 +2163,15 @@ struct HybridMealAnalysisCoordinator: Sendable {
         imageReference: MealImageReference,
         imageType: MealImageType
     ) async -> MealAnalysisResult {
-        let resolution = await router.resolve(parse: parse, originalInput: originalInput)
+        // A photo instruction is transport metadata, not the member's food
+        // description. Re-parsing it through the local text pipeline can
+        // manufacture entities from words such as "rice", "dal" or
+        // "vegetable" that happen to occur in the instruction and can also
+        // duplicate/replace the provider's visual inventory. Manual text
+        // still goes through the merge so a partial provider response cannot
+        // drop components the member explicitly typed.
+        let routerInput = imageType == .originalPhoto ? "" : originalInput
+        let resolution = await router.resolve(parse: parse, originalInput: routerInput)
         return makeAnalysis(
             from: resolution,
             imageReference: imageReference,

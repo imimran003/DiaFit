@@ -2646,6 +2646,46 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(result.items.contains { $0.canonical == nil })
     }
 
+    /// The live composer uses the hybrid coordinator to build the review card.
+    /// Keep this assertion at that boundary so a provider that returns only
+    /// the first salient item can never regress the UI back to chai-only.
+    func testHybridTextCoordinatorPreservesEveryManualCompoundComponent() async throws {
+        let chaiOnly = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "milk tea",
+                    canonicalSearchName: "chai with milk",
+                    quantity: 1,
+                    unit: "glass",
+                    confidence: 0.88
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "milk tea",
+            clarificationQuestions: [],
+            confidence: 0.88
+        )
+        let coordinator = HybridMealAnalysisCoordinator(
+            router: DefaultFoodResolutionRouter(
+                catalog: catalog,
+                understanding: StubMealUnderstanding(result: chaiOnly),
+                nutrition: HybridNutritionResolutionService(catalog: catalog)
+            )
+        )
+
+        let result = await coordinator.analyse(
+            text: "Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 1 omlet"
+        )
+
+        XCTAssertEqual(
+            Set(result.detectedItems.map(\.canonicalFoodId)),
+            Set(["chai-with-milk", "paratha", "whole-wheat-bread", "omelette"])
+        )
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "paratha" })?.quantity, 2)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "whole-wheat-bread" })?.quantity, 1)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "omelette" })?.quantity, 1)
+    }
+
     func testBeverageVariationsNormaliseToCanonicalRecords() {
         let examples: [(String, String)] = [
             ("black coffee", "black-coffee"),
