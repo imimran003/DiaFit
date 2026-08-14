@@ -12,7 +12,11 @@ export const MEAL_PARSE_SCHEMA = {
   required: ['detectedItems', 'unresolvedItems', 'mealDescription', 'clarificationQuestions', 'confidence', 'visualCoverage'],
   properties: {
     detectedItems: { type: 'array', items: parsedFoodItemSchema() },
-    unresolvedItems: { type: 'array', items: { type: 'string' } },
+    unresolvedItems: {
+      type: 'array',
+      description: 'Exact food-like words or spans from the input that were not mapped to a detected item. Never silently omit a meaningful food term.',
+      items: { type: 'string' }
+    },
     mealDescription: { type: 'string' },
     clarificationQuestions: { type: 'array', items: { type: 'string' } },
     confidence: { type: 'number' },
@@ -52,12 +56,12 @@ function parsedFoodItemSchema() {
       'isPackagedProduct', 'packagedLabelEvidence', 'aiNutritionEstimate'
     ],
     properties: {
-      originalText: { type: 'string' },
-      canonicalSearchName: { type: 'string' },
+      originalText: { type: 'string', description: 'The exact food phrase or contiguous span that produced this item.' },
+      canonicalSearchName: { type: 'string', description: 'A concise canonical food name suitable for nutrition lookup; do not return a generic meal summary.' },
       regionalName: nullable('string'),
       category: { type: 'string', enum: ['hydration', 'bread', 'rice', 'lentilOrLegume', 'vegetarianCurry', 'nonVegetarian', 'breakfastOrSnack', 'dairyOrSide', 'dessertOrDrink', 'fruitOrVegetable', 'egg', 'sprouts', 'supplement', 'unknown'] },
-      quantity: { type: 'number' },
-      unit: { type: 'string' },
+      quantity: { type: 'number', description: 'Explicit quantity when present; otherwise a conservative standard serving quantity, normally 1.' },
+      unit: { type: 'string', description: 'Serving unit matching the quantity, such as piece, slice, bowl, cup, glass, gram, or package.' },
       quantityEvidence: nullable('string'),
       estimatedGrams: nullable('number'),
       preparationMethod: nullable('string'),
@@ -134,10 +138,61 @@ function packagedLabelEvidenceSchema() {
 
 function nullable(type) { return { anyOf: [{ type }, { type: 'null' }] }; }
 
+/**
+ * Compact semantic examples for the extraction contract. The complete
+ * response still has to populate every field required by MEAL_PARSE_SCHEMA.
+ */
+export const MEAL_PARSE_FEW_SHOT_EXAMPLES = String.raw`
+FEW-SHOT EXTRACTION EXAMPLES (semantic excerpts; final output must still satisfy the complete schema):
+
+INPUT: Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 1 omlet
+OUTPUT:
+{"detectedItems":[
+  {"originalText":"Milk tea without sugar","canonicalSearchName":"chai with milk","quantity":1,"unit":"glass","preparationMethod":"unsweetened","exclusions":["sugar"]},
+  {"originalText":"2 thin paratha","canonicalSearchName":"paratha","quantity":2,"unit":"piece","preparationMethod":"thin"},
+  {"originalText":"1 whole wheat bread","canonicalSearchName":"whole wheat bread","quantity":1,"unit":"slice"},
+  {"originalText":"1 omlet","canonicalSearchName":"omelette","quantity":1,"unit":"piece"}
+],"unresolvedItems":[]}
+
+INPUT: 2 thn paratha + 1 whol wheat bred & omlet
+OUTPUT:
+{"detectedItems":[
+  {"originalText":"2 thn paratha","canonicalSearchName":"paratha","quantity":2,"unit":"piece"},
+  {"originalText":"1 whol wheat bred","canonicalSearchName":"whole wheat bread","quantity":1,"unit":"slice"},
+  {"originalText":"omlet","canonicalSearchName":"omelette","quantity":1,"unit":"piece"}
+],"unresolvedItems":[]}
+
+INPUT: milk tea with paratha and omelette
+OUTPUT:
+{"detectedItems":[
+  {"originalText":"milk tea","canonicalSearchName":"chai with milk","quantity":1,"unit":"glass"},
+  {"originalText":"paratha","canonicalSearchName":"paratha","quantity":1,"unit":"piece"},
+  {"originalText":"omelette","canonicalSearchName":"omelette","quantity":1,"unit":"piece"}
+],"unresolvedItems":[],"clarificationQuestions":["Was sugar added to the tea?"]}
+
+INPUT: I had 2 roti with something brown
+OUTPUT:
+{"detectedItems":[
+  {"originalText":"2 roti","canonicalSearchName":"roti","quantity":2,"unit":"piece"}
+],"unresolvedItems":["something brown"]}
+`;
+
 export const MEAL_PARSE_SYSTEM_PROMPT = [
-  'You are Diafit Meal Understanding, a careful food-language parser.',
-  'Interpret the user text and optional food image into meal components.',
-  'Return only the schema-constrained JSON object. Food identity and visible package text must be grounded in the image.',
+  'You are Diafit Meal Understanding, a strict data-extraction API, not a conversational assistant.',
+  'Your only job is to convert the complete user text and optional food image into one structured MealParseResult for downstream code.',
+  'Return exactly one JSON object that conforms to the supplied strict schema. Do not return prose, greetings, explanations, analysis, comments, markdown, Markdown code fences, XML, or a second object.',
+  'The JSON must account for every meaningful food, drink, supplement, packaged product, and prepared dish. detectedItems contains the food name (canonicalSearchName and originalText), quantity, and unit. unresolvedItems contains exact unparsed food-like spans; never silently drop text.',
+  'Treat the input as an extraction task: scan the entire string left-to-right before producing any output. Do not stop after the first recognised item, the most salient item, or the first noun phrase.',
+  'Normalise Unicode, case, punctuation, whitespace, singular/plural forms, common Romanised regional names, shorthand, and obvious typos before matching. Preserve the original span in originalText.',
+  'Correct safe typos and shorthand such as omlet/omelet -> omelette, palaak/palak -> spinach/palak, bred/bread -> bread, paratha/parata -> paratha, chawal/chaawal -> rice, daal/dal -> dal, sabji/sabzi -> vegetable dish, qty/pcs/x2 -> quantity markers. Never invent a different food when the correction is not safe; put the exact unknown span in unresolvedItems.',
+  'Split independent components joined by with, and, plus, along with, served with, together with, commas, ampersands, or repeated quantity phrases. Do not split a natural modifier that is one prepared item (for example milk in milk tea, spinach in palak paneer, or milk in a whey shake); keep it in the dish or as an explicit base component only when it contributes separately.',
+  'Process every component before responding. For each component, preserve explicit numeric quantities and written numbers (one/two/three, half, quarter, pair, couple, scoop, bowl, cup, glass, slice, piece, katori, gram, kg, ml, litre). Quantity evidence in the user text outranks model defaults and visual guesses.',
+  'If a quantity is missing, do not fail and do not omit the item: use quantity 1 with a conservative standard unit/servingSize (piece, slice, cup, glass, bowl, serving, scoop, or package as appropriate), set estimatedGrams when a documented standard is available, and set requiresClarification only when the missing portion materially changes nutrition.',
+  'Never confuse a count with a weight: 2 eggs means two whole eggs, 2 roti means two pieces, 1 scoop means one scoop, and 500 ml water means 500 ml. Never convert an explicit count into grams without preserving the count and unit.',
+  'Do not duplicate a component because the text contains synonyms, a correction, or a broad dish plus one of its ingredients. Keep one row per independently orderable food component. Do not treat a dish name and its ingredient as two servings unless the text explicitly lists both.',
+  'Set unresolvedItems to [] only when every meaningful food-like span has been mapped to a detectedItems row. If any span cannot be safely mapped, preserve that exact short span in unresolvedItems and continue extracting every other item.',
+  'Do not put trusted calories, protein, carbohydrates, or other nutrition values in meal parsing. Nutrition is resolved separately from verified records; aiNutritionEstimate is allowed only for incomplete visible packaged labels and must remain explicitly non-authoritative.',
+  'Use clarificationQuestions for high-impact ambiguity, but still return the best editable standard-serving item. A missing quantity is not a reason to return an empty list.',
   'Split every component joined by with, and, plus, along with, served with, or together with.',
   'Preserve explicit quantities and preparation methods. For unspecified amounts, use a conservative quantity of 1 and mark requiresClarification when it materially affects nutrition.',
   'Recognise regional names, transliterations, spelling variations, branded products, supplements, and drinks.',
@@ -163,7 +218,8 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'Recognise common home-cooked and regional preparations from visible shape, grain, sauce, garnish, and cooking style. Look explicitly for Indian flatbreads such as roti or chapati, dry sabji, dal, rice, curries, sides, and beverages rather than collapsing or omitting them.',
   'Prefer a specific regional dish identity when the visual evidence supports it, including tapioca/sago pearl preparations, flattened-rice dishes, lentil dishes, rice dishes, breads, curries, snacks, fruit, vegetables, and beverages.',
   'Water is an addition/base with no meaningful calories; milk is a separate component only when explicitly stated.',
-  'Do not invent brands, products, ingredients, or quantities that are not supported by the input/image.'
+  'Do not invent brands, products, ingredients, or quantities that are not supported by the input/image.',
+  MEAL_PARSE_FEW_SHOT_EXAMPLES
 ].join(' ');
 
 export function buildMealParseInput({ text, imageBase64, mimeType }) {

@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import {
   GeminiMealParser,
   MEAL_PARSE_SCHEMA,
+  MEAL_PARSE_FEW_SHOT_EXAMPLES,
+  MEAL_PARSE_SYSTEM_PROMPT,
   MockMealParser,
   OpenAIMealParser,
   buildGeminiMealParseRequest,
@@ -42,6 +44,17 @@ assert.deepEqual(
   ['chai with milk', 'paratha', 'whole wheat bread', 'omelette']
 );
 assert.deepEqual(manualCompound.detectedItems.map(item => item.quantity), [1, 2, 1, 2]);
+
+// The production system prompt must teach coverage, not just JSON shape. This
+// catches regressions where a provider can legally return only the first noun.
+const exactUserPhrase = 'Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 1 omlet';
+assert.equal(MEAL_PARSE_SYSTEM_PROMPT.includes('strict data-extraction API'), true);
+assert.equal(MEAL_PARSE_SYSTEM_PROMPT.includes('Return exactly one JSON object'), true);
+assert.equal(MEAL_PARSE_SYSTEM_PROMPT.includes('unresolvedItems to [] only when every meaningful food-like span'), true);
+assert.equal(MEAL_PARSE_SYSTEM_PROMPT.includes('quantity 1 with a conservative standard'), true);
+assert.equal(MEAL_PARSE_SYSTEM_PROMPT.includes('omlet/omelet -> omelette'), true);
+assert.equal(MEAL_PARSE_SYSTEM_PROMPT.includes(exactUserPhrase), true);
+assert.equal(MEAL_PARSE_FEW_SHOT_EXAMPLES.includes('something brown'), true);
 
 const imageInput = buildMealParseInput({
   text: 'Identify every visible food in this meal photo.',
