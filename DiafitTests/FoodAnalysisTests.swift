@@ -1920,6 +1920,29 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(questions[0].answer, "Medium")
     }
 
+    func testQuestionDeduplicationCollapsesDifferentWordingForSameCount() {
+        let itemID = UUID()
+        let providerQuestion = ClarificationQuestion(
+            id: UUID(), relatedFoodItemId: itemID,
+            question: "Are there exactly two rotis, or are more hidden underneath?",
+            answerType: .quantity, options: ["1", "2", "3", "4+"],
+            impactLevel: .high, answer: nil
+        )
+        let trustGateQuestion = ClarificationQuestion(
+            id: UUID(), relatedFoodItemId: itemID,
+            question: "How many roti were visible?",
+            answerType: .quantity, options: ["1", "2", "3", "4+"],
+            impactLevel: .high, answer: nil
+        )
+
+        let questions = SemanticQuestionDeduplicator.uniqueQuestions([
+            providerQuestion, trustGateQuestion
+        ])
+
+        XCTAssertEqual(questions.count, 1)
+        XCTAssertEqual(questions[0].relatedFoodItemId, itemID)
+    }
+
     func testStructuredVisionPreservesUncataloguedRecognisedCurryWithEditableFallback() async throws {
         let parse = MealParseResult(
             detectedItems: [
@@ -4115,6 +4138,17 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(audited.detectedItems.first?.requiresClarification == true)
     }
 
+    func testSemanticStringDeduplicationCollapsesEquivalentRotiCountQuestions() {
+        let questions = SemanticQuestionDeduplicator.uniqueStrings([
+            "Are there exactly three rotis in the stack?",
+            "How many roti were visible?",
+            "How many rotis were visible? I kept the lower count until you confirm it."
+        ])
+
+        XCTAssertEqual(questions.count, 1)
+        XCTAssertTrue(questions[0].localizedCaseInsensitiveContains("roti"))
+    }
+
     func testStructuredVisionFocusedAuditCorrectsPaneerBowlAndRotiStack() async throws {
         let initial = MealParseResult(
             detectedItems: [
@@ -4213,6 +4247,157 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertFalse(result.detectedItems.contains { $0.canonicalFoodId == "onion" || $0.canonicalFoodId == "sabudana-papad" })
     }
 
+    func testStructuredVisionReauditsSpecificPalakPaneerWhenRotiCountIsUnverified() async throws {
+        let initial = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Palak paneer", canonicalSearchName: "palak paneer",
+                    regionalName: "palak paneer", category: .vegetarianCurry,
+                    quantity: 1, unit: "bowl", preparationMethod: "spinach gravy",
+                    confidence: 0.95
+                ),
+                ParsedFoodItem(
+                    originalText: "Three rotis", canonicalSearchName: "roti",
+                    regionalName: "roti", category: .bread,
+                    quantity: 3, unit: "pieces",
+                    quantityEvidence: "three distinct roti discs stacked",
+                    estimatedGrams: 105, confidence: 0.70,
+                    requiresClarification: true
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Palak paneer beside a stacked roti serving",
+            clarificationQuestions: ["Are there exactly three rotis in the stack?"],
+            confidence: 0.90
+        )
+        let focusedAudit = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Palak paneer", canonicalSearchName: "palak paneer",
+                    regionalName: "palak paneer", category: .vegetarianCurry,
+                    quantity: 1, unit: "bowl", preparationMethod: "spinach gravy",
+                    confidence: 0.96
+                ),
+                ParsedFoodItem(
+                    originalText: "Two rotis", canonicalSearchName: "roti",
+                    regionalName: "roti", category: .bread,
+                    quantity: 2, unit: "pieces",
+                    quantityEvidence: "two complete roti discs visible in the stack",
+                    estimatedGrams: 70, confidence: 0.70,
+                    requiresClarification: true
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Palak paneer with two complete visible rotis",
+            clarificationQuestions: ["How many roti were visible?"],
+            confidence: 0.92
+        )
+        let understanding = SequentialMealUnderstanding(results: [initial, focusedAudit])
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let service = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router),
+            catalog: catalog,
+            maximumProviderPasses: 2
+        )
+
+        let result = try await service.analyse(fixtureFoodImage(), dishHint: nil)
+        let count = await understanding.callCount
+
+        XCTAssertEqual(count, 2)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "roti" })?.quantity, 2)
+        XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "palak-paneer" })?.displayName, "Palak paneer")
+        XCTAssertEqual(result.clarificationQuestions.filter { $0.answerType == .quantity }.count, 1)
+    }
+
+    func testStructuredVisionNeverReturnsUnverifiedPaneerAndRotiGuessAfterAuditTimeout() async {
+        let unverified = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Paneer", canonicalSearchName: "paneer",
+                    category: .dairyOrSide, quantity: 1, unit: "medium bowl",
+                    confidence: 0.96
+                ),
+                ParsedFoodItem(
+                    originalText: "Roti stack", canonicalSearchName: "roti",
+                    category: .bread, quantity: 3, unit: "piece",
+                    quantityEvidence: "three visible layers", estimatedGrams: 105,
+                    confidence: 0.95
+                )
+            ],
+            unresolvedItems: [],
+            mealDescription: "Paneer beside a stacked flatbread",
+            clarificationQuestions: [], confidence: 0.95
+        )
+        let understanding = AuditTimeoutMealUnderstanding(first: unverified)
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let service = StructuredPhotoRecognitionService(
+            understanding: understanding,
+            coordinator: HybridMealAnalysisCoordinator(router: router),
+            catalog: catalog,
+            maximumProviderPasses: 2
+        )
+
+        do {
+            _ = try await service.analyse(fixtureFoodImage(), dishHint: nil)
+            XCTFail("A failed high-impact audit must not return its unverified first pass")
+        } catch {
+            XCTAssertEqual(error as? FoodAnalysisError, .photoAnalysisTimedOut)
+        }
+        let auditCallCount = await understanding.callCount
+        XCTAssertEqual(auditCallCount, 2)
+    }
+
+    func testStackLayerEvidenceRequiresEditableCountInsteadOfHighConfidence() async throws {
+        let parse = MealParseResult(
+            detectedItems: [
+                ParsedFoodItem(
+                    originalText: "Roti stack", canonicalSearchName: "roti",
+                    regionalName: "roti", category: .bread,
+                    quantity: 3, unit: "piece",
+                    quantityEvidence: "three visible stack layers",
+                    estimatedGrams: 105, confidence: 0.96,
+                    requiresClarification: false
+                )
+            ],
+            unresolvedItems: [], mealDescription: "A stacked roti serving",
+            clarificationQuestions: [], confidence: 0.96
+        )
+
+        let audited = PhotoParseIntegrityService().audit(parse)
+        let item = try XCTUnwrap(audited.detectedItems.first)
+        XCTAssertTrue(item.requiresClarification)
+        XCTAssertLessThanOrEqual(item.confidence, 0.70)
+        XCTAssertTrue(audited.clarificationQuestions.contains { $0.localizedCaseInsensitiveContains("how many") })
+
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await HybridMealAnalysisCoordinator(router: router).analyse(
+            parse: audited,
+            originalInput: "photo",
+            imageReference: .transient(),
+            imageType: .originalPhoto
+        )
+        let question = try XCTUnwrap(result.clarificationQuestions.first)
+        XCTAssertEqual(question.answerType, .quantity)
+        XCTAssertTrue(question.options.contains("2"))
+        XCTAssertNotEqual(result.overallConfidence, .high)
+    }
+
     func testBackendStatusMapsToActionablePhotoRecoveryErrors() {
         XCTAssertEqual(FoodAnalysisError.backend(statusCode: 401), .unauthenticatedBackend)
         XCTAssertEqual(FoodAnalysisError.backend(statusCode: 429), .backendRateLimited)
@@ -4289,6 +4474,23 @@ private actor SequentialMealUnderstanding: FoodUnderstandingService {
         let result = results[min(index, results.count - 1)]
         index += 1
         return result
+    }
+}
+
+private actor AuditTimeoutMealUnderstanding: FoodUnderstandingService {
+    private let first: MealParseResult
+    private var calls = 0
+
+    init(first: MealParseResult) {
+        self.first = first
+    }
+
+    var callCount: Int { calls }
+
+    func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult {
+        calls += 1
+        if calls > 1 { throw FoodAnalysisError.photoAnalysisTimedOut }
+        return first
     }
 }
 

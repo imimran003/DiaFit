@@ -429,6 +429,7 @@ struct DayThreadView: View {
         let requestID = UUID()
         activePhotoRequestID = requestID
         photoAnalysisTask = Task { @MainActor in
+            defer { finishPhotoAnalysis(requestID) }
             let result = await dependencies.photoAnalysis.analyse(image: image, description: description)
             guard !Task.isCancelled, activePhotoRequestID == requestID else { return }
             let review = MealAnalysisDraft(result: result, transientImageData: image.data)
@@ -442,8 +443,6 @@ struct DayThreadView: View {
                     dayID: dayID
                 )
             }
-            isThinking = false
-            activePhotoRequestID = nil
         }
     }
 
@@ -456,8 +455,15 @@ struct DayThreadView: View {
         isThinking = true
         thinkingLabel = "Scanning the whole plate"
         photoAnalysisTask = Task { @MainActor in
+            defer { finishPhotoAnalysis(requestID) }
             do {
-                let prepared = try AppleImagePreparationService().prepare(imageData: imageData)
+                // JPEG decode, resize and metadata stripping are CPU-heavy.
+                // Running them on MainActor was enough to stall every scroll
+                // and tab gesture on a physical device during retry.
+                let prepared = try await Task.detached(priority: .userInitiated) {
+                    try AppleImagePreparationService().prepare(imageData: imageData)
+                }.value
+                guard !Task.isCancelled, activePhotoRequestID == requestID else { return }
                 let result = await dependencies.photoAnalysis.analyse(
                     image: prepared,
                     description: ""
@@ -477,11 +483,15 @@ struct DayThreadView: View {
                     store.update(failedDraft, for: itemID, in: dayID)
                 }
             }
-            if activePhotoRequestID == requestID {
-                isThinking = false
-                activePhotoRequestID = nil
-            }
         }
+    }
+
+    @MainActor
+    private func finishPhotoAnalysis(_ requestID: UUID) {
+        guard activePhotoRequestID == requestID else { return }
+        isThinking = false
+        activePhotoRequestID = nil
+        photoAnalysisTask = nil
     }
 
     private func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID) {

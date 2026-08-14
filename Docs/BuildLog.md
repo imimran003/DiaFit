@@ -106,3 +106,25 @@
   (132/132) on the iPhone 15 Pro simulator, and the simulator build passed.
   The opt-in live provider smoke test was not run because uploading the private
   user photo to an external provider requires explicit destination consent.
+
+## 2026-08-14 — Palak-paneer verification and interaction recovery
+
+- Replayed the reported plate through the live structured-vision contract. The
+  primary pass identified palak paneer but proposed three stacked rotis; an
+  independent focused audit reported two complete roti discs. The application
+  now runs that audit even when the curry identity is already specific and
+  reconciles the count to the lower supported value.
+- Made overlapping stack evidence explicitly non-authoritative, semantically
+  deduplicated repeated count questions, and wired the answer back into serving
+  and nutrition recalculation.
+- Added a backend cold-start wake, longer bounded photo request deadline, and a
+  fail-closed path when the required dish/count audit times out.
+- Moved photo preparation off the main actor, made task cleanup cancellation
+  safe, and constrained the atlas edge-dismiss gesture so nested vertical
+  scrolling remains responsive.
+- Added the UI-test target to the shared scheme and removed a test helper's
+  competing full-screen swipe.
+- Verification: backend tests 11/11, deterministic iOS unit tests 165/165, and
+  generic iPhone build passed. Earlier focused UI checks passed 4/4; a repeated
+  run later encountered a local Xcode debugger-service failure before test
+  execution and is not represented as an additional pass.

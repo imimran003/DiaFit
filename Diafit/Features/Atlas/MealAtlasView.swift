@@ -56,7 +56,10 @@ struct MealAtlasView: View {
                     .padding(.bottom, 8)
             }
         }
-        .gesture(dismissGesture)
+        // Observe the edge-dismiss drag alongside the vertical ScrollView.
+        // Owning the gesture at this ZStack previously starved child scrolling
+        // and could make the atlas appear frozen until the view was reopened.
+        .simultaneousGesture(dismissGesture)
         .onChange(of: isPresented) { _, presented in
             if !presented { selectedMeal = nil }
         }
@@ -66,11 +69,16 @@ struct MealAtlasView: View {
     private var dismissGesture: some Gesture {
         DragGesture(minimumDistance: 12)
             .onChanged { value in
-                guard selectedMeal == nil, value.translation.height > 0 else { return }
+                guard selectedMeal == nil,
+                      value.startLocation.y < 90,
+                      value.translation.height > 0,
+                      abs(value.translation.height) > abs(value.translation.width) else { return }
                 dragOffset = min(value.translation.height, 150)
             }
             .onEnded { value in
-                guard selectedMeal == nil else { return }
+                guard selectedMeal == nil,
+                      value.startLocation.y < 90,
+                      abs(value.translation.height) > abs(value.translation.width) else { return }
                 if value.translation.height > 100 || value.predictedEndTranslation.height > 220 {
                     close()
                 } else {

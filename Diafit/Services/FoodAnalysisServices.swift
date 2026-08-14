@@ -288,15 +288,27 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
         if providerPassesUsed < maximumProviderPasses,
            inventoryVerification.needsDishAndCountAudit(primaryParse) {
             providerPassesUsed += 1
-            if let auditedParse = try? await understanding.parse(
+            do {
+                let auditedParse = try await understanding.parse(
                 text: inventoryVerification.dishAndCountPrompt(after: primaryParse),
                 image: image
-            ) {
+                )
                 selectedParse = inventoryVerification.preferred(
                     primary: primaryParse,
                     verified: auditedParse
                 )
                 focusedAuditApplied = true
+            } catch {
+                // This is not an optional aesthetic pass. The first result is
+                // already known to contain the exact high-impact ambiguity we
+                // are auditing (prepared dish identity and/or bread count).
+                // Returning it after an audit timeout produced a confident but
+                // wrong meal. Preserve the photo and expose retry instead.
+                FoodLoggingDiagnostics.record("photo.focused-audit", fields: [
+                    "status": "failed",
+                    "reason": "verification-unavailable"
+                ])
+                throw error
             }
         }
 
@@ -364,14 +376,21 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
            providerPassesUsed < maximumProviderPasses,
            inventoryVerification.needsDishAndCountAudit(selectedParse) {
             providerPassesUsed += 1
-            if let auditedParse = try? await understanding.parse(
+            do {
+                let auditedParse = try await understanding.parse(
                 text: inventoryVerification.dishAndCountPrompt(after: selectedParse),
                 image: image
-            ) {
+                )
                 selectedParse = inventoryVerification.preferred(
                     primary: selectedParse,
                     verified: auditedParse
                 )
+            } catch {
+                FoodLoggingDiagnostics.record("photo.focused-audit", fields: [
+                    "status": "failed",
+                    "reason": "verification-unavailable"
+                ])
+                throw error
             }
         }
         let parse = integrity.audit(selectedParse)
@@ -404,6 +423,16 @@ struct PhotoInventoryVerificationService: Sendable {
     }
 
     func needsIndependentCheck(_ parse: MealParseResult) -> Bool {
+        if hasInventoryCoverage(parse),
+           parse.detectedItems.contains(where: {
+               isVisuallyCountable($0) && $0.requiresClarification
+           }) {
+            // The provider has accounted for the whole plate and explicitly
+            // isolated only a count uncertainty. A second full vision call is
+            // slower and no more authoritative than the member-facing count
+            // selector, especially for overlapping flatbread stacks.
+            return false
+        }
         // The live image contract now includes an explicit coverage proof. A
         // strong proof lets a simple photo finish after one provider call;
         // without it we retain the conservative verification path used by
@@ -423,6 +452,10 @@ struct PhotoInventoryVerificationService: Sendable {
     func needsExpandedInventory(_ parse: MealParseResult) -> Bool {
         guard !parse.detectedItems.isEmpty else { return true }
         if hasTrustedCoverage(parse) { return false }
+        if hasInventoryCoverage(parse),
+           parse.detectedItems.filter({ $0.confidence < 0.80 }).allSatisfy(\.requiresClarification) {
+            return false
+        }
 
         // Do not gate this on a one-item result. The recurring failure was a
         // photo reduced to two plausible labels (for example rice + soup)
@@ -442,6 +475,10 @@ struct PhotoInventoryVerificationService: Sendable {
     func needsRecoveryPass(_ parse: MealParseResult) -> Bool {
         guard !parse.detectedItems.isEmpty, parse.detectedItems.count <= 4 else { return false }
         if hasTrustedCoverage(parse) { return false }
+        if hasInventoryCoverage(parse),
+           parse.detectedItems.filter({ $0.confidence < 0.80 }).allSatisfy(\.requiresClarification) {
+            return false
+        }
 
         // The previously reported failure returned two nutritionally valid
         // labels (for example “tomato” + “vegetable soup”) for a multi-serving
@@ -466,7 +503,20 @@ struct PhotoInventoryVerificationService: Sendable {
 
     func needsDishAndCountAudit(_ parse: MealParseResult) -> Bool {
         let hasPaneer = parse.detectedItems.contains { isPaneer($0) }
+        let hasSpecificPaneerDish = parse.detectedItems.contains { item in
+            let key = identityKey(item).replacingOccurrences(of: "-", with: " ")
+            return key == "palak paneer" || key == "saag paneer"
+        }
         let breadItems = parse.detectedItems.filter { isFlatbread($0) }
+        let hasUnverifiedBreadCount = breadItems.contains { item in
+            guard (item.quantity ?? 0) > 1 else { return false }
+            let countEvidence = item.quantityEvidence?.lowercased() ?? ""
+            let stackIsAmbiguous = countEvidence.range(
+                of: #"\b(stack|stacked|layer|layers|edge|edges|partly|hidden|occluded)\b"#,
+                options: .regularExpression
+            ) != nil
+            return item.requiresClarification || item.confidence < 0.82 || stackIsAmbiguous
+        }
         let hasPreparedGreenCue = parse.detectedItems.contains { item in
             let evidence = evidence(for: item, mealDescription: parse.mealDescription)
             return evidence.range(of: #"\b(spinach|palak|saag|leafy|green)\b"#, options: .regularExpression) != nil
@@ -476,7 +526,14 @@ struct PhotoInventoryVerificationService: Sendable {
         // inventory pass. Keep this focused audit for the high-impact failure
         // pair (green paneer curry + flatbread) or an explicit green-prepared
         // cue, avoiding a redundant provider call for ordinary roti fixtures.
-        return (hasPaneer && !breadItems.isEmpty) || hasPreparedGreenCue
+        return (hasPaneer && !breadItems.isEmpty)
+            // A specific curry name does not prove the adjacent quantity.
+            // The live provider correctly recognised palak paneer in the
+            // reported photo but still mistook overlapping roti rims for a
+            // third disc. Run the focused pixel audit for that independently
+            // unsafe fact, then reconcile to the lower supported count.
+            || (hasSpecificPaneerDish && hasUnverifiedBreadCount)
+            || (hasPreparedGreenCue && !hasSpecificPaneerDish)
     }
 
     func prompt(after parse: MealParseResult) -> String {
@@ -541,9 +598,11 @@ struct PhotoInventoryVerificationService: Sendable {
         palak paneer (or saag paneer), category vegetarianCurry, preparation spinach gravy. Do not emit plain paneer
         for that same bowl and do not add a second paneer component. A bowl of paneer in green gravy is a prepared
         curry even when the first pass omitted the word spinach.
-        2) Count the visible roti/chapati/phulka discs or stack layers. If two are visible, quantity must be 2 pieces,
-        never a habitual 3. If part of a stack is hidden, use the visible lower bound, include quantityEvidence, and
-        ask one count clarification. Never infer a count from a default serving.
+        2) Count complete visible roti/chapati/phulka discs, not every rim, fold, shadow, plate edge, or layer line.
+        If two complete discs are visible, quantity must be 2 pieces, never a habitual 3. If part of a stack is
+        hidden or only overlapping edges are visible, use the visible lower bound, include quantityEvidence, set
+        requiresClarification true, cap count confidence at 0.70, and ask one count clarification. Never infer a
+        count from a default serving.
         3) Onion slices, garnish, tiny papad fragments, and decorative sides are not meal components unless a clearly
         separate serving is visible with independent portion evidence.
         Preserve every other substantive bowl, pile, or serving in the frame once, with canonical names, quantities,
@@ -882,6 +941,16 @@ struct PhotoInventoryVerificationService: Sendable {
     }
 
     private func hasTrustedCoverage(_ parse: MealParseResult) -> Bool {
+        guard hasInventoryCoverage(parse) else { return false }
+        guard parse.detectedItems.allSatisfy({
+            $0.confidence >= 0.82
+                && !$0.requiresClarification
+                && !$0.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        }) else { return false }
+        return true
+    }
+
+    private func hasInventoryCoverage(_ parse: MealParseResult) -> Bool {
         guard let coverage = parse.visualCoverage,
               coverage.inventoryComplete,
               coverage.coverageConfidence >= 0.82,
@@ -889,10 +958,6 @@ struct PhotoInventoryVerificationService: Sendable {
               !parse.detectedItems.isEmpty,
               parse.unresolvedItems.isEmpty,
               coverage.distinctServingCount == parse.detectedItems.count else { return false }
-        guard parse.detectedItems.allSatisfy({
-            $0.confidence >= 0.82
-                && !$0.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-        }) else { return false }
         return true
     }
 }
@@ -988,19 +1053,26 @@ struct SpatialPlateReviewImageService: Sendable {
 /// questions are canonicalised by their readable content at the boundary.
 enum SemanticQuestionDeduplicator {
     static func uniqueStrings(_ values: [String]) -> [String] {
-        var seen: Set<String> = []
-        return values.compactMap { value in
+        var selected: [String: String] = [:]
+        var order: [String] = []
+        for value in values {
             let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty, seen.insert(normalizedKey(trimmed)).inserted else { return nil }
-            return trimmed
+            guard !trimmed.isEmpty else { continue }
+            let normalized = normalizedKey(trimmed)
+            let key = semanticCountFood(in: normalized).map { "count \($0)" } ?? normalized
+            if selected[key] == nil { order.append(key) }
+            // Preserve the most informative wording when provider and trust
+            // gate ask the same count in different words.
+            if trimmed.count > (selected[key]?.count ?? -1) { selected[key] = trimmed }
         }
+        return order.compactMap { selected[$0] }
     }
 
     static func uniqueQuestions(_ values: [ClarificationQuestion]) -> [ClarificationQuestion] {
         var result: [ClarificationQuestion] = []
         var indexByKey: [String: Int] = [:]
         for question in values {
-            let key = normalizedKey(question.question)
+            let key = semanticKey(for: question)
             guard !key.isEmpty else { continue }
             if let index = indexByKey[key] {
                 if usefulness(of: question) > usefulness(of: result[index]) {
@@ -1022,11 +1094,36 @@ enum SemanticQuestionDeduplicator {
             .joined(separator: " ")
     }
 
+    /// Count questions can arrive from both the provider ("Are there exactly
+    /// two rotis…?") and the deterministic trust gate ("How many roti…?").
+    /// Their wording differs, but they control the same quantity and must be
+    /// rendered as one interaction rather than two competing Quick Checks.
+    private static func semanticKey(for question: ClarificationQuestion) -> String {
+        if question.answerType == .quantity, let itemID = question.relatedFoodItemId {
+            return "quantity \(itemID.uuidString.lowercased())"
+        }
+        return normalizedKey(question.question)
+    }
+
     private static func usefulness(of question: ClarificationQuestion) -> Int {
         (question.answer == nil ? 0 : 100)
             + (question.answerType == .freeText ? 0 : 10)
             + question.options.count
             + (question.relatedFoodItemId == nil ? 0 : 1)
+    }
+
+    private static func semanticCountFood(in normalized: String) -> String? {
+        guard normalized.range(
+            of: #"\b(how many|exactly|count|more hidden|were visible)\b"#,
+            options: .regularExpression
+        ) != nil else { return nil }
+        guard let match = normalized.range(
+            of: #"\b(roti|rotis|chapati|chapatis|phulka|phulkas|flatbread|flatbreads|naan|naans|paratha|parathas|egg|eggs|idli|idlis|piece|pieces)\b"#,
+            options: .regularExpression
+        ) else { return nil }
+        let token = String(normalized[match])
+        if token.hasSuffix("ies") { return String(token.dropLast(3)) + "y" }
+        return token.hasSuffix("s") ? String(token.dropLast()) : token
     }
 }
 
@@ -1059,6 +1156,32 @@ struct PhotoParseIntegrityService: Sendable {
                 if !questions.contains(question) { questions.append(question) }
                 return reviewed
             }
+
+            // A provider may explicitly admit that a stacked/countable food
+            // is ambiguous while retaining a high numeric confidence. That
+            // confidence describes food identity, not exact quantity. Keep
+            // the estimate editable but never show it as a trusted HIGH count.
+            let stackedBreadCountIsAmbiguous = isFlatbread(item)
+                && (item.quantity ?? 0) > 1
+                && evidence.range(
+                    of: #"(?i)\b(stack|stacked|layer|layers|edge|edges|partly|hidden|occluded)\b"#,
+                    options: .regularExpression
+                ) != nil
+            if item.requiresClarification || stackedBreadCountIsAmbiguous {
+                var reviewed = item
+                reviewed.confidence = min(reviewed.confidence, 0.70)
+                reviewed.requiresClarification = true
+                let name = reviewed.regionalName ?? reviewed.originalText
+                let question = "How many \(name) were visible?"
+                if !questions.contains(where: {
+                    $0.localizedCaseInsensitiveContains("how many")
+                        && $0.localizedCaseInsensitiveContains(name)
+                }) {
+                    questions.append(question)
+                }
+                return reviewed
+            }
+
             guard evidence.isEmpty else { return item }
 
             var reviewed = item
@@ -1100,7 +1223,7 @@ struct PhotoParseIntegrityService: Sendable {
         }
         let patterns = [
             #"(?i)(?:=|equals|equivalent\s+to)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:whole|full)\b"#,
-            #"(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|distinct|separate|counted|observed|shown|stacked|layers?|discs?|pieces?|rotis?|chapatis?|flatbreads?|whole)\b)"#,
+            #"(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|complete|distinct|separate|counted|observed|shown|stacked|layers?|discs?|pieces?|rotis?|chapatis?|flatbreads?|whole)\b)"#,
             #"(?i)\b(?:stack|pile|count|showing|shows|of)\s*(?:of\s*)?(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\b"#,
             #"(?i)\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:visible\s+)?(?:roti|rotis|chapati|chapatis|flatbread|flatbreads|pieces?|discs?)\b"#
         ]
@@ -1193,6 +1316,14 @@ struct PhotoParseIntegrityService: Sendable {
         return value == "paneer" || value == "cottage cheese"
     }
 
+    private func isFlatbread(_ item: ParsedFoodItem) -> Bool {
+        let value = identityKey(item).replacingOccurrences(of: "-", with: " ")
+        return value.range(
+            of: #"\b(roti|chapati|phulka|flatbread|naan|paratha)\b"#,
+            options: .regularExpression
+        ) != nil || item.category == .bread
+    }
+
     private func identityKey(_ item: ParsedFoodItem) -> String {
         [item.canonicalSearchName, item.regionalName, item.originalText]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -1273,8 +1404,12 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
         // multi-item inventory can legitimately remain low confidence because
         // a serving or recipe detail needs review; keep those editable items
         // instead of discarding the whole result.
+        let hasExplicitQuantityReview = result.clarificationQuestions.contains {
+            $0.answerType == .quantity && $0.relatedFoodItemId != nil
+        }
         if result.detectedItems.count <= 2,
-           (result.overallConfidence == .low || result.overallConfidence == .unknown) {
+           (result.overallConfidence == .low || result.overallConfidence == .unknown),
+           !hasExplicitQuantityReview {
             FoodLoggingDiagnostics.record("photo.inventory-gate", fields: [
                 "reason": "overall-confidence",
                 "itemCount": String(result.detectedItems.count)

@@ -354,7 +354,23 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(note.waitForExistence(timeout: 3))
         note.tap()
         note.typeText(text)
-        app.swipeDown()
+        // Dismiss through the keyboard rather than synthesising a full-screen
+        // swipe. The latter competes with the day ScrollView and could hang
+        // XCTest (and falsely resemble the reported navigation freeze).
+        let keyboard = app.keyboards.firstMatch
+        if keyboard.exists {
+            let sendKey = keyboard.buttons["Send"]
+            let returnKey = keyboard.buttons["Return"]
+            if sendKey.exists {
+                sendKey.tap()
+                return
+            } else if returnKey.exists {
+                returnKey.tap()
+                return
+            } else {
+                app.coordinate(withNormalizedOffset: CGVector(dx: 0.98, dy: 0.08)).tap()
+            }
+        }
         let send = app.buttons["Send food note"]
         XCTAssertTrue(send.waitForExistence(timeout: 2))
         send.tap()

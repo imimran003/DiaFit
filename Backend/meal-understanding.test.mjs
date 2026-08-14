@@ -294,6 +294,7 @@ assert.equal(crossRowPalak.detectedItems.find(item => item.canonicalSearchName =
 const rotiEvidenceVariants = [
   ['two visible roti discs', 2],
   ['stack showing 2 flatbreads', 2],
+  ['two complete roti discs visible in the stack', 2],
   ['counted: two chapatis', 2]
 ];
 for (const [quantityEvidence, expectedQuantity] of rotiEvidenceVariants) {
@@ -318,6 +319,20 @@ const evidenceCorrectedCount = sanitizeMealParseResult({
 assert.equal(evidenceCorrectedCount.detectedItems[0].quantity, 2);
 assert.equal(evidenceCorrectedCount.detectedItems[0].requiresClarification, true);
 assert.equal(evidenceCorrectedCount.clarificationQuestions.length, 1);
+
+const ambiguousStackCount = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[0], originalText: 'Roti stack', canonicalSearchName: 'roti', category: 'bread', quantity: 3, unit: 'piece', quantityEvidence: 'three visible stack layers', confidence: 0.96, requiresClarification: false }
+  ],
+  clarificationQuestions: ['Are there exactly two rotis in the stack, or are there more hidden underneath?'],
+  visualCoverage
+});
+assert.equal(ambiguousStackCount.detectedItems[0].quantity, 3);
+assert.equal(ambiguousStackCount.detectedItems[0].requiresClarification, true);
+assert.equal(ambiguousStackCount.detectedItems[0].confidence, 0.70);
+assert.equal(ambiguousStackCount.clarificationQuestions.some(question => /rotis?|chapatis?/i.test(question)), true);
+assert.equal(ambiguousStackCount.clarificationQuestions.length, 1);
 
 const speculativePapadPlate = sanitizeMealParseResult({
   ...parsed,

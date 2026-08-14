@@ -16,8 +16,6 @@ struct PhotoMealInput: View {
     @State private var showsCamera = false
     @State private var isPreparing = false
 
-    private let preparation = AppleImagePreparationService()
-
     var body: some View {
         NavigationStack {
             ScrollView(showsIndicators: false) {
@@ -132,6 +130,7 @@ struct PhotoMealInput: View {
         }
     }
 
+    @MainActor
     private func prepare(_ data: Data?, hint: String = "") {
         isPreparing = true
         guard let data else {
@@ -139,14 +138,21 @@ struct PhotoMealInput: View {
             isPreparing = false
             return
         }
-        do {
-            let image = try preparation.prepare(imageData: data)
-            errorMessage = nil
-            onContinue(image, hint)
-            dismiss()
-        } catch {
-            errorMessage = error.localizedDescription
-            isPreparing = false
+        Task { @MainActor in
+            do {
+                // Keep the photo sheet and the app's tab/navigation gestures
+                // responsive while a large HEIC/JPEG is decoded and resized.
+                let image = try await Task.detached(priority: .userInitiated) {
+                    try AppleImagePreparationService().prepare(imageData: data)
+                }.value
+                guard !Task.isCancelled else { return }
+                errorMessage = nil
+                onContinue(image, hint)
+                dismiss()
+            } catch {
+                errorMessage = error.localizedDescription
+                isPreparing = false
+            }
         }
     }
 

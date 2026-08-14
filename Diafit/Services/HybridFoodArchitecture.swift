@@ -213,15 +213,37 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
     let endpoint: URL
     let tokenProvider: BackendAccessTokenProvider
     let session: URLSession
+    let wakeCoordinator: BackendWakeCoordinator
 
-    init(endpoint: URL, tokenProvider: BackendAccessTokenProvider, session: URLSession = .shared) {
+    init(
+        endpoint: URL,
+        tokenProvider: BackendAccessTokenProvider,
+        session: URLSession = .shared,
+        wakeCoordinator: BackendWakeCoordinator = BackendWakeCoordinator()
+    ) {
         self.endpoint = endpoint
         self.tokenProvider = tokenProvider
         self.session = session
+        self.wakeCoordinator = wakeCoordinator
     }
 
     func parse(text: String, image: PreparedFoodImage? = nil) async throws -> MealParseResult {
         let token = try await tokenProvider.accessToken()
+        // Wake a suspended hosted service with a tiny idempotent request before
+        // uploading a large base64 photo. Free-tier proxies can otherwise
+        // terminate the first POST while the process is still starting, which
+        // surfaced as a misleading AI timeout even on a healthy connection.
+        if image != nil {
+            do {
+                try await wakeCoordinator.wake(endpoint: endpoint, session: session)
+            } catch let error as URLError where error.code == .timedOut {
+                throw FoodAnalysisError.photoAnalysisTimedOut
+            } catch let error as FoodAnalysisError {
+                throw error
+            } catch {
+                throw FoodAnalysisError.endpointUnavailable
+            }
+        }
         let idempotencyKey = "meal-parse-\(UUID().uuidString)"
         // Versioned backend route; the service may be backed by OpenAI,
         // fixtures, or another provider without changing this client.
@@ -393,6 +415,34 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
 
     private struct ResponseMetadata: Decodable {
         let imageReference: String?
+    }
+}
+
+/// Coalesces cold-start health checks for one backend client. The successful
+/// wake is cached briefly so a multi-pass photo audit does not add another
+/// network round trip before every structured-vision request.
+actor BackendWakeCoordinator {
+    private var lastSuccessfulWake: Date?
+
+    func wake(endpoint: URL, session: URLSession) async throws {
+        if let lastSuccessfulWake,
+           Date().timeIntervalSince(lastSuccessfulWake) < 4 * 60 {
+            return
+        }
+
+        var request = URLRequest(url: endpoint.appending(path: "health"))
+        request.httpMethod = "GET"
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.timeoutInterval = 75
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+        let (_, response) = try await session.data(for: request)
+        guard let http = response as? HTTPURLResponse,
+              (200..<300).contains(http.statusCode) else {
+            throw FoodAnalysisError.endpointUnavailable
+        }
+        lastSuccessfulWake = .now
+        FoodLoggingDiagnostics.record("backend.wake", fields: ["status": "ready"])
     }
 }
 
@@ -2273,6 +2323,27 @@ enum ClarificationQuestionFactory {
                     options: ["Yes", "No — I’ll edit them"],
                     impact: .high,
                     answerType: .yesNo
+                )
+            }
+            if normalized.contains("how many") {
+                let countableItemID = items.first { item in
+                    let name = "\(item.canonicalFoodId) \(item.displayName)".lowercased()
+                    let questionTerms = normalized
+                        .split { !$0.isLetter && !$0.isNumber }
+                        .map(String.init)
+                    let identityMatch = questionTerms.contains { term in
+                        term.count > 2 && name.contains(term)
+                    }
+                    return identityMatch && (item.category == .bread || item.category == .egg || item.servingUnit == .piece || item.servingUnit == .wholeEgg)
+                }?.id ?? items.first(where: {
+                    $0.category == .bread || $0.category == .egg || $0.servingUnit == .piece || $0.servingUnit == .wholeEgg
+                })?.id
+                return choice(
+                    question,
+                    relatedTo: countableItemID,
+                    options: ["1", "2", "3", "4+"],
+                    impact: .high,
+                    answerType: .quantity
                 )
             }
             return ClarificationQuestion(

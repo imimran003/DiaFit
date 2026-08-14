@@ -152,9 +152,10 @@ export const MEAL_PARSE_SYSTEM_PROMPT = [
   'As a concrete full-plate check, when boiled eggs and a pile of mixed sprouts, legumes, or nuts are visible, return separate entries for the eggs, the sprouts/legumes, and each clearly separable nut group; never stop at a single peanut or garnish.',
   'Treat separate containers and separate piles as independent food components unless the image clearly shows one combined recipe. Do not let a prominent rice portion or liquid bowl cause you to omit breads, dry vegetables, curries, protein foods, or sides elsewhere in the frame.',
   'Use generic identities such as vegetable soup, curry, salad, or mixed food only when a more specific visible identity is not supported. When uncertain between a regional dish and a generic category, preserve the most specific grounded regional name, lower confidence, and request clarification rather than silently collapsing another visible serving.',
-  'For countable foods such as eggs, rotis, chapatis, bread slices, idlis, fruit, and packaged items, count every visible unit instead of defaulting to one. For cut eggs, count halves or quarters and convert them back to whole eggs. For stacked breads, inspect visible edges and layers. Put the concise count reasoning in quantityEvidence, such as "six halves = three whole eggs" or "three visible roti layers".',
+  'For countable foods such as eggs, rotis, chapatis, bread slices, idlis, fruit, and packaged items, count every visible unit instead of defaulting to one. For cut eggs, count halves or quarters and convert them back to whole eggs. For stacked breads, inspect complete disc boundaries rather than treating every visible rim, fold, shadow, or layer line as another bread. Put concise count reasoning in quantityEvidence, such as "six halves = three whole eggs" or "two complete roti discs; lower rim belongs to the plate".',
   'If a count is partly occluded or cannot be determined reliably, lower confidence, set requiresClarification true, set quantityEvidence to the visible lower bound, and add one concise count clarification question.',
   'Never use a habitual or default count for a photographed stack. If exactly two roti or chapati discs/layers are visible, return quantity 2—not 3—and explain the count in quantityEvidence. If the stack is partly hidden, return the visible lower bound and ask for confirmation rather than inventing an extra piece.',
+  'A stack described only by overlapping edges or layers does not prove an exact bread count. In that case set requiresClarification true and confidence at or below 0.70 even if the food identity itself is certain.',
   'Keep a prepared dish together when its identity is visible: paneer cubes sitting in green, leafy, spinach-based gravy are palak paneer (or saag paneer), not a standalone paneer serving. Use canonicalSearchName palak paneer, category vegetarianCurry, and preparationMethod spinach gravy whenever that visual evidence is present. Likewise, retain the specific curry, sabzi, dal, or rice preparation instead of reducing it to one ingredient.',
   'Before finalising an image response, run a dish-and-count audit: if a paneer bowl and stacked roti are visible, re-check whether the bowl is palak paneer/saag paneer and count the exposed roti discs. Two visible discs means quantity 2, never a default 3; use the lower visible bound and ask for confirmation if any layer is hidden.',
   'Do not promote garnish or tiny accompaniments into full servings. Onion slices, coriander, tomato pieces, spices, papad fragments, and decorative toppings belong in additions or exclusions unless a clearly separable serving occupies its own pile or container with visible-portion evidence.',
@@ -349,6 +350,15 @@ export function sanitizeMealParseResult(result) {
         clarificationQuestions.push(`How many ${item.regionalName || item.originalText} were visible? I kept the evidence-based count until you confirm it.`);
       }
     }
+    const identityForCountAudit = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
+    const stackedFlatbreadEvidence = /\b(?:roti|chapati|phulka|flatbread|naan|paratha)\b/.test(identityForCountAudit)
+      && Number(item.quantity) > 1
+      && /\b(?:stack|stacked|layer|layers|edge|edges|partly|hidden|occluded)\b/i.test(String(item.quantityEvidence ?? ''));
+    if (stackedFlatbreadEvidence) {
+      item.requiresClarification = true;
+      item.confidence = Math.min(Number(item.confidence) || 0, 0.70);
+      clarificationQuestions.push(`How many ${item.regionalName || item.originalText} were visible?`);
+    }
     const identity = normalizeIdentity(item?.canonicalSearchName || item?.regionalName || item?.originalText);
     if (!identity || !byIdentity.has(identity)) {
       byIdentity.set(identity || `unresolved-${byIdentity.size}`, item);
@@ -413,8 +423,36 @@ export function sanitizeMealParseResult(result) {
     ...result,
     detectedItems,
     visualCoverage,
-    clarificationQuestions: [...new Set(clarificationQuestions.map(value => String(value).trim()).filter(Boolean))]
+    clarificationQuestions: deduplicateClarificationQuestions(clarificationQuestions)
   };
+}
+
+function deduplicateClarificationQuestions(values) {
+  const selected = new Map();
+  for (const value of values) {
+    const question = String(value ?? '').trim();
+    if (!question) continue;
+    // Count questions often differ only by an explanatory suffix after a
+    // verification reconciliation. One semantic count question is enough.
+    const normalized = question.toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    const countFood = countQuestionFood(normalized);
+    const key = countFood ? `count ${countFood}` : normalized;
+    const previous = selected.get(key);
+    if (!previous || question.length > previous.length) selected.set(key, question);
+  }
+  return [...selected.values()];
+}
+
+function countQuestionFood(normalized) {
+  if (!/\b(?:how many|exactly|count|more hidden|were visible)\b/.test(normalized)) return null;
+  const match = normalized.match(/\b(roti|rotis|chapati|chapatis|phulka|phulkas|flatbread|flatbreads|naan|naans|paratha|parathas|egg|eggs|idli|idlis|piece|pieces)\b/);
+  if (!match) return null;
+  return match[1]
+    .replace(/ies$/, 'y')
+    .replace(/s$/, '');
 }
 
 // Preserve a prepared dish when the provider sees the defining sauce or leaf
@@ -595,7 +633,7 @@ function quantityFromEvidence(item) {
   // Prefer the normalized whole-egg count in evidence such as
   // “six halves = three whole eggs”.
   const wholeMatch = evidence.match(/(?:=|equals|equivalent\s+to)\s*(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:whole|full)\b/i);
-  const visibleMatch = evidence.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|distinct|separate|counted|observed|shown|stacked|layers?|discs?|pieces?|rotis?|chapatis?|flatbreads?|whole)\b)/i);
+  const visibleMatch = evidence.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?=(?:visible|complete|distinct|separate|counted|observed|shown|stacked|layers?|discs?|pieces?|rotis?|chapatis?|flatbreads?|whole)\b)/i);
   const stackMatch = evidence.match(/\b(?:stack|pile|count|showing|shows|of)\s*(?:of\s*)?(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\b/i);
   const trailingCountMatch = evidence.match(/\b(one|two|three|four|five|six|seven|eight|nine|ten|\d+(?:\.\d+)?)\s+(?:visible\s+)?(?:roti|rotis|chapati|chapatis|flatbread|flatbreads|pieces?|discs?)\b/i);
   const match = wholeMatch?.[1] ?? visibleMatch?.[1] ?? stackMatch?.[1] ?? trailingCountMatch?.[1];

@@ -194,15 +194,25 @@ struct MealAnalysisReviewCard: View {
             editableDraft.result.imageType = draft.result.imageType
         }
         .onChange(of: draft.result.analysisId) { _, _ in
-            var normalizedDraft = draft
-            normalizedDraft.result.clarificationQuestions = SemanticQuestionDeduplicator.uniqueQuestions(
-                draft.result.clarificationQuestions
-            )
-            editableDraft = normalizedDraft
-            isRetryingAnalysis = false
-            componentError = nil
+            acceptUpdatedDraft()
+        }
+        .onChange(of: draft.result.warnings) { _, _ in
+            // A retry failure deliberately retains the same analysis ID so
+            // the original photo stays associated with the draft. Warnings
+            // still change, and must release the local “Scanning…” state.
+            acceptUpdatedDraft()
         }
         .accessibilityElement(children: .contain)
+    }
+
+    private func acceptUpdatedDraft() {
+        var normalizedDraft = draft
+        normalizedDraft.result.clarificationQuestions = SemanticQuestionDeduplicator.uniqueQuestions(
+            draft.result.clarificationQuestions
+        )
+        editableDraft = normalizedDraft
+        isRetryingAnalysis = false
+        componentError = nil
     }
 
     private func retryAnalysis() {
@@ -401,6 +411,16 @@ struct MealAnalysisReviewCard: View {
     private func answer(_ value: String, to questionID: UUID) {
         guard let index = editableDraft.result.clarificationQuestions.firstIndex(where: { $0.id == questionID }) else { return }
         editableDraft.result.clarificationQuestions[index].answer = value
+        if editableDraft.result.clarificationQuestions[index].answerType == .quantity,
+           let itemID = editableDraft.result.clarificationQuestions[index].relatedFoodItemId,
+           let quantity = Double(value.filter { $0.isNumber || $0 == "." }),
+           quantity > 0,
+           let itemIndex = editableDraft.result.detectedItems.firstIndex(where: { $0.id == itemID }) {
+            let previous = editableDraft.result.detectedItems[itemIndex]
+            editableDraft.result.detectedItems[itemIndex].quantity = quantity
+            recalculate(previousItems: [itemID: previous])
+            return
+        }
         recalculate()
     }
 

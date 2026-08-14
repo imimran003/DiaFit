@@ -255,3 +255,40 @@ evaluator, and the iOS unit-test build pass. Runtime XCTest/UI execution could
 not be performed in this environment because CoreSimulatorService is refusing
 connections; run the existing test plan on a machine with an available
 simulator before release.
+
+## 2026-08-14 — Evidence-backed photo counts and responsive navigation
+
+The reported palak-paneer plate exposed two different trust failures. The live
+provider could identify the spinach curry while still mistaking overlapping
+roti rims for a third complete bread, and a failed focused audit was previously
+treated as optional. That allowed the first hypothesis to reappear with a HIGH
+badge after a timeout. A separate responsiveness audit found JPEG preparation
+running on the main actor and a full-screen atlas drag gesture competing with
+its child scroll view.
+
+Photo analysis now treats prepared-dish identity and adjacent discrete counts
+as independently verifiable facts. Green gravy plus paneer remains one `Palak
+paneer` component. A stacked flatbread count based only on edges or layers is
+limited to 0.70 confidence and gets one editable quantity question. For the
+reported image, the first live pass proposed three rotis; the focused pixel
+audit found two complete roti discs, and reconciliation retained the lower
+evidence-backed count of two. If that high-impact audit cannot finish, the app
+keeps the original photo and exposes retry rather than publishing the
+unverified first pass.
+
+The client now wakes a sleeping hosted backend through `/health` before sending
+the larger image request, caches a successful wake briefly, and uses bounded
+image and session deadlines. Image decoding, metadata removal and resizing run
+off the main actor. Photo-analysis cleanup executes on every success, failure
+and cancellation path, while the atlas dismiss gesture is simultaneous,
+top-edge-only and vertically constrained so it cannot starve scrolling.
+
+Verification completed with 11/11 backend contract tests, 165/165 deterministic
+iOS unit tests, an unsigned generic iPhone build, and the previously completed
+4/4 focused UI flows. A final repeated UI invocation was blocked by a local
+Xcode debugger-runtime failure (`no debugger version`), not an application
+assertion; that runner must be rechecked after Xcode/CoreSimulator repair.
+
+An exact hidden count can never be guaranteed from one photograph. The product
+contract is therefore evidence-backed automation plus one concise correction
+when overlap remains, never a confident invented number.

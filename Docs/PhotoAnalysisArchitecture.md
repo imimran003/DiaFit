@@ -90,6 +90,16 @@ The bundle is not presented as IFCT data and should not be expanded with copied 
   independent spatial pass receives its own transient reference. Development
   diagnostics record only status, byte count, component count, and a safe
   coding path—never photo bytes or meal text.
+- Before a photo upload, the phone performs a small idempotent `/health` wake
+  with its own bounded deadline. This prevents a sleeping free-tier host from
+  spending the large POST's timeout on process startup. Successful wakes are
+  coalesced for a short interval across the primary and verification passes.
+- Dish identity and portion count are separate trust decisions. Recognising
+  `Palak paneer` does not waive verification of an adjacent roti stack. A count
+  inferred only from overlapping rims, shadows, folds or layers is capped at
+  0.70 confidence and remains editable. A focused audit must complete before a
+  high-impact paneer/flatbread result is accepted; on failure the photo remains
+  available for retry instead of falling back to the unverified hypothesis.
 - Prepared JPEGs are capped at 1.9 MB. Base64 expansion therefore remains under
   the backend's 2.8 MB JSON-body limit; accepted device photos cannot cross the
   transport boundary and then fail solely because of encoding overhead.
@@ -107,7 +117,7 @@ Deployments must replace the development bearer guard with real authentication/a
 
 ## Performance and quality gates
 
-- Image preparation is bounded to 2048 px and 2 MB and runs only after the member chooses a photo. The default flow makes no network request and stores no temporary file. Vision work runs off the main actor, while the thread shows explicit identifying and nutrition-resolution progress.
+- Image preparation is bounded to 2048 px and 2 MB and runs only after the member chooses a photo. The default flow makes no network request and stores no temporary file. Vision work, image decoding, resizing and metadata stripping run off the main actor, while the thread shows explicit identifying and nutrition-resolution progress. Analysis state is cleared through one cancellation-safe completion path so a timeout cannot leave scrolling or tab navigation permanently busy.
 - The whole-image on-device classifier is a privacy-preserving candidate generator, not a component detector or portion-measurement system. A 0.20 collection threshold retains potentially useful catalog labels, but an image-only meal is never considered complete from these labels—even one high-confidence label cannot prove that no other food is present. Structured vision owns automatic photo inventory; when it is unavailable, the photo is preserved and the member is asked for a food name rather than being shown a confident-looking partial meal. Deterministic tests verify that both a single generic “vegetable soup” result and multiple “rice + soup” labels are withheld after backend failure.
 - This invariant is enforced after every fallback path, including incomplete local nutrition. A classifier label such as “Peanut” can have valid calories while still omitting the eggs, sprouts, or other piles in the photograph; it is therefore withheld before the review model is built. The review UI also hides partial labels and totals in stale drafts, leaving one retry/manual-correction state. A configured backend must be reachable for automatic photo inventory; the local path never pretends to be AI recognition.
 - The generated food art is already cacheable by stable meal identity; a server-side generated-image service must use a canonical-food/variation/art-style cache key, cancellation, and retry rather than generating on every appearance.
