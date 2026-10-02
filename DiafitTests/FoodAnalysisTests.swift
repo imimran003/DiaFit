@@ -3284,6 +3284,36 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(day.totalProtein, 50)
     }
 
+    func testProteinGoalUsesOneHundredGramsAndKeepsIncompleteDaysNeutral() {
+        let meal = Meal(
+            id: UUID(), title: "Protein meal", subtitle: "", mealType: "Lunch", time: .now,
+            energy: 600, carbs: 20, protein: 99, fat: 12, artwork: .neutral,
+            confidence: .estimated
+        )
+        func day(with meals: [Meal]) -> Day {
+            Day(
+                id: UUID(), date: .now,
+                messages: meals.map { ThreadItem(id: UUID(), kind: .meal($0)) },
+                energyGoal: 2_000, carbohydrateGoal: 180
+            )
+        }
+
+        XCTAssertEqual(DailyProteinTarget.grams, 100)
+        XCTAssertEqual(day(with: [meal]).proteinGoalStatus, .below)
+        var goalMeal = meal
+        goalMeal.protein = 100
+        XCTAssertEqual(day(with: [goalMeal]).proteinGoalStatus, .met)
+
+        var incompleteAnalysis = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "chai with milk")
+        incompleteAnalysis.mealTotals.proteinGrams = nil
+        var incompleteMeal = meal
+        incompleteMeal.protein = 0
+        incompleteMeal.analysis = incompleteAnalysis
+        XCTAssertEqual(day(with: [incompleteMeal]).proteinGoalStatus, .incomplete)
+        XCTAssertEqual(day(with: [goalMeal, incompleteMeal]).proteinGoalStatus, .met)
+    }
+
     func testDiaryFiberTracksKnownMealsWithoutTreatingMissingEstimatesAsZero() throws {
         let analysis = MealAnalysisResult(
             analysisId: UUID(), imageReference: .transient(), imageType: .noImage,

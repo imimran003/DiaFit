@@ -664,6 +664,18 @@ private struct DiaryDaySummary: View {
         }
     }
 
+    private var proteinTint: Color {
+        switch day.proteinGoalStatus {
+        case .met: .green
+        case .below: .coral
+        case .incomplete: .ink
+        }
+    }
+
+    private var proteinValue: String {
+        "\(day.totalProtein)g\(day.proteinTotalIsComplete ? "" : "+")"
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 0) {
@@ -671,7 +683,12 @@ private struct DiaryDaySummary: View {
                 Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
                 DiarySummaryMetric(value: "\(day.totalCarbs)g", unit: "", label: "Carbs")
                 Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
-                DiarySummaryMetric(value: "\(day.totalProtein)g", unit: "", label: "Protein")
+                DiarySummaryMetric(
+                    value: proteinValue,
+                    unit: "of \(DailyProteinTarget.grams)g",
+                    label: "Protein",
+                    tint: proteinTint
+                )
                 Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
                 DiarySummaryMetric(
                     value: fiberValue,
@@ -680,16 +697,21 @@ private struct DiaryDaySummary: View {
                     tint: fiberTint
                 )
             }
-            Text(fiberNote)
-                .font(.system(size: 10, weight: .medium, design: .rounded))
-                .foregroundStyle(Color.quietInk)
-                .padding(.horizontal, 10)
+            VStack(alignment: .leading, spacing: 3) {
+                if day.proteinGoalStatus == .incomplete {
+                    Text("Some meals lack protein estimates · \(DailyProteinTarget.grams) g/day target")
+                }
+                Text(fiberNote)
+            }
+            .font(.system(size: 10, weight: .medium, design: .rounded))
+            .foregroundStyle(Color.quietInk)
+            .padding(.horizontal, 10)
         }
         .padding(.vertical, 14)
         .paperCard(radius: 22, fill: Color.surface.opacity(0.68))
         .accessibilityElement(children: .combine)
         .accessibilityIdentifier("diary-day-summary")
-        .accessibilityLabel("Day summary, \(day.totalEnergy) kilocalories, \(day.totalCarbs) grams carbohydrates, \(day.totalProtein) grams protein, fiber \(fiberValue), \(fiberNote)")
+        .accessibilityLabel("Day summary, \(day.totalEnergy) kilocalories, \(day.totalCarbs) grams carbohydrates, protein \(proteinValue), \(day.proteinGoalStatus.accessibilityDescription), fiber \(fiberValue), \(fiberNote)")
     }
 }
 

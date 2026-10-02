@@ -1196,7 +1196,8 @@ private struct DailyRhythm: View {
         NutritionMetric(
             label: "Protein", value: day.totalProtein, unit: "g",
             spokenUnit: "grams", identifier: "daily-summary-protein",
-            isComplete: day.proteinTotalIsComplete
+            isComplete: day.proteinTotalIsComplete,
+            goalStatus: day.proteinGoalStatus
         )
     }
 
@@ -1215,7 +1216,8 @@ private struct DailyRhythm: View {
         NutritionMetric(
             label: "Protein", value: day.totalProtein, unit: "g",
             spokenUnit: "grams", identifier: "daily-summary-protein",
-            isComplete: day.proteinTotalIsComplete, horizontal: true
+            isComplete: day.proteinTotalIsComplete,
+            goalStatus: day.proteinGoalStatus, horizontal: true
         )
     }
 }
@@ -1227,6 +1229,7 @@ private struct NutritionMetric: View {
     let spokenUnit: String
     let identifier: String
     var isComplete = true
+    var goalStatus: ProteinGoalStatus? = nil
     var horizontal = false
 
     var body: some View {
@@ -1237,7 +1240,7 @@ private struct NutritionMetric: View {
                         .font(DiafitType.caption)
                         .foregroundStyle(Color.quietInk)
                     Spacer(minLength: 12)
-                    valueLabel
+                    valueAndGoal
                 }
                 .padding(.vertical, 11)
             } else {
@@ -1247,14 +1250,33 @@ private struct NutritionMetric: View {
                         .foregroundStyle(Color.quietInk)
                         .lineLimit(1)
                         .minimumScaleFactor(0.74)
-                    valueLabel
+                    valueAndGoal
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label), \(value) \(spokenUnit)\(isComplete ? "" : ", known amount; some meal data is unavailable")")
+        .accessibilityLabel("\(label), \(value) \(spokenUnit)\(isComplete ? "" : ", known amount; some meal data is unavailable")\(goalStatus.map { ", \($0.accessibilityDescription)" } ?? "")")
         .accessibilityIdentifier(identifier)
+    }
+
+    private var valueAndGoal: some View {
+        VStack(alignment: horizontal ? .trailing : .leading, spacing: 2) {
+            valueLabel
+            if goalStatus != nil {
+                Text("of \(DailyProteinTarget.grams)g")
+                    .font(.system(size: 10, weight: .medium, design: .rounded))
+                    .foregroundStyle(Color.quietInk)
+            }
+        }
+    }
+
+    private var valueTint: Color {
+        switch goalStatus {
+        case .met: .green
+        case .below: .coral
+        case .incomplete, .none: .ink
+        }
     }
 
     private var valueLabel: some View {
@@ -1263,11 +1285,11 @@ private struct NutritionMetric: View {
                 .font(DiafitType.metric)
                 .fontWeight(.semibold)
                 .monospacedDigit()
+                .foregroundStyle(valueTint)
             Text(unit)
                 .font(DiafitType.caption)
                 .foregroundStyle(Color.quietInk)
         }
-        .foregroundStyle(Color.ink)
         .lineLimit(1)
         .minimumScaleFactor(0.72)
     }

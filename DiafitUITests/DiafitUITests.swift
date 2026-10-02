@@ -17,6 +17,8 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.descendants(matching: .any)["daily-summary-calories"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["daily-summary-carbohydrates"].exists)
         XCTAssertTrue(app.descendants(matching: .any)["daily-summary-protein"].exists)
+        XCTAssertTrue(app.descendants(matching: .any)["daily-summary-protein"].label.contains("below the 100 gram daily protein goal"))
+        attachScreenshot(named: "today-protein-goal")
         XCTAssertTrue(app.buttons["Connect Apple Health"].exists)
     }
 
@@ -102,6 +104,7 @@ final class DiafitUITests: XCTestCase {
         let summary = app.descendants(matching: .any)["diary-day-summary"]
         XCTAssertTrue(summary.waitForExistence(timeout: 3))
         XCTAssertTrue(summary.label.contains("fiber"))
+        XCTAssertTrue(summary.label.contains("below the 100 gram daily protein goal"))
         XCTAssertTrue(summary.label.contains("Add your birth date in Profile"))
         attachScreenshot(named: "diary-fiber-summary")
     }

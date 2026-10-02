@@ -132,6 +132,29 @@ struct Day: Identifiable, Codable, Hashable {
             return analysis.mealTotals.proteinGrams == nil
         }
     }
+
+    var proteinGoalStatus: ProteinGoalStatus {
+        if totalProtein >= DailyProteinTarget.grams { return .met }
+        return proteinTotalIsComplete ? .below : .incomplete
+    }
+}
+
+enum DailyProteinTarget {
+    static let grams = 100
+}
+
+enum ProteinGoalStatus: Equatable {
+    case met
+    case below
+    case incomplete
+
+    var accessibilityDescription: String {
+        switch self {
+        case .met: "100 gram daily protein goal met"
+        case .below: "below the 100 gram daily protein goal"
+        case .incomplete: "protein total is partial; some meal data is unavailable"
+        }
+    }
 }
 
 struct LoggedFiberIntake: Equatable {
