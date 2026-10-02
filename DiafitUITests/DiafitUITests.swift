@@ -401,6 +401,37 @@ final class DiafitUITests: XCTestCase {
         app.descendants(matching: .any)[identifier].label
     }
 
+    func testSystemPhotoPickerProducesReviewFromLibraryImage() throws {
+        app.terminate()
+        app.launchArguments = ["UITestMode", "UITestDelayedPhotoResponse"]
+        app.launch()
+
+        app.buttons["Add meal photo"].firstMatch.tap()
+        app.buttons["Choose meal photo"].tap()
+        let selected = app.images.matching(identifier: "PXGGridLayout-Info").firstMatch
+        guard selected.waitForExistence(timeout: 8) else {
+            throw XCTSkip("This simulator has no selectable photo in its library")
+        }
+        // PhotosPicker runs in a separate process, so XCTest exposes its
+        // thumbnail but does not consider it hittable through this app.
+        selected.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        XCTAssertTrue(app.staticTexts["Photo added · Checking the full plate"].waitForExistence(timeout: 8))
+        XCTAssertTrue(app.staticTexts["REVIEW BEFORE LOGGING"].waitForExistence(timeout: 20))
+    }
+
+    func testPhotoReviewSurvivesPickerDismissalWhileAnalysisIsDelayed() throws {
+        app.terminate()
+        app.launchArguments = ["UITestMode", "UITestUseFixturePhoto", "UITestDelayedPhotoResponse"]
+        app.launch()
+
+        app.buttons["Add meal photo"].firstMatch.tap()
+        app.buttons["Use review fixture"].tap()
+        XCTAssertTrue(app.staticTexts["Photo note · Dosa with sambar and coconut chutney"].waitForExistence(timeout: 4))
+        app.buttons["Diary"].tap()
+        app.buttons["Today"].tap()
+        XCTAssertTrue(app.staticTexts["Review this meal"].waitForExistence(timeout: 8))
+    }
+
     func testPhotoReviewFixtureResolvesEveryComponentAfterRequiredAnswers() throws {
         app.terminate()
         app.launchArguments.append("UITestUseFixturePhoto")

@@ -222,12 +222,6 @@ struct DayThreadView: View {
             guard phase == .active, dependencies.healthActivity.hasRequestedAccess else { return }
             Task { await loadHealthActivity() }
         }
-        .onDisappear {
-            photoAnalysisTask?.cancel()
-            photoAnalysisTask = nil
-            activePhotoRequestID = nil
-            isThinking = false
-        }
     }
 
     private func connectHealth() {
@@ -421,15 +415,24 @@ struct DayThreadView: View {
     private func beginPhotoReview(_ image: PreparedFoodImage, description: String) {
         guard !isThinking else { return }
         composerFocused = false
-        store.append(ThreadItem(id: UUID(), kind: .person(text: "Photo note · \(description)")), to: dayID)
+        let note = description.isEmpty ? "Photo added · Checking the full plate" : "Photo note · \(description)"
+        store.append(ThreadItem(id: UUID(), kind: .person(text: note)), to: dayID)
         isThinking = true
         thinkingLabel = "Identifying meal components"
 
         photoAnalysisTask?.cancel()
         let requestID = UUID()
         activePhotoRequestID = requestID
+        // Picker dismissal and page transitions can temporarily make this
+        // view disappear. Keep the task alive for its day; only a newer photo
+        // request supersedes it, and the request ID rejects stale results.
         photoAnalysisTask = Task { @MainActor in
             defer { finishPhotoAnalysis(requestID) }
+            #if DEBUG
+            if ProcessInfo.processInfo.arguments.contains("UITestDelayedPhotoResponse") {
+                try? await Task.sleep(for: .seconds(2))
+            }
+            #endif
             let result = await dependencies.photoAnalysis.analyse(image: image, description: description)
             guard !Task.isCancelled, activePhotoRequestID == requestID else { return }
             let review = MealAnalysisDraft(result: result, transientImageData: image.data)
