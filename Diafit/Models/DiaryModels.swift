@@ -100,6 +100,29 @@ struct Day: Identifiable, Codable, Hashable {
     var totalCarbs: Int { meals.reduce(0) { $0 + $1.carbs } }
     var totalProtein: Int { meals.reduce(0) { $0 + $1.protein } }
 
+    var fiberIntake: LoggedFiberIntake {
+        let estimates = meals.map { meal -> (value: Double?, isComplete: Bool) in
+            guard let analysis = meal.analysis else { return (nil, false) }
+            let foods = analysis.detectedItems.filter { $0.category != .hydration }
+            let allItemsKnown = foods.allSatisfy { item in
+                item.nutrition.fibreGrams != nil || item.canonicalFoodId == "chai-with-milk"
+            }
+            // Older confirmed chai entries predate the catalog's explicit
+            // zero. Only this ingredient-defined, fiber-free drink gets a
+            // retroactive value; other missing nutrient data stays unknown.
+            let savedChaiOnly = !foods.isEmpty
+                && foods.allSatisfy { $0.canonicalFoodId == "chai-with-milk" }
+            let value = analysis.mealTotals.fibreGrams ?? (savedChaiOnly ? 0 : nil)
+            return (value, value != nil && allItemsKnown)
+        }
+        let known = estimates.compactMap { $0.value }
+        return LoggedFiberIntake(
+            knownGrams: known.reduce(0, +),
+            hasEstimate: !known.isEmpty || meals.isEmpty,
+            isComplete: estimates.allSatisfy { $0.isComplete }
+        )
+    }
+
     /// Meals saved by the structured review flow retain unavailable protein as
     /// `nil` in their analysis result. The headline can still show the sum of
     /// known values while callers keep that partial-data state available.
@@ -108,6 +131,34 @@ struct Day: Identifiable, Codable, Hashable {
             guard let analysis = meal.analysis else { return false }
             return analysis.mealTotals.proteinGrams == nil
         }
+    }
+}
+
+struct LoggedFiberIntake: Equatable {
+    let knownGrams: Double
+    let hasEstimate: Bool
+    let isComplete: Bool
+
+    func status(targetGrams: Int?) -> FiberGoalStatus {
+        guard let targetGrams else { return .targetUnavailable }
+        if hasEstimate && knownGrams >= Double(targetGrams) { return .met }
+        return isComplete ? .below : .incomplete
+    }
+}
+
+enum FiberGoalStatus: Equatable {
+    case met
+    case below
+    case incomplete
+    case targetUnavailable
+}
+
+enum DailyFiberTarget {
+    /// U.S. dietary reference intake (adequate intake) for adult men.
+    /// https://odphp.health.gov/sites/default/files/2019-09/14-Appendix-E-2.pdf
+    static func gramsForMen(age: Int?) -> Int? {
+        guard let age, age >= 19 else { return nil }
+        return age >= 51 ? 30 : 38
     }
 }
 

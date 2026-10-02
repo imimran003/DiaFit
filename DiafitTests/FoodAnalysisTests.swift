@@ -3284,6 +3284,93 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(day.totalProtein, 50)
     }
 
+    func testDiaryFiberTracksKnownMealsWithoutTreatingMissingEstimatesAsZero() throws {
+        let analysis = MealAnalysisResult(
+            analysisId: UUID(), imageReference: .transient(), imageType: .noImage,
+            detectedItems: [], mealTotals: NutritionValues(fibreGrams: 12.5),
+            overallConfidence: .high, assumptions: [], clarificationQuestions: [], warnings: [],
+            createdAt: .now, recognitionModelVersion: nil,
+            nutritionDatabaseVersion: nil, glycaemicDatabaseVersion: nil,
+            nutritionProvenance: NutritionProvenance(
+                kind: .userCreated, dataSource: "Test", dataVersion: nil, confidence: .high
+            )
+        )
+        let known = Meal(
+            id: UUID(), title: "Beans", subtitle: "", mealType: "Lunch", time: .now,
+            energy: 300, carbs: 40, protein: 12, fat: 4, artwork: .neutral,
+            confidence: .estimated, analysis: analysis
+        )
+        let legacy = Meal(
+            id: UUID(), title: "Older meal", subtitle: "", mealType: "Dinner", time: .now,
+            energy: 200, carbs: 20, protein: 10, fat: 5, artwork: .neutral,
+            confidence: .estimated
+        )
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [known, legacy].map { ThreadItem(id: UUID(), kind: .meal($0)) },
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+
+        XCTAssertEqual(day.fiberIntake.knownGrams, 12.5)
+        XCTAssertFalse(day.fiberIntake.isComplete)
+        XCTAssertEqual(day.fiberIntake.status(targetGrams: 38), .incomplete)
+        XCTAssertEqual(day.fiberIntake.status(targetGrams: nil), .targetUnavailable)
+
+        var highAnalysis = analysis
+        highAnalysis.mealTotals.fibreGrams = 39
+        var highMeal = known
+        highMeal.analysis = highAnalysis
+        let highDay = Day(
+            id: UUID(), date: .now,
+            messages: [highMeal, legacy].map { ThreadItem(id: UUID(), kind: .meal($0)) },
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        XCTAssertEqual(highDay.fiberIntake.status(targetGrams: 38), .met)
+
+        let completeDay = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: UUID(), kind: .meal(known))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        XCTAssertTrue(completeDay.fiberIntake.isComplete)
+        XCTAssertEqual(completeDay.fiberIntake.status(targetGrams: 38), .below)
+        XCTAssertEqual(DailyFiberTarget.gramsForMen(age: 50), 38)
+        XCTAssertEqual(DailyFiberTarget.gramsForMen(age: 51), 30)
+        XCTAssertNil(DailyFiberTarget.gramsForMen(age: nil))
+
+        XCTAssertEqual(catalog.food(canonicalID: "chai-with-milk")?.nutritionPer100Grams?.fibreGrams, 0)
+        var oldChaiAnalysis = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "chai with milk")
+        XCTAssertEqual(oldChaiAnalysis.detectedItems.map(\.canonicalFoodId), ["chai-with-milk"])
+        oldChaiAnalysis.mealTotals.fibreGrams = nil
+        oldChaiAnalysis.detectedItems[0].nutrition.fibreGrams = nil
+        let savedChai = Meal(
+            id: UUID(), title: "Chai with milk", subtitle: "", mealType: "Other", time: .now,
+            energy: 26, carbs: 2, protein: 2, fat: 1, artwork: .neutral,
+            confidence: .estimated, analysis: oldChaiAnalysis
+        )
+        let dayWithSavedChai = Day(
+            id: UUID(), date: .now,
+            messages: [known, savedChai].map { ThreadItem(id: UUID(), kind: .meal($0)) },
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        XCTAssertTrue(dayWithSavedChai.fiberIntake.isComplete)
+        XCTAssertEqual(dayWithSavedChai.fiberIntake.knownGrams, 12.5)
+        XCTAssertEqual(dayWithSavedChai.fiberIntake.status(targetGrams: 38), .below)
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-fiber-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistence = FileDiaryPersistence(
+            fileURL: directory.appendingPathComponent("diary.json"),
+            appliesFileProtection: false
+        )
+        _ = DiaryStore(seedDays: [completeDay], persistence: persistence)
+        let reloaded = DiaryStore(seedDays: [], persistence: persistence)
+        XCTAssertEqual(reloaded.day(id: completeDay.id)?.fiberIntake.knownGrams, 12.5)
+        XCTAssertEqual(reloaded.day(id: completeDay.id)?.fiberIntake.status(targetGrams: 38), .below)
+    }
+
     func testRuntimeDiaryDefaultsContainNoFixtureContent() {
         let now = Date(timeIntervalSince1970: 1_753_000_000)
         let days = RuntimeDiaryDefaults.days(now: now)

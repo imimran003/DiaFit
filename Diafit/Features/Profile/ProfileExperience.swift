@@ -631,20 +631,65 @@ private struct DiaryDayPage: View {
 }
 
 private struct DiaryDaySummary: View {
+    @EnvironmentObject private var profileStore: UserProfileStore
     let day: Day
 
+    private var fiber: LoggedFiberIntake { day.fiberIntake }
+    private var fiberTarget: Int? {
+        DailyFiberTarget.gramsForMen(age: profileStore.profile.age(on: day.date))
+    }
+    private var fiberStatus: FiberGoalStatus { fiber.status(targetGrams: fiberTarget) }
+
+    private var fiberValue: String {
+        guard fiber.hasEstimate else { return "—" }
+        let grams = fiber.knownGrams.formatted(.number.precision(.fractionLength(0...2)))
+        return "\(grams)g\(fiber.isComplete ? "" : "+")"
+    }
+
+    private var fiberNote: String {
+        guard let fiberTarget else { return "Add your birth date in Profile for a fiber target." }
+        switch fiberStatus {
+        case .met: return "Fiber goal met · \(fiberTarget) g/day target for men of your age"
+        case .below: return "Below fiber goal · \(fiberTarget) g/day target for men of your age"
+        case .incomplete: return "Some meals lack fiber estimates · \(fiberTarget) g/day target"
+        case .targetUnavailable: return "Add your birth date in Profile for a fiber target."
+        }
+    }
+
+    private var fiberTint: Color {
+        switch fiberStatus {
+        case .met: .green
+        case .below: .coral
+        case .incomplete, .targetUnavailable: .ink
+        }
+    }
+
     var body: some View {
-        HStack(spacing: 0) {
-            DiarySummaryMetric(value: "\(day.totalEnergy)", unit: "kcal", label: "Energy")
-            Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
-            DiarySummaryMetric(value: "\(day.totalCarbs)g", unit: "", label: "Carbs")
-            Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
-            DiarySummaryMetric(value: "\(day.totalProtein)g", unit: "", label: "Protein")
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 0) {
+                DiarySummaryMetric(value: "\(day.totalEnergy)", unit: "kcal", label: "Energy")
+                Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
+                DiarySummaryMetric(value: "\(day.totalCarbs)g", unit: "", label: "Carbs")
+                Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
+                DiarySummaryMetric(value: "\(day.totalProtein)g", unit: "", label: "Protein")
+                Rectangle().fill(Color.rule.opacity(0.65)).frame(width: 1, height: 34)
+                DiarySummaryMetric(
+                    value: fiberValue,
+                    unit: fiberTarget.map { "of \($0)g" } ?? "",
+                    label: "Fiber",
+                    tint: fiberTint
+                )
+            }
+            Text(fiberNote)
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(Color.quietInk)
+                .padding(.horizontal, 10)
         }
         .padding(.vertical, 14)
         .paperCard(radius: 22, fill: Color.surface.opacity(0.68))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("Day summary, \(day.totalEnergy) kilocalories, \(day.totalCarbs) grams carbohydrates, \(day.totalProtein) grams protein")
+        .accessibilityIdentifier("diary-day-summary")
+        .accessibilityLabel("Day summary, \(day.totalEnergy) kilocalories, \(day.totalCarbs) grams carbohydrates, \(day.totalProtein) grams protein, fiber \(fiberValue), \(fiberNote)")
     }
 }
 
@@ -652,6 +697,7 @@ private struct DiarySummaryMetric: View {
     let value: String
     let unit: String
     let label: String
+    var tint: Color = .ink
 
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
@@ -661,7 +707,9 @@ private struct DiarySummaryMetric: View {
                 .foregroundStyle(Color.quietInk)
             Text(value)
                 .font(DiafitType.metric)
-                .foregroundStyle(Color.ink)
+                .foregroundStyle(tint)
+                .lineLimit(1)
+                .minimumScaleFactor(0.7)
             if !unit.isEmpty {
                 Text(unit)
                     .font(.system(size: 10, weight: .medium, design: .rounded))
@@ -669,7 +717,7 @@ private struct DiarySummaryMetric: View {
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 14)
+        .padding(.horizontal, 10)
     }
 }
 

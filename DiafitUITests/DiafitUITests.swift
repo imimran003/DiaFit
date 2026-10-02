@@ -97,6 +97,15 @@ final class DiafitUITests: XCTestCase {
         XCTAssertFalse(app.navigationBars["Meal details"].waitForExistence(timeout: 2))
     }
 
+    func testDiarySummaryIncludesFiberAndExplainsMissingAgeTarget() throws {
+        app.buttons["Diary"].tap()
+        let summary = app.descendants(matching: .any)["diary-day-summary"]
+        XCTAssertTrue(summary.waitForExistence(timeout: 3))
+        XCTAssertTrue(summary.label.contains("fiber"))
+        XCTAssertTrue(summary.label.contains("Add your birth date in Profile"))
+        attachScreenshot(named: "diary-fiber-summary")
+    }
+
     func testQuickFoodNoteAddsAnAgentMeal() throws {
         submitFoodNote("Pasta for dinner")
 
