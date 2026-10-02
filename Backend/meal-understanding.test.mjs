@@ -415,4 +415,41 @@ await assert.rejects(
 );
 
 assert.throws(() => validateMealParseResult({ ...parsed, unexpected: true }), error => error.code === 'malformed_provider_response');
+
+// Correcting a count must also correct the total mass used for nutrition.
+const correctedMass = sanitizeMealParseResult({
+  ...parsed,
+  detectedItems: [{ ...parsed.detectedItems[1], canonicalSearchName: 'roti',
+    quantity: 3, unit: 'piece', estimatedGrams: 105,
+    quantityEvidence: 'two complete roti discs' }],
+  visualCoverage
+});
+assert.equal(correctedMass.detectedItems[0].quantity, 2);
+assert.equal(correctedMass.detectedItems[0].estimatedGrams, 70);
+
+// Two explicit dishes in text are not competing observations of one photo.
+const separatePreparations = {
+  ...parsed,
+  detectedItems: [
+    { ...parsed.detectedItems[1], originalText: '2 boiled eggs', canonicalSearchName: 'boiled egg', quantity: 2, preparationMethod: 'boiled' },
+    { ...parsed.detectedItems[1], originalText: '1 fried egg', canonicalSearchName: 'fried egg', quantity: 1, preparationMethod: 'fried' }
+  ],
+  visualCoverage: null
+};
+const preservedPreparations = sanitizeMealParseResult(separatePreparations, { source: 'text' });
+assert.equal(preservedPreparations.detectedItems.length, 2);
+validateMealParseResult(preservedPreparations, { source: 'text' });
+assert.throws(() => validateMealParseResult({ ...preservedPreparations,
+  detectedItems: [preservedPreparations.detectedItems[0], preservedPreparations.detectedItems[0]]
+}, { source: 'text' }), error => error.code === 'duplicate_food_components');
+for (const Parser of [OpenAIMealParser, GeminiMealParser]) {
+  const provider = new Parser({ apiKey: 'test-only', fetchImpl: async () => ({
+    ok: true, async json() { return {
+      output_text: JSON.stringify(separatePreparations),
+      candidates: [{ content: { parts: [{ text: JSON.stringify(separatePreparations) }] } }]
+    }; }
+  }) });
+  const result = await provider.parse({ text: '2 boiled eggs and 1 fried egg' });
+  assert.deepEqual(result.detectedItems.map(item => item.quantity), [2, 1]);
+}
 console.log('meal-understanding tests passed');

@@ -299,8 +299,9 @@ export class OpenAIMealParser {
     if (typeof raw !== 'string') throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned no structured output.');
     let result;
     try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
-    const sanitized = sanitizeMealParseResult(result);
-    validateMealParseResult(sanitized, { requireVisualCoverage: Boolean(input.imageBase64) });
+    const source = input.imageBase64 ? 'image' : 'text';
+    const sanitized = sanitizeMealParseResult(result, { source });
+    validateMealParseResult(sanitized, { source, requireVisualCoverage: Boolean(input.imageBase64) });
     return sanitized;
   }
 }
@@ -362,8 +363,9 @@ export class GeminiMealParser {
     }
     let result;
     try { result = JSON.parse(raw); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned non-JSON output.', error); }
-    const sanitized = sanitizeMealParseResult(result);
-    validateMealParseResult(sanitized, { requireVisualCoverage: Boolean(input.imageBase64) });
+    const source = input.imageBase64 ? 'image' : 'text';
+    const sanitized = sanitizeMealParseResult(result, { source });
+    validateMealParseResult(sanitized, { source, requireVisualCoverage: Boolean(input.imageBase64) });
     return sanitized;
   }
 }
@@ -373,8 +375,9 @@ export class MockMealParser {
   constructor(handler = defaultMockMealParser) { this.handler = handler; }
   async parse(input) {
     const result = await this.handler(input);
-    const sanitized = sanitizeMealParseResult(result);
-    validateMealParseResult(sanitized);
+    const source = input.imageBase64 ? 'image' : 'text';
+    const sanitized = sanitizeMealParseResult(result, { source });
+    validateMealParseResult(sanitized, { source });
     return sanitized;
   }
 }
@@ -382,7 +385,7 @@ export class MockMealParser {
 /// Provider output is a hypothesis. Collapse duplicate alternative labels into
 /// one editable component before validation so they can never be aggregated as
 /// two servings. A preparation disagreement is surfaced for confirmation.
-export function sanitizeMealParseResult(result) {
+export function sanitizeMealParseResult(result, { source = 'image' } = {}) {
   if (!result || !Array.isArray(result.detectedItems)) return result;
   const byIdentity = new Map();
   const clarificationQuestions = [...(Array.isArray(result.clarificationQuestions) ? result.clarificationQuestions : [])];
@@ -395,12 +398,21 @@ export function sanitizeMealParseResult(result) {
       packagedLabelEvidence: rawItem?.packagedLabelEvidence ?? null,
       aiNutritionEstimate: rawItem?.aiNutritionEstimate ?? null
     };
+    // Text can explicitly name multiple servings/preparations of one food.
+    // Photo hypothesis reconciliation must not erase those independent rows.
+    if (source === 'text') {
+      byIdentity.set(byIdentity.size, item);
+      continue;
+    }
     const evidenceQuantity = quantityFromEvidence(item);
     if (evidenceQuantity != null && isDiscreteFood(item)) {
       const providerQuantity = Number(item.quantity);
       const countDisagrees = Number.isFinite(providerQuantity)
         && Math.abs(providerQuantity - evidenceQuantity) > 0.0001;
       item.quantity = evidenceQuantity;
+      if (countDisagrees && providerQuantity > 0 && Number.isFinite(item.estimatedGrams)) {
+        item.estimatedGrams *= evidenceQuantity / providerQuantity;
+      }
       item.requiresClarification = Boolean(item.requiresClarification || countDisagrees);
       if (countDisagrees) {
         clarificationQuestions.push(`How many ${item.regionalName || item.originalText} were visible? I kept the evidence-based count until you confirm it.`);
@@ -452,9 +464,12 @@ export function sanitizeMealParseResult(result) {
       if (!clarificationQuestions.includes(question)) clarificationQuestions.push(question);
     }
   }
-  let detectedItems = promotePreparedDishIdentities([...byIdentity.values()], result.mealDescription);
-  detectedItems = collapseSemanticFoodDuplicates(detectedItems, clarificationQuestions);
-  const removedImageAccoutrements = result.visualCoverage != null
+  let detectedItems = [...byIdentity.values()];
+  if (source === 'image') {
+    detectedItems = promotePreparedDishIdentities(detectedItems, result.mealDescription);
+    detectedItems = collapseSemanticFoodDuplicates(detectedItems, clarificationQuestions);
+  }
+  const removedImageAccoutrements = source === 'image' && result.visualCoverage != null
     ? removeUnsupportedImageAccoutrements(detectedItems)
     : { items: detectedItems, removed: false };
   detectedItems = removedImageAccoutrements.items;
@@ -618,6 +633,9 @@ function collapseSemanticFoodDuplicates(items, clarificationQuestions) {
         && Math.abs(existing.quantity - item.quantity) > 0.0001
         && isDiscreteFood(existing);
       if (countDisagrees) {
+        if (winner.quantity > 0 && Number.isFinite(winner.estimatedGrams)) {
+          winner.estimatedGrams *= Math.min(existing.quantity, item.quantity) / winner.quantity;
+        }
         winner.quantity = Math.min(existing.quantity, item.quantity);
         winner.confidence = Math.min(winner.confidence, 0.70);
         winner.requiresClarification = true;
@@ -725,7 +743,7 @@ function removeUnsupportedImageAccoutrements(items) {
   return { items: filtered, removed };
 }
 
-export function validateMealParseResult(result, { requireVisualCoverage = false } = {}) {
+export function validateMealParseResult(result, { requireVisualCoverage = false, source = 'image' } = {}) {
   if (!result || typeof result !== 'object' || Array.isArray(result)) throw providerError(502, 'malformed_provider_response', 'Meal parse result must be an object.');
   const allowed = new Set(['detectedItems', 'unresolvedItems', 'mealDescription', 'clarificationQuestions', 'confidence', 'visualCoverage']);
   if (Object.keys(result).some(key => !allowed.has(key))) throw providerError(502, 'malformed_provider_response', 'Meal parse result contains an unexpected field.');
@@ -734,7 +752,7 @@ export function validateMealParseResult(result, { requireVisualCoverage = false 
   if (requireVisualCoverage && result.visualCoverage == null) throw providerError(502, 'malformed_provider_response', 'Image parse is missing visual coverage evidence.');
   validateVisualCoverage(result.visualCoverage);
   for (const item of result.detectedItems) validateParsedFoodItem(item);
-  const duplicateIdentities = duplicateFoodIdentities(result.detectedItems);
+  const duplicateIdentities = duplicateFoodIdentities(result.detectedItems, source);
   if (duplicateIdentities.length) {
     throw providerError(502, 'duplicate_food_components', 'Meal understanding returned the same food component more than once.', duplicateIdentities.join(','));
   }
@@ -756,11 +774,15 @@ function validateVisualCoverage(coverage) {
   }
 }
 
-function duplicateFoodIdentities(items) {
+function duplicateFoodIdentities(items, source = 'image') {
   const seen = new Set();
   const duplicates = new Set();
   for (const item of items) {
-    const identity = normalizeIdentity(item.canonicalSearchName || item.regionalName || item.originalText);
+    // Different explicit spans/preparations may describe separate servings,
+    // but identical rows are still unsafe to count twice.
+    const identity = source === 'text'
+      ? JSON.stringify([item.originalText, item.canonicalSearchName].map(value => value.toLowerCase().trim().replace(/\s+/g, ' ')))
+      : normalizeIdentity(item.canonicalSearchName || item.regionalName || item.originalText);
     if (!identity) continue;
     if (seen.has(identity)) duplicates.add(identity);
     seen.add(identity);

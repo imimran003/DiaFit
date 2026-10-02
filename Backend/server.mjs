@@ -107,7 +107,10 @@ const server = createServer(async (request, response) => {
         controller.abort();
         throw error;
       }
-      validateMealParseResult(result, { requireVisualCoverage: Boolean(input.imageBase64) });
+      validateMealParseResult(result, {
+        source: input.imageBase64 ? 'image' : 'text',
+        requireVisualCoverage: Boolean(input.imageBase64)
+      });
       // Echo the photo reference so the iOS client can reject a delayed or
       // cross-request response before it reaches the meal review. This is
       // transport metadata beside (not inside) the strict provider schema.

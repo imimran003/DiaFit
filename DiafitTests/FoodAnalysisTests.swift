@@ -2686,6 +2686,62 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(result.detectedItems.first(where: { $0.canonicalFoodId == "omelette" })?.quantity, 1)
     }
 
+    func testConcurrentNutritionLookupsPreserveInputOrder() async throws {
+        let router = DefaultFoodResolutionRouter(catalog: catalog, nutrition: OutOfOrderNutritionResolver(catalog: catalog))
+        let local = await router.resolve(text: "black coffee and banana")
+        XCTAssertEqual(local.items.compactMap { $0.canonical?.food.canonicalId }, ["black-coffee", "banana"])
+        let parse = MealParseResult(detectedItems: [
+            ParsedFoodItem(originalText: "black coffee", canonicalSearchName: "black coffee", quantity: 1, unit: "cup"),
+            ParsedFoodItem(originalText: "banana", canonicalSearchName: "banana", quantity: 1, unit: "piece")
+        ], unresolvedItems: [], mealDescription: "coffee and banana", clarificationQuestions: [], confidence: 0.9)
+        let remote = await router.resolve(parse: parse, originalInput: "")
+        XCTAssertEqual(remote.items.compactMap { $0.canonical?.food.canonicalId }, ["black-coffee", "banana"])
+    }
+
+    func testSavedFoodCannotSwallowCompoundMealOrOverrideExplicitQuantity() async throws {
+        let memory = InMemoryUserFoodMemoryRepository()
+        await memory.save(UserFoodMemory(id: UUID(), alias: "milk tea", canonicalFoodID: "chai-with-milk",
+                                        servingGrams: 150, servingUnit: "glass", lastConfirmedAt: .now))
+        let router = DefaultFoodResolutionRouter(catalog: catalog, memory: memory)
+        let compound = await router.resolve(text: "Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 1 omlet")
+        XCTAssertEqual(Set(compound.items.compactMap { $0.canonical?.food.canonicalId }),
+                       Set(["chai-with-milk", "paratha", "whole-wheat-bread", "omelette"]))
+        let counted = await router.resolve(text: "2 cups milk tea")
+        XCTAssertEqual(counted.items.first?.parsedItem.quantity, 2)
+        let exact = await router.resolve(text: "milk tea")
+        XCTAssertEqual(exact.items.first?.interpretationRoute, .userSavedFood)
+    }
+
+    func testSavedAliasCannotReplaceDifferentFoodSharingAWord() async throws {
+        let memory = InMemoryUserFoodMemoryRepository()
+        await memory.save(UserFoodMemory(id: UUID(), alias: "coffee", canonicalFoodID: "coffee-with-sugar",
+                                        servingGrams: 150, servingUnit: "cup", lastConfirmedAt: .now))
+        let match = await HybridFoodNormalisationService(catalog: catalog).match(
+            ParsedFoodItem(originalText: "black coffee", canonicalSearchName: "black coffee"), memory: memory)
+        XCTAssertEqual(match?.food.canonicalId, "black-coffee")
+    }
+
+    func testPartialProviderMustPreserveUnknownTextForClarification() async throws {
+        let parse = MealParseResult(
+            detectedItems: [ParsedFoodItem(originalText: "black coffee", canonicalSearchName: "black coffee", quantity: 1, unit: "cup")],
+            unresolvedItems: [], mealDescription: "black coffee", clarificationQuestions: [], confidence: 0.9)
+        let router = DefaultFoodResolutionRouter(catalog: catalog, understanding: StubMealUnderstanding(result: parse))
+        for result in [await router.resolve(text: "black coffee and mysteryfood"),
+                       await router.resolve(parse: parse, originalInput: "black coffee and mysteryfood")] {
+            XCTAssertTrue(result.unresolvedTerms.contains("mysteryfood"))
+            XCTAssertEqual(result.state, .clarificationRequired)
+            XCTAssertTrue(result.clarificationQuestions.contains { $0.contains("mysteryfood") })
+        }
+    }
+
+    func testProviderOriginalSpanCanAccountForLocallyUnknownFood() async throws {
+        let parse = MealParseResult(
+            detectedItems: [ParsedFoodItem(originalText: "mysteryfood", canonicalSearchName: "black coffee", quantity: 1, unit: "cup")],
+            unresolvedItems: [], mealDescription: "black coffee", clarificationQuestions: [], confidence: 0.9)
+        let result = await DefaultFoodResolutionRouter(catalog: catalog).resolve(parse: parse, originalInput: "mysteryfood")
+        XCTAssertTrue(result.unresolvedTerms.isEmpty)
+    }
+
     func testBeverageVariationsNormaliseToCanonicalRecords() {
         let examples: [(String, String)] = [
             ("black coffee", "black-coffee"),
@@ -4592,6 +4648,17 @@ private struct StubFoodImageClassificationService: FoodImageClassificationServic
 
     func candidates(in image: PreparedFoodImage) async throws -> [FoodImageCandidate] {
         candidates
+    }
+}
+
+private struct OutOfOrderNutritionResolver: NutritionResolutionService {
+    let catalog: IndianFoodCatalogService
+
+    func resolve(item: ParsedFoodItem, canonical: CanonicalFoodMatch?) async -> NutritionResolution {
+        if canonical?.food.canonicalId == "black-coffee" {
+            try? await Task.sleep(nanoseconds: 30_000_000)
+        }
+        return await HybridNutritionResolutionService(catalog: catalog).resolve(item: item, canonical: canonical)
     }
 }
 

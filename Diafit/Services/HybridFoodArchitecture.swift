@@ -643,7 +643,9 @@ struct HybridFoodNormalisationService: FoodNormalisationService, Sendable {
             .filter { !$0.isEmpty }
         if let memory {
             for candidate in candidates {
-                if let remembered = await memory.rankedMatches(for: candidate).first,
+                if let remembered = await memory.rankedMatches(for: candidate).first(where: {
+                    FoodInputNormalizer.tokens(for: $0.alias) == FoodInputNormalizer.tokens(for: candidate)
+                }),
                    let food = catalog.food(canonicalID: remembered.canonicalFoodID) {
                     return CanonicalFoodMatch(food: food, matchedAlias: remembered.alias, confidence: 0.99, source: "user-confirmed-memory")
                 }
@@ -1842,8 +1844,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         let matches = resolved.compactMap(\.canonical)
         let questions = clarification.questions(for: parse, matches: matches)
             + localQuestions(for: resolved, input: normalized)
-        let unresolved = parse.unresolvedItems
-            + resolved.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
+        let unresolved = unresolvedTerms(parse: parse, items: resolved, input: originalInput)
         return result(
             text: originalInput,
             normalized: normalized,
@@ -1860,7 +1861,14 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
             return FoodResolutionResult(originalInput: text, normalizedInput: normalized, items: [], unresolvedTerms: [], clarificationQuestions: ["What did you eat or drink?"], overallConfidence: 0, state: .clarificationRequired)
         }
 
-        if let memory, let remembered = await memory.rankedMatches(for: normalized).first,
+        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(text)
+        // A remembered component is not a remembered meal. Only a whole-input
+        // alias may use this shortcut, and fresh quantities always win.
+        if trace.components.count <= 1,
+           !trace.components.contains(where: \.quantityWasExplicit),
+           let memory, let remembered = await memory.rankedMatches(for: normalized).first(where: {
+               normalize($0.alias) == normalized
+           }),
            let food = catalog.food(canonicalID: remembered.canonicalFoodID) {
             let parsed = ParsedFoodItem(originalText: text, canonicalSearchName: food.englishName,
                                         regionalName: remembered.alias, quantity: remembered.servingGrams.map { _ in 1 },
@@ -1871,7 +1879,6 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
             return result(text: text, normalized: normalized, items: [resolvedItem(parsed, match, nutrition, .userSavedFood)], unresolved: [], extraQuestions: [], attemptedAI: false)
         }
 
-        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(text)
         if !trace.components.isEmpty,
            trace.unresolvedTokens.isEmpty,
            trace.components.allSatisfy({ $0.confidenceScore >= 0.8 }) {
@@ -1917,7 +1924,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
                 let resolved = await mergeProviderItemsWithLocal(providerItems, input: text)
                 let matches = resolved.compactMap(\.canonical)
                 let questions = clarification.questions(for: parse, matches: matches) + localQuestions(for: resolved, input: normalized)
-                let unresolved = parse.unresolvedItems + resolved.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
+                let unresolved = unresolvedTerms(parse: parse, items: resolved, input: text)
                 let completed = resolved.map { completeWithCuratedFallback($0) }
                 return result(text: text, normalized: normalized, items: completed, unresolved: Array(Set(unresolved)), extraQuestions: questions, attemptedAI: true)
             } catch {
@@ -1957,7 +1964,7 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
             let aiItems = await mergeProviderItemsWithLocal(providerItems, input: text)
             let questions = clarification.questions(for: parse, matches: aiItems.compactMap(\.canonical))
                 + localQuestions(for: aiItems, input: normalized)
-            let unresolved = parse.unresolvedItems + aiItems.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
+            let unresolved = unresolvedTerms(parse: parse, items: aiItems, input: text)
             return result(text: text, normalized: normalized, items: aiItems, unresolved: Array(Set(unresolved)), extraQuestions: questions, attemptedAI: true)
         } catch {
             FoodLoggingDiagnostics.record("resolution.ai", fields: ["status": "unavailable", "reason": "provider-error", "fallback": "curated"])
@@ -2011,6 +2018,19 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         return merged
     }
 
+    /// Schema-valid AI output can still omit an unknown food. The original
+    /// spans on provider rows must account for locally unrecognised words;
+    /// otherwise they remain visible as a clarification, never a blank success.
+    private func unresolvedTerms(parse: MealParseResult, items: [FoodResolutionItem], input: String) -> [String] {
+        let trace = FoodUnderstandingPipeline(catalog: catalog).parse(input)
+        let covered = Set(parse.detectedItems.flatMap { FoodInputNormalizer.tokens(for: $0.originalText) })
+        let omitted = trace.unresolvedTokens.filter { !covered.contains($0) }.joined(separator: " ")
+        var unresolved = parse.unresolvedItems + items.filter { $0.canonical == nil }.map { $0.parsedItem.originalText }
+        if !omitted.isEmpty { unresolved.append(omitted) }
+        var seen = Set<String>()
+        return unresolved.filter { !$0.isEmpty && seen.insert($0).inserted }
+    }
+
     private func completeWithCuratedFallback(_ item: FoodResolutionItem) -> FoodResolutionItem {
         guard !completeness.evaluate(item).isComplete else { return item }
         let nutrition = fallback.resolve(item: item.parsedItem, canonical: item.canonical)
@@ -2018,8 +2038,8 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
     }
 
     private func resolveLocal(_ components: [ParsedFoodComponent]) async -> [FoodResolutionItem] {
-        await withTaskGroup(of: FoodResolutionItem?.self, returning: [FoodResolutionItem].self) { group in
-            for component in components {
+        await withTaskGroup(of: (Int, FoodResolutionItem).self, returning: [FoodResolutionItem].self) { group in
+            for (index, component) in components.enumerated() {
                 group.addTask {
                     let parsed = ParsedFoodItem(originalText: component.matchedAlias,
                                                 canonicalSearchName: component.food.englishName,
@@ -2033,46 +2053,46 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
                     let match = CanonicalFoodMatch(food: component.food, matchedAlias: component.matchedAlias,
                                                    confidence: component.confidenceScore, source: "local-canonical-catalog")
                     let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
-                    return self.resolvedItem(parsed, match, nutrition, self.route(for: component))
+                    return (index, self.resolvedItem(parsed, match, nutrition, self.route(for: component)))
                 }
             }
-            var output: [FoodResolutionItem] = []
-            for await item in group { if let item { output.append(item) } }
-            return output
+            var output: [(Int, FoodResolutionItem)] = []
+            for await item in group { output.append(item) }
+            return output.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
     }
 
     private func resolveMatches(_ foods: [IndianFoodDefinition], input: String, route: FoodInterpretationRoute) async -> [FoodResolutionItem] {
-        await withTaskGroup(of: FoodResolutionItem?.self, returning: [FoodResolutionItem].self) { group in
-            for food in foods {
+        await withTaskGroup(of: (Int, FoodResolutionItem).self, returning: [FoodResolutionItem].self) { group in
+            for (index, food) in foods.enumerated() {
                 group.addTask {
                     let parsed = ParsedFoodItem(originalText: food.canonicalName, canonicalSearchName: food.englishName,
                                                 quantity: food.standardServing?.quantity ?? 1,
                                                 unit: food.standardServing?.unit.rawValue ?? "serving")
                     let match = CanonicalFoodMatch(food: food, matchedAlias: food.canonicalName, confidence: 0.8, source: "local-fuzzy-catalog")
                     let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
-                    return self.resolvedItem(parsed, match, nutrition, route)
+                    return (index, self.resolvedItem(parsed, match, nutrition, route))
                 }
             }
-            var output: [FoodResolutionItem] = []
-            for await item in group { if let item { output.append(item) } }
-            return output
+            var output: [(Int, FoodResolutionItem)] = []
+            for await item in group { output.append(item) }
+            return output.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
     }
 
     private func resolveAI(_ parse: MealParseResult) async -> [FoodResolutionItem] {
-        await withTaskGroup(of: FoodResolutionItem?.self, returning: [FoodResolutionItem].self) { group in
-            for parsed in parse.detectedItems {
+        await withTaskGroup(of: (Int, FoodResolutionItem).self, returning: [FoodResolutionItem].self) { group in
+            for (index, parsed) in parse.detectedItems.enumerated() {
                 group.addTask {
                     let match = await self.normalisation.match(parsed, memory: self.memory)
                         ?? AIInterpretedCanonicalFoodFactory().match(for: parsed)
                     let nutrition = await self.nutrition.resolve(item: parsed, canonical: match)
-                    return self.resolvedItem(parsed, match, nutrition, .openAI)
+                    return (index, self.resolvedItem(parsed, match, nutrition, .openAI))
                 }
             }
-            var output: [FoodResolutionItem] = []
-            for await item in group { if let item { output.append(item) } }
-            return output
+            var output: [(Int, FoodResolutionItem)] = []
+            for await item in group { output.append(item) }
+            return output.sorted { $0.0 < $1.0 }.map { $0.1 }
         }
     }
 
@@ -2112,7 +2132,8 @@ struct DefaultFoodResolutionRouter: FoodResolutionRouter, Sendable {
         let reviewAssumptions = items.reduce(into: [String]()) { partial, item in
             partial.append(contentsOf: item.nutrition.assumptions.filter { $0.localizedCaseInsensitiveContains("review") })
         }
-        let questions = SemanticQuestionDeduplicator.uniqueStrings(extraQuestions + reviewAssumptions)
+        let unresolvedQuestions = unresolved.isEmpty ? [] : ["What food should I use for \(unresolved.joined(separator: ", "))?"]
+        let questions = SemanticQuestionDeduplicator.uniqueStrings(extraQuestions + reviewAssumptions + unresolvedQuestions)
         let confidence = items.map { $0.parsedItem.confidence }.min() ?? 0
         FoodLoggingDiagnostics.record("resolution.route", fields: [
             "inputFingerprint": FoodLoggingDiagnostics.fingerprint(text),

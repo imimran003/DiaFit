@@ -1,5 +1,17 @@
 # Build log
 
+## 2026-10-02 — Food completeness and rebuild
+
+- Fixed saved-food substring matching that could reduce a compound entry to
+  one food, retained unparsed terms from incomplete AI output, and preserved
+  food ordering across concurrent nutrition lookups.
+- Kept explicit text preparations separate from photo hypotheses and scaled
+  estimated mass when photo count evidence changes the serving count.
+- Repaired the Xcode setup, rebuilt the simulator and signed iPhone targets,
+  and passed 173 unit/integration tests plus the existing UI flows and the
+  new exact-input regression. See [the verification record](QA-2026-10-02.md)
+  for evidence and the outstanding live backend/device requirements.
+
 ## 2026-08-04 — Today experience refinement
 
 - Reworked the Today hierarchy into a calmer daily pulse: a compact date/status header, one intake hero for calories/carbohydrates/protein, adaptive movement and glucose strips, and a clear meal-stream heading.

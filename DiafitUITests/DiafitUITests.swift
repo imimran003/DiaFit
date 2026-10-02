@@ -208,6 +208,27 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(confirm.isEnabled)
     }
 
+    func testMilkTeaCompoundShowsAllFourFoodsBeforeSaving() throws {
+        submitFoodNote("Milk tea without sugar with 2 thin paratha with 1 whole wheat bread and 1 omlet")
+
+        for name in ["Chai with milk", "Paratha", "Whole-wheat bread", "Omelette"] {
+            XCTAssertTrue(app.staticTexts[name].waitForExistence(timeout: 5), "Missing component: \(name)")
+        }
+        XCTAssertEqual(app.textFields["Paratha quantity"].value as? String, "2")
+        XCTAssertEqual(app.textFields["Whole-wheat bread quantity"].value as? String, "1")
+        XCTAssertEqual(app.textFields["Omelette quantity"].value as? String, "1")
+        XCTAssertFalse(metricLabel("meal-total-kcal").contains("—"))
+        XCTAssertFalse(metricLabel("meal-total-carbs").contains("—"))
+        attachScreenshot(named: "four-component-manual-meal")
+        app.buttons["Plain"].tap()
+        let confirm = app.buttons["Confirm estimate"]
+        XCTAssertTrue(confirm.isEnabled)
+        confirm.tap()
+        let saved = app.buttons["Saved meal Chai with milk + Plain paratha + Whole-wheat bread + Omelette"]
+        XCTAssertTrue(saved.waitForExistence(timeout: 5))
+        attachScreenshot(named: "four-component-saved-meal")
+    }
+
     func testFoodQuantitiesAndSugarExclusionStayInFoodRoute() throws {
         submitFoodNote("Sprouts with 2 walnut and 2 almonds and 2 whole boiled eggs with 2 whole wheat bread slice and 1 milk tea without sugar")
 
