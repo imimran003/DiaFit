@@ -569,6 +569,39 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(result.state, .readyForReview)
     }
 
+    func testTypedPistaAndPistacioResolveWithCountAndFibre() async throws {
+        for alias in ["pista", "pistas", "pistacio", "pistachio", "pistachios"] {
+            XCTAssertEqual(catalog.normalise(alias)?.canonicalId, "pistachio", "Missing typed alias \(alias)")
+        }
+
+        let router = DefaultFoodResolutionRouter(understanding: nil)
+        let result = await router.resolve(text: "20 pista")
+        let pistachios = try XCTUnwrap(result.items.first)
+        XCTAssertEqual(pistachios.canonical?.food.canonicalId, "pistachio")
+        XCTAssertEqual(pistachios.parsedItem.quantity, 20)
+        XCTAssertEqual(pistachios.nutrition.estimatedGrams ?? -1, 14, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(pistachios.nutrition.lookup.values.caloriesKcal), 78.4, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(pistachios.nutrition.lookup.values.fibreGrams), 1.484, accuracy: 0.001)
+        XCTAssertFalse(result.requiresClarification)
+        XCTAssertEqual(result.state, .readyForReview)
+    }
+
+    func testTypedHandfullOfPistaUsesNutPortionInsteadOfOneKernel() async throws {
+        let router = DefaultFoodResolutionRouter(understanding: nil)
+        let result = await router.resolve(text: "I had handfull of pista")
+
+        let pistachios = try XCTUnwrap(result.items.first)
+        XCTAssertEqual(pistachios.canonical?.food.canonicalId, "pistachio")
+        XCTAssertEqual(pistachios.parsedItem.unit, "grams")
+        XCTAssertEqual(pistachios.parsedItem.quantity ?? -1, 28.35, accuracy: 0.001)
+        XCTAssertEqual(pistachios.nutrition.estimatedGrams ?? -1, 28.35, accuracy: 0.001)
+        XCTAssertEqual(try XCTUnwrap(pistachios.nutrition.lookup.values.caloriesKcal), 158.76, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(pistachios.nutrition.lookup.values.fibreGrams), 3.0051, accuracy: 0.001)
+        XCTAssertTrue(result.unresolvedTerms.isEmpty)
+        XCTAssertFalse(result.requiresClarification)
+        XCTAssertEqual(result.state, .readyForReview)
+    }
+
     func testHybridCoordinatorPreservesInteractiveChaiAndParathaQuestions() async throws {
         let coordinator = HybridMealAnalysisCoordinator(
             router: DefaultFoodResolutionRouter(understanding: nil)

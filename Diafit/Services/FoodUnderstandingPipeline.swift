@@ -160,6 +160,7 @@ struct FoodUnderstandingPipeline: Sendable {
             // separate food noun. Keeping them structural prevents a valid
             // compound meal from being downgraded to a partial match.
             "thin", "thick", "small", "medium", "large", "mini", "big", "homemade", "home", "style",
+            "handful", "handfuls", "handfull", "handfulls",
             "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten", "half",
             "quarter", "pair", "couple", "scoop", "scoops", "serving", "servings", "bowl", "bowls",
             "katori", "katoris", "cup", "cups", "glass", "glasses", "piece", "pieces", "slice", "slices",
@@ -343,6 +344,7 @@ private struct ParsedQuantity: Sendable {
 }
 
 private enum QuantityExtractor {
+    private static let handfulWords: Set<String> = ["handful", "handfuls", "handfull", "handfulls"]
     private static let unitWords: [String: ServingUnit] = [
         "scoop": .scoop, "scoops": .scoop,
         "egg": .wholeEgg, "eggs": .wholeEgg,
@@ -380,13 +382,13 @@ private enum QuantityExtractor {
         let prefix = Array(tokens[scope.lowerBound..<componentStart])
         let suffix = Array(tokens[componentEnd..<scope.upperBound])
 
-        if let explicit = explicitQuantity(in: prefix, defaultUnit: defaultUnit, allowsBareNumber: true) {
+        if let explicit = explicitQuantity(in: prefix, defaultUnit: defaultUnit, food: food, allowsBareNumber: true) {
             return explicit
         }
         // Post-positive quantities are accepted only with a serving unit. This
         // supports `whey 2 scoops` without treating trailing times or prose as
         // the amount of the food.
-        if let explicit = explicitQuantity(in: suffix, defaultUnit: defaultUnit, allowsBareNumber: false) {
+        if let explicit = explicitQuantity(in: suffix, defaultUnit: defaultUnit, food: food, allowsBareNumber: false) {
             return explicit
         }
         return ParsedQuantity(quantity: defaultQuantity, unit: defaultUnit, wasExplicit: false)
@@ -395,9 +397,15 @@ private enum QuantityExtractor {
     private static func explicitQuantity(
         in context: [String],
         defaultUnit: ServingUnit,
+        food: IndianFoodDefinition,
         allowsBareNumber: Bool
     ) -> ParsedQuantity? {
         guard !context.isEmpty else { return nil }
+        if let handfulIndex = context.lastIndex(where: handfulWords.contains),
+           food.possibleAllergens.contains(where: { $0 == "tree nuts" || $0 == "peanuts" }) {
+            let count = number(in: Array(context[..<handfulIndex])) ?? 1
+            return ParsedQuantity(quantity: count * 28.35, unit: .grams, wasExplicit: true)
+        }
         if let unitIndex = context.lastIndex(where: { unitWords[$0] != nil }) {
             let precedingToken = unitIndex > 0 ? context[unitIndex - 1] : context[unitIndex]
             let unitToken = context[unitIndex]
