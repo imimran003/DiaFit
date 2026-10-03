@@ -65,9 +65,21 @@ struct RootExperience: View {
             }
         }
         .onAppear {
-            selectedDayID = selectedDayID ?? store.days.last?.id
+            selectedDayID = selectedDayID ?? todayDayID ?? store.days.last?.id
+        }
+        .onChange(of: selectedSection) { _, section in
+            // Returning to the Today tab is an explicit request to see the
+            // current day, even if the user swiped the page view to an older
+            // entry before leaving the tab.
+            if section == .today {
+                selectedDayID = todayDayID ?? store.days.last?.id
+            }
         }
         .animation(.spring(response: 0.52, dampingFraction: 0.86), value: atlasIsOpen)
+    }
+
+    private var todayDayID: Day.ID? {
+        store.days.first { Calendar.autoupdatingCurrent.isDateInToday($0.date) }?.id
     }
 
     private var activeDay: Day? {
