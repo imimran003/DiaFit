@@ -96,6 +96,24 @@ struct MealMomentView: View {
         }
         .buttonStyle(PressableStyle(pressedScale: 0.985))
         .contentShape(RoundedRectangle(cornerRadius: 31, style: .continuous))
+        .overlay(alignment: .topTrailing) {
+            Menu {
+                if meal.analysis != nil {
+                    Button("Refine estimate", systemImage: "slider.horizontal.3") { edit(meal) }
+                }
+                Button("Delete meal", systemImage: "trash", role: .destructive) { delete(meal) }
+            } label: {
+                Image(systemName: "ellipsis")
+                    .font(.system(size: 16, weight: .bold))
+                    .foregroundStyle(Color.ink)
+                    .frame(width: 42, height: 42)
+                    .background(.regularMaterial, in: Circle())
+                    .overlay(Circle().stroke(Color.rule.opacity(0.65), lineWidth: 1))
+            }
+            .buttonStyle(PressableStyle(pressedScale: 0.88))
+            .padding(13)
+            .accessibilityLabel("Meal actions")
+        }
         .accessibilityHint("Double tap to reveal meal details")
         .accessibilityIdentifier("Saved meal \(meal.title)")
         .accessibilityLabel("\(meal.mealType), saved meal \(meal.title), \(meal.energy) kcal")
