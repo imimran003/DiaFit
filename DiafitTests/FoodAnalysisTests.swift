@@ -3076,6 +3076,34 @@ final class FoodAnalysisTests: XCTestCase {
     }
 
     @MainActor
+    func testDisabledHostedVisualProviderUsesFallbackInsteadOfRetryState() async throws {
+        let result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "sprouts with 3 boiled eggs")
+        let draft = MealAnalysisDraft(result: result)
+        let itemID = UUID()
+        let day = Day(
+            id: UUID(), date: .now,
+            messages: [ThreadItem(id: itemID, kind: .mealAnalysis(draft))],
+            energyGoal: 2_000, carbohydrateGoal: 180
+        )
+        let store = DiaryStore(days: [day])
+        let service = MealVisualGenerationService(
+            generator: TestMealVisualGenerator(mode: .notConfigured),
+            assets: .live(),
+            ledger: MealVisualRequestLedger()
+        )
+
+        await service.prepare(draft: draft, itemID: itemID, in: store, dayID: day.id)
+
+        guard case .mealAnalysis(let updated)? = store.day(id: day.id)?.messages.first?.kind else {
+            return XCTFail("Expected an updated review draft")
+        }
+        XCTAssertEqual(updated.result.visualRequest?.state, .deterministicFallback)
+        XCTAssertNil(updated.result.generatedVisualAsset)
+        XCTAssertTrue(updated.result.visualRequest?.failureReason?.contains("not enabled") == true)
+    }
+
+    @MainActor
     func testGeneratedVisualAttachesToConfirmedMatchingMealAndPersistsReference() async throws {
         let result = LocalMealAnalysisEngine(catalog: catalog)
             .makeAnalysis(description: "sprouts with 3 boiled eggs")
@@ -4929,12 +4957,13 @@ private struct AlwaysFailingDiaryPersistence: DiaryPersisting {
 }
 
 private struct TestMealVisualGenerator: MealVisualGenerating {
-    enum Mode: Sendable { case success, mismatchedMeal }
+    enum Mode: Sendable { case success, mismatchedMeal, notConfigured }
 
     let mode: Mode
     let isConfigured = true
 
     func generate(_ request: MealVisualRequest) async throws -> GeneratedMealVisual {
+        if mode == .notConfigured { throw MealVisualGenerationError.notConfigured }
         // Valid 1×1 transparent PNG. Core tests validate association and cache
         // behavior without depending on a live image model.
         let png = Data(base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL5WQAAAABJRU5ErkJggg==")!

@@ -135,6 +135,42 @@ await fetchWithRetry(
 );
 assert.equal(directRetryAttempts, 2);
 
+let stalledAttempts = 0;
+const recovered = await fetchWithRetry(
+  async () => {
+    stalledAttempts += 1;
+    if (stalledAttempts === 1) return new Promise(() => {});
+    return { ok: true, status: 200 };
+  },
+  'https://provider.test',
+  { method: 'POST', body: 'same-body' },
+  { maxAttempts: 2, retryBaseDelayMs: 0, attemptTimeoutMs: 20 }
+);
+assert.equal(stalledAttempts, 2);
+assert.equal(recovered.status, 200);
+
+let stalledBodyAttempts = 0;
+const recoveredGemini = new GeminiMealParser({
+  apiKey: 'server-only-test-key',
+  maxAttempts: 2,
+  retryBaseDelayMs: 0,
+  attemptTimeoutMs: 20,
+  fetchImpl: async () => {
+    stalledBodyAttempts += 1;
+    return {
+      ok: true,
+      status: 200,
+      async json() {
+        if (stalledBodyAttempts === 1) return new Promise(() => {});
+        return { candidates: [{ content: { parts: [{ text: JSON.stringify(parsed) }] } }] };
+      }
+    };
+  }
+});
+const recoveredMeal = await recoveredGemini.parse({ text: 'sprouts with eggs' });
+assert.equal(stalledBodyAttempts, 2);
+assert.equal(recoveredMeal.detectedItems[0].canonicalSearchName, 'mung bean sprouts');
+
 const cancelledProvider = new AbortController();
 cancelledProvider.abort();
 let cancelledAttempts = 0;

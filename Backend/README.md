@@ -27,6 +27,7 @@ fast path when that evidence is missing, contradictory, or low confidence; it
 returns a recoverable review instead of presenting a salient garnish as the
 whole meal. Provider transport retries are bounded by
 `MEAL_PARSE_PROVIDER_ATTEMPTS` (1–3, default 2) and
+`MEAL_PARSE_PROVIDER_ATTEMPT_TIMEOUT_MS` (default 40 seconds, including the response body) and
 `MEAL_PARSE_RETRY_BASE_MS` (default 250 ms), and stop when the route aborts.
 
 The Gemini free tier is suitable for development and personal testing, subject to Google's current quotas and data-use terms. It is not an unlimited production service. Keep the key out of the iOS target and Git, and obtain explicit consent before uploading a meal photo. For a local free-tier run, copy `.env.example` to the ignored `.env`, set `DIAFIT_MEAL_PARSER_MODE=gemini`, and add `GEMINI_API_KEY` there.

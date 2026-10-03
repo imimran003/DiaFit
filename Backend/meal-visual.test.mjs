@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { GeminiMealVisualGenerator, validateMealVisualRequest } from './meal-visual.mjs';
+import { DisabledMealVisualGenerator, GeminiMealVisualGenerator, validateMealVisualRequest } from './meal-visual.mjs';
 
 const request = {
   apiVersion: 'v1',
@@ -71,5 +71,12 @@ test('rejects malformed provider image output', async () => {
   await assert.rejects(
     () => generator.generate(request),
     error => error.code === 'malformed_visual_response'
+  );
+});
+
+test('disabled image generation reports an intentional configuration state', async () => {
+  await assert.rejects(
+    () => new DisabledMealVisualGenerator().generate(request),
+    error => error.statusCode === 503 && error.code === 'visual_not_configured'
   );
 });

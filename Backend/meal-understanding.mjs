@@ -321,7 +321,8 @@ export class GeminiMealParser {
     fetchImpl = globalThis.fetch,
     endpointBase = 'https://generativelanguage.googleapis.com/v1beta/models',
     maxAttempts = providerAttemptCount(),
-    retryBaseDelayMs = providerRetryBaseDelay()
+    retryBaseDelayMs = providerRetryBaseDelay(),
+    attemptTimeoutMs = providerAttemptTimeout()
   } = {}) {
     this.apiKey = apiKey;
     this.model = model;
@@ -329,6 +330,7 @@ export class GeminiMealParser {
     this.endpoint = `${endpointBase}/${encodeURIComponent(model)}:generateContent`;
     this.maxAttempts = maxAttempts;
     this.retryBaseDelayMs = retryBaseDelayMs;
+    this.attemptTimeoutMs = attemptTimeoutMs;
   }
 
   async parse(input, { signal } = {}) {
@@ -337,14 +339,25 @@ export class GeminiMealParser {
     const payload = buildGeminiMealParseRequest(input);
     let response;
     try {
-      response = await fetchWithRetry(this.fetch, this.endpoint, {
+      response = await fetchWithRetry(async (url, options) => {
+        const upstream = await this.fetch(url, options);
+        if (!upstream?.ok) return upstream;
+        // Include body decoding in this attempt's deadline. Hosted proxies
+        // can return headers before the Gemini JSON is actually available.
+        let document;
+        try { document = await upstream.json(); }
+        catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned invalid JSON.', error); }
+        return { ok: true, status: upstream.status, document };
+      }, this.endpoint, {
         method: 'POST',
         headers: { 'x-goog-api-key': this.apiKey, 'content-type': 'application/json' },
         body: JSON.stringify(payload),
         signal
-      }, { maxAttempts: this.maxAttempts, retryBaseDelayMs: this.retryBaseDelayMs, signal });
+      }, { maxAttempts: this.maxAttempts, retryBaseDelayMs: this.retryBaseDelayMs,
+        attemptTimeoutMs: this.attemptTimeoutMs, signal });
     } catch (error) {
       if (signal?.aborted) throw error;
+      if (error?.statusCode) throw error;
       throw providerError(503, 'provider_unavailable', 'Meal understanding provider could not be reached.', error);
     }
     if (!response?.ok) {
@@ -352,8 +365,7 @@ export class GeminiMealParser {
       const status = response?.status === 429 ? 429 : 502;
       throw providerError(status, status === 429 ? 'provider_rate_limited' : 'provider_error', 'Meal understanding provider rejected the request.', detail);
     }
-    let document;
-    try { document = await response.json(); } catch (error) { throw providerError(502, 'malformed_provider_response', 'Meal understanding provider returned invalid JSON.', error); }
+    const document = response.document;
     const raw = document?.candidates?.[0]?.content?.parts
       ?.filter(part => typeof part?.text === 'string')
       .map(part => part.text)
@@ -870,6 +882,7 @@ async function safeResponseText(response) {
 export async function fetchWithRetry(fetchImpl, url, options, {
   maxAttempts = providerAttemptCount(),
   retryBaseDelayMs = providerRetryBaseDelay(),
+  attemptTimeoutMs = 0,
   signal
 } = {}) {
   const attempts = Math.max(1, Math.min(3, Number(maxAttempts) || 1));
@@ -878,7 +891,7 @@ export async function fetchWithRetry(fetchImpl, url, options, {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     if (signal?.aborted) throw abortError();
     try {
-      const response = await fetchImpl(url, options);
+      const response = await fetchAttemptWithDeadline(fetchImpl, url, options, attemptTimeoutMs, signal);
       if (attempt + 1 >= attempts || !retryableProviderStatus(response?.status)) return response;
       const retryAfter = retryAfterMilliseconds(response);
       await waitForRetry(retryAfter ?? baseDelay * (2 ** attempt), signal);
@@ -890,6 +903,33 @@ export async function fetchWithRetry(fetchImpl, url, options, {
     }
   }
   throw lastError ?? new Error('Provider request failed.');
+}
+
+async function fetchAttemptWithDeadline(fetchImpl, url, options, timeoutMs, signal) {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return fetchImpl(url, options);
+  const controller = new AbortController();
+  let timer;
+  let rejectDeadline;
+  const deadline = new Promise((_, reject) => { rejectDeadline = reject; });
+  const onAbort = () => {
+    rejectDeadline(abortError());
+    controller.abort();
+  };
+  if (signal?.aborted) throw abortError();
+  signal?.addEventListener('abort', onAbort, { once: true });
+  timer = setTimeout(() => {
+    rejectDeadline(Object.assign(new Error('Provider attempt timed out.'), { code: 'ETIMEDOUT' }));
+    controller.abort();
+  }, timeoutMs);
+  try {
+    return await Promise.race([
+      fetchImpl(url, { ...options, signal: controller.signal }),
+      deadline
+    ]);
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener('abort', onAbort);
+  }
 }
 
 function retryableProviderStatus(status) {
@@ -935,6 +975,10 @@ function providerAttemptCount() {
 function providerRetryBaseDelay() {
   const value = Number(process.env.MEAL_PARSE_RETRY_BASE_MS ?? 250);
   return Number.isFinite(value) ? Math.max(0, Math.min(2_000, value)) : 250;
+}
+function providerAttemptTimeout() {
+  const value = Number(process.env.MEAL_PARSE_PROVIDER_ATTEMPT_TIMEOUT_MS ?? 40_000);
+  return Number.isFinite(value) ? Math.max(1_000, Math.min(80_000, value)) : 40_000;
 }
 
 function providerError(statusCode, code, message, cause) { return Object.assign(new Error(message), { statusCode, code, expose: true, cause }); }

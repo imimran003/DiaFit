@@ -1,6 +1,7 @@
 import Foundation
 
 enum MealVisualGenerationError: LocalizedError, Equatable {
+    case notConfigured
     case providerUnavailable
     case invalidAssociation
     case invalidImagePayload
@@ -8,6 +9,8 @@ enum MealVisualGenerationError: LocalizedError, Equatable {
 
     var errorDescription: String? {
         switch self {
+        case .notConfigured:
+            return "Generated meal photos are not enabled. A food composition is shown instead."
         case .providerUnavailable:
             return "Editorial image generation is unavailable. The verified component visual is still available."
         case .invalidAssociation:
@@ -76,6 +79,13 @@ struct BackendMealVisualGenerator: MealVisualGenerating {
         ))
 
         let (data, response) = try await session.data(for: urlRequest)
+        if let http = response as? HTTPURLResponse, http.statusCode == 503,
+           let errorBody = try? JSONDecoder().decode(ErrorBody.self, from: data),
+           errorBody.error == "visual_not_configured"
+            || (errorBody.error == "visual_provider_unavailable"
+                && errorBody.message == "Meal image generation is not configured.") {
+            throw MealVisualGenerationError.notConfigured
+        }
         guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode),
               let body = try? JSONDecoder().decode(ResponseBody.self, from: data),
               let imageData = Data(base64Encoded: body.imageBase64) else {
@@ -107,6 +117,11 @@ struct BackendMealVisualGenerator: MealVisualGenerating {
         let cacheKey: String
         let mimeType: String
         let imageBase64: String
+    }
+
+    private struct ErrorBody: Decodable {
+        let error: String
+        let message: String?
     }
 }
 
@@ -315,7 +330,8 @@ struct MealVisualGenerationService: Sendable {
                 cacheKey: request.cacheKey,
                 requestID: request.requestID
             ) else { return }
-            request.state = .failed
+            request.state = (error as? MealVisualGenerationError) == .notConfigured
+                ? .deterministicFallback : .failed
             request.failureReason = (error as? LocalizedError)?.errorDescription
                 ?? "Editorial image generation failed. Your nutrition draft is unaffected."
             apply(request: request, asset: nil, to: draft, itemID: itemID, in: diary, dayID: dayID)

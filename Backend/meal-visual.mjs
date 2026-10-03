@@ -58,7 +58,7 @@ export class GeminiMealVisualGenerator {
 
 export class DisabledMealVisualGenerator {
   async generate() {
-    throw serviceError(503, 'visual_provider_unavailable', 'Meal image generation is not configured.', true);
+    throw serviceError(503, 'visual_not_configured', 'Meal image generation is not configured.', true);
   }
 }
 

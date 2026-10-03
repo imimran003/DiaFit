@@ -38,5 +38,7 @@ services:
         value: 90000
       - key: MEAL_PARSE_PROVIDER_ATTEMPTS
         value: 2
+      - key: MEAL_PARSE_PROVIDER_ATTEMPT_TIMEOUT_MS
+        value: 40000
       - key: MEAL_PARSE_RETRY_BASE_MS
         value: 250

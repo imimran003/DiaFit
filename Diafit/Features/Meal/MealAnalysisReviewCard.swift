@@ -625,7 +625,7 @@ private struct MealVisualRequestStatus: View {
                     .lineLimit(2)
             }
             Spacer(minLength: 6)
-            if request.state == .failed || request.state == .deterministicFallback {
+            if request.state == .failed {
                 Button("Retry", action: retry)
                     .font(.system(size: 11, weight: .bold, design: .rounded))
                     .foregroundStyle(Color.ink)
@@ -645,7 +645,7 @@ private struct MealVisualRequestStatus: View {
         switch request.state {
         case .queued: return "MEAL VISUAL PREPARING"
         case .waitingForClarification: return "VISUAL WAITING FOR DETAILS"
-        case .deterministicFallback: return "MEAL VISUAL READY"
+        case .deterministicFallback: return "FOOD VISUAL READY"
         case .ready: return "EDITORIAL MEAL VISUAL READY"
         case .failed: return "IMAGE UNAVAILABLE"
         }
@@ -660,7 +660,7 @@ private struct MealVisualRequestStatus: View {
             }
             return "Review the highlighted meal details before creating the visual."
         case .deterministicFallback:
-            return "A verified component composition is shown while image generation is unavailable."
+            return "Generated meal photos are off. A food composition is shown instead."
         case .ready:
             return "The quantity-aware editorial image is saved with this meal."
         case .failed:
