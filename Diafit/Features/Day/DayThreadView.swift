@@ -14,6 +14,7 @@ struct DayThreadView: View {
     @State private var showsPhotoInput = false
     @State private var mealBeingEdited: Meal?
     @State private var mealPendingDeletion: Meal?
+    @State private var messagePendingDeletion: ThreadItem?
     @State private var showsGlucoseEntry = false
     @State private var showsGlucoseHistory = false
     @State private var glucoseDraft: GlucoseDraft?
@@ -95,6 +96,9 @@ struct DayThreadView: View {
                                     },
                                     deleteMeal: { meal in
                                         mealPendingDeletion = meal
+                                    },
+                                    deleteMessage: { message in
+                                        messagePendingDeletion = message
                                     },
                                     associatedGlucoseReadings: {
                                         if case .meal(let meal) = item.kind {
@@ -213,6 +217,18 @@ struct DayThreadView: View {
             Button("Cancel", role: .cancel) { mealPendingDeletion = nil }
         } message: { meal in
             Text("\(meal.title) will be removed from this day. This can’t be undone in the current session.")
+        }
+        .alert("Delete this entry?", isPresented: Binding(
+            get: { messagePendingDeletion != nil },
+            set: { if !$0 { messagePendingDeletion = nil } }
+        ), presenting: messagePendingDeletion) { message in
+            Button("Delete", role: .destructive) {
+                store.remove(itemID: message.id, from: dayID)
+                messagePendingDeletion = nil
+            }
+            Button("Cancel", role: .cancel) { messagePendingDeletion = nil }
+        } message: { _ in
+            Text("This unrecorded entry will be removed from the conversation. No nutrition totals are affected.")
         }
         .task(id: dayID) {
             await loadHealthActivity()

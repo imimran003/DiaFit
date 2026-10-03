@@ -11,6 +11,7 @@ struct ThreadItemView: View {
     let retryDraftVisual: (MealAnalysisDraft) -> Void
     let editMeal: (Meal) -> Void
     let deleteMeal: (Meal) -> Void
+    let deleteMessage: (ThreadItem) -> Void
     var associatedGlucoseReadings: [GlucoseReading] = []
 
     var body: some View {
@@ -18,7 +19,9 @@ struct ThreadItemView: View {
         case .agent(let text, let tools):
             AgentMessage(text: text, tools: tools)
         case .person(let text):
-            PersonMessage(text: text)
+            PersonMessage(text: text) {
+                deleteMessage(item)
+            }
         case .meal(let meal):
             MealMomentView(
                 meal: meal,
@@ -94,6 +97,7 @@ private struct AgentMessage: View {
 
 private struct PersonMessage: View {
     let text: String
+    let delete: () -> Void
 
     var body: some View {
         Text(text)
@@ -106,8 +110,12 @@ private struct PersonMessage: View {
                 RoundedRectangle(cornerRadius: 20, style: .continuous)
                     .stroke(Color.rule.opacity(0.68), lineWidth: 0.8)
             }
-            .frame(maxWidth: .infinity, alignment: .trailing)
-            .padding(.leading, 58)
+        .frame(maxWidth: .infinity, alignment: .trailing)
+        .padding(.leading, 58)
+        .contextMenu {
+            Button("Delete entry", systemImage: "trash", role: .destructive, action: delete)
+        }
+        .accessibilityHint("Long press to delete this unrecorded entry")
     }
 }
 
