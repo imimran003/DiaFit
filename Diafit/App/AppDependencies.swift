@@ -74,7 +74,11 @@ struct AppDependencies: Sendable {
             )
         }
         let mealVisuals: MealVisualGenerationService
-        if let backendConfiguration {
+        // Free mode uses the local verified food composition immediately.
+        // Remote editorial images are paid and opt-in, so a disabled backend
+        // must never add a network wait to an otherwise complete meal review.
+        let remoteMealVisualsEnabled = environment["DIAFIT_ENABLE_AI_MEAL_VISUALS"] == "1"
+        if let backendConfiguration, remoteMealVisualsEnabled {
             mealVisuals = MealVisualGenerationService(
                 generator: BackendMealVisualGenerator(
                     endpoint: backendConfiguration.endpoint,
