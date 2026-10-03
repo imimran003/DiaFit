@@ -638,6 +638,32 @@ struct HybridFoodNormalisationService: FoodNormalisationService, Sendable {
     /// Confirmed member aliases outrank fuzzy catalog matches while retaining
     /// the catalog as the source of canonical metadata.
     func match(_ item: ParsedFoodItem, memory: UserFoodMemoryRepository?) async -> CanonicalFoodMatch? {
+        // A generic AI search term such as "yogurt" must not replace the
+        // identity of a photographed, branded package with plain dahi.
+        if item.isPackagedProduct == true,
+           let productName = item.productName?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !productName.isEmpty {
+            let identityParts = [item.brand, productName, item.flavour].compactMap { $0 }
+            let queries = [
+                identityParts.joined(separator: " "),
+                [productName, item.flavour].compactMap { $0 }.joined(separator: " "),
+                productName,
+                item.originalText
+            ]
+            for query in queries {
+                let queryTokens = FoodInputNormalizer.tokens(for: query).sorted()
+                guard queryTokens.count >= 2 else { continue }
+                if let food = catalog.foods.first(where: { food in
+                    ([food.canonicalName] + food.aliases).contains {
+                        FoodInputNormalizer.tokens(for: $0).sorted() == queryTokens
+                    }
+                }) {
+                    return CanonicalFoodMatch(food: food, matchedAlias: query,
+                                              confidence: item.confidence, source: "exact-packaged-product")
+                }
+            }
+            return nil
+        }
         let candidates = [item.canonicalSearchName, item.regionalName, item.originalText]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
@@ -690,12 +716,15 @@ struct AIInterpretedCanonicalFoodFactory: Sendable {
         let searchName = item.canonicalSearchName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard item.confidence >= 0.60, category != .unknown, !searchName.isEmpty else { return nil }
 
-        let displayName = [item.regionalName, item.originalText, item.canonicalSearchName]
+        let packagedName = item.isPackagedProduct == true
+            ? [item.brand, item.productName, item.flavour].compactMap { $0 }.joined(separator: " ")
+            : ""
+        let displayName = [packagedName, item.regionalName, item.originalText, item.canonicalSearchName]
             .compactMap { $0?.trimmingCharacters(in: .whitespacesAndNewlines) }
             .first(where: { !$0.isEmpty }) ?? searchName
         let unit = servingUnit(item.unit, category: category) ?? .serving
         let food = IndianFoodDefinition(
-            canonicalId: "interpreted.\(slug(searchName))",
+            canonicalId: "interpreted.\(slug(displayName))",
             canonicalName: displayName,
             regionalNames: item.regionalName.map { [$0] } ?? [],
             englishName: searchName,
@@ -1343,6 +1372,19 @@ struct CuratedNutritionFallbackService: Sendable {
         let label = labelAssessment.evidence
         let estimateAssessment = assessAIEstimate(item.aiNutritionEstimate)
         let aiEstimate = estimateAssessment.estimate
+        let hasProductNutrition = item.isPackagedProduct == true
+            && canonical.food.confidence == .high
+            && canonical.food.nutritionPer100Grams?.hasCompleteCoreNutrients == true
+        if item.isPackagedProduct == true && canonical.source == "structured-ai-provisional-identity"
+            && aiEstimate == nil {
+            var missingProductAssumptions = [
+                "The package was recognised, but complete nutrition for this exact product was not available. Photograph its nutrition panel before confirming it."
+            ]
+            if estimateAssessment.wasRejected {
+                missingProductAssumptions.append("The AI nutrition estimate failed plausibility checks and was ignored.")
+            }
+            return unavailable(item: item, assumptions: missingProductAssumptions)
+        }
         let labelGrams = label.flatMap {
             evidenceGrams(
                 basis: $0.basis.rawValue,
@@ -1361,7 +1403,17 @@ struct CuratedNutritionFallbackService: Sendable {
                 servingUnit: servingUnit
             )
         }
-        let grams = item.estimatedGrams
+        // For an exact, published package match, the known package weight is
+        // stronger evidence than a vision model's rough 150 g cup estimate.
+        // Explicit gram-based portions still use the requested weight.
+        let productServingGrams: Double? = {
+            guard hasProductNutrition, servingUnit == .serving,
+                  let serving = canonical.food.standardServing,
+                  let servingGrams = serving.grams, serving.quantity > 0 else { return nil }
+            return servingGrams * amount / serving.quantity
+        }()
+        let grams = productServingGrams
+            ?? item.estimatedGrams
             ?? labelGrams
             ?? estimateGrams
             ?? portions.estimatedWeight(quantity: amount, unit: servingUnit, food: canonical.food)
@@ -1372,7 +1424,10 @@ struct CuratedNutritionFallbackService: Sendable {
         var assumptions: [String]
         let ingredientFoods = canonical.food.commonIngredients.compactMap(ingredientFood)
             .filter { $0.nutritionPer100Grams != nil }
-        if !ingredientFoods.isEmpty {
+        if hasProductNutrition, let per100 = canonical.food.nutritionPer100Grams {
+            fallbackValues = per100.scaled(by: grams / 100)
+            assumptions = ["Using the product-specific nutrition published by \(canonical.food.dataSource ?? "the manufacturer")."]
+        } else if !ingredientFoods.isEmpty {
             let gramsPerIngredient = grams / Double(ingredientFoods.count)
             fallbackValues = NutritionValues.total(of: ingredientFoods.map { food in
                 food.nutritionPer100Grams?.scaled(by: gramsPerIngredient / 100) ?? .unavailable
@@ -1391,10 +1446,12 @@ struct CuratedNutritionFallbackService: Sendable {
 
         var values = fallbackValues
         let provenance: NutritionProvenance
-        if let aiEstimate {
+        if let aiEstimate, !hasProductNutrition {
             values = values.fillingMissingValues(from: aiValues(aiEstimate, amount: amount, servingUnit: servingUnit, estimatedGrams: grams))
             assumptions.append(contentsOf: aiEstimate.assumptions)
             assumptions.append("AI estimated nutrients that were not visible on the package. These values are editable and are not verified label data.")
+        } else if aiEstimate != nil && hasProductNutrition {
+            assumptions.append("An AI nutrition estimate was ignored in favour of the product-specific published nutrition.")
         } else if estimateAssessment.wasRejected {
             assumptions.append("The AI nutrition estimate failed plausibility checks and was ignored; a conservative curated estimate is shown instead.")
         }
@@ -1402,24 +1459,29 @@ struct CuratedNutritionFallbackService: Sendable {
             let printed = labelValues(label, amount: amount, servingUnit: servingUnit, estimatedGrams: grams)
             values = values.fillingMissingValues(from: printed)
             assumptions.append("Visible package text reports \(label.evidenceText); printed values take priority over the editable fallback.")
-            if printed.caloriesKcal == nil || printed.carbohydrateGrams == nil || printed.proteinGrams == nil {
+            if !hasProductNutrition && (printed.caloriesKcal == nil || printed.carbohydrateGrams == nil || printed.proteinGrams == nil) {
                 assumptions.append("Photograph the nutrition panel for complete package values; unprinted nutrients are currently estimated.")
             }
             let completeCore = printed.caloriesKcal != nil && printed.carbohydrateGrams != nil && printed.proteinGrams != nil
             provenance = NutritionProvenance(
-                kind: aiEstimate == nil ? .packagedLabel : .modelFallback,
-                dataSource: completeCore
+                kind: hasProductNutrition || aiEstimate == nil ? .packagedLabel : .modelFallback,
+                dataSource: hasProductNutrition
+                    ? "Visible package claim + \(canonical.food.dataSource ?? "manufacturer nutrition label")"
+                    : completeCore
                     ? "Visible package nutrition label"
                     : (aiEstimate == nil ? "Visible package claim + Diafit curated fallback" : "Visible package claim + AI nutrition estimate"),
-                dataVersion: nil,
-                confidence: completeCore ? .medium : .low
+                dataVersion: hasProductNutrition ? canonical.food.dataVersion : nil,
+                confidence: hasProductNutrition ? .high : (completeCore ? .medium : .low)
             )
         } else {
             if labelAssessment.wasRejected {
                 assumptions.append("Unclear or invalid package-label text was ignored; review the editable estimate or photograph the nutrition panel.")
             }
-            provenance = aiEstimate == nil
-                ? NutritionProvenance(kind: .curatedRecipeEstimate, dataSource: "Diafit curated fallback", dataVersion: catalog.version, confidence: .low)
+            provenance = aiEstimate == nil || hasProductNutrition
+                ? NutritionProvenance(kind: .curatedRecipeEstimate,
+                                      dataSource: hasProductNutrition ? (canonical.food.dataSource ?? "Manufacturer nutrition label") : "Diafit curated fallback",
+                                      dataVersion: hasProductNutrition ? canonical.food.dataVersion : catalog.version,
+                                      confidence: hasProductNutrition ? .high : .low)
                 : NutritionProvenance(kind: .modelFallback, dataSource: "Backend AI package estimate", dataVersion: nil, confidence: .low)
         }
 

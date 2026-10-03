@@ -2060,6 +2060,90 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertTrue(product.assumptions.contains { $0.localizedCaseInsensitiveContains("not verified label data") })
     }
 
+    func testYoPROStracciatellaPhotoUsesExactProductNutritionInsteadOfDahi() async throws {
+        let item = ParsedFoodItem(
+            originalText: "YoPRO stracciatella yogurt",
+            canonicalSearchName: "yogurt",
+            regionalName: "jogurt",
+            category: .dairyOrSide,
+            quantity: 1,
+            unit: "package",
+            estimatedGrams: 150,
+            brand: "Danone",
+            productName: "YoPRO",
+            flavour: "stracciatella",
+            confidence: 0.95,
+            isPackagedProduct: true,
+            packagedLabelEvidence: PackagedLabelEvidence(
+                basis: .frontOfPackClaim,
+                proteinGrams: 15,
+                evidenceText: "15 g protein per 160 g cup",
+                confidence: 0.99
+            )
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await HybridMealAnalysisCoordinator(router: router).analyse(
+            parse: MealParseResult(detectedItems: [item], unresolvedItems: [], mealDescription: "YoPRO yogurt", clarificationQuestions: [], confidence: 0.95),
+            originalInput: "Identify this meal",
+            imageReference: .transient(),
+            imageType: .originalPhoto
+        )
+
+        let product = try XCTUnwrap(result.detectedItems.first)
+        XCTAssertEqual(product.canonicalFoodId, "yopro-stracciatella-yogurt")
+        XCTAssertEqual(product.displayName, "YoPRO Stracciatella yogurt")
+        XCTAssertEqual(product.estimatedWeightGrams, 160)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.caloriesKcal), 91.2, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.carbohydrateGrams), 5.76, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(product.nutrition.proteinGrams), 15, accuracy: 0.01)
+        XCTAssertNil(product.nutrition.fibreGrams)
+        XCTAssertEqual(product.nutritionProvenance.kind, .packagedLabel)
+        XCTAssertTrue(product.nutritionProvenance.dataSource.contains("Danone"))
+    }
+
+    func testUnknownYoPROFlavorDoesNotInheritGenericDahiNutrition() async throws {
+        let item = ParsedFoodItem(
+            originalText: "YoPRO vanilla yogurt",
+            canonicalSearchName: "yogurt",
+            regionalName: "jogurt",
+            category: .dairyOrSide,
+            quantity: 1,
+            unit: "package",
+            brand: "Danone",
+            productName: "YoPRO",
+            flavour: "vanilla",
+            confidence: 0.95,
+            isPackagedProduct: true,
+            packagedLabelEvidence: PackagedLabelEvidence(
+                basis: .frontOfPackClaim,
+                proteinGrams: 15,
+                evidenceText: "15 g protein",
+                confidence: 0.99
+            )
+        )
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            normalisation: HybridFoodNormalisationService(catalog: catalog),
+            understanding: nil,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        let result = await router.resolve(
+            parse: MealParseResult(detectedItems: [item], unresolvedItems: [], mealDescription: "YoPRO yogurt", clarificationQuestions: [], confidence: 0.95),
+            originalInput: "Identify this meal"
+        )
+
+        let product = try XCTUnwrap(result.items.first)
+        XCTAssertEqual(product.canonical?.food.canonicalName, "Danone YoPRO vanilla")
+        XCTAssertTrue(product.canonical?.food.canonicalId.hasPrefix("interpreted.") == true)
+        XCTAssertNil(product.nutrition.lookup.values.caloriesKcal)
+        XCTAssertTrue(product.nutrition.assumptions.contains { $0.contains("exact product") })
+    }
+
     func testInvalidPackagedLabelEvidenceDoesNotOverrideSafeFallback() async throws {
         let item = ParsedFoodItem(
             originalText: "Protein dessert",
