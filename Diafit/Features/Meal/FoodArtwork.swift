@@ -41,8 +41,9 @@ struct FoodArtwork: View {
         .accessibilityLabel(accessibilityDescription)
     }
 
+    @ViewBuilder
     private func renderedArtwork(size: CGSize, time: Float) -> some View {
-        FoodStage(artwork: meal.artwork)
+        let artwork = FoodStage(artwork: meal.artwork)
             .overlay {
                 if let image = storedImage {
                     Image(uiImage: image)
@@ -67,10 +68,15 @@ struct FoodArtwork: View {
             }
             .frame(width: size.width, height: size.height)
             .compositingGroup()
-            .layerEffect(
+
+        if Bundle.main.url(forResource: "default", withExtension: "metallib") != nil {
+            artwork.layerEffect(
                 ShaderLibrary.lensPass(.float2(size), .float(time)),
                 maxSampleOffset: CGSize(width: 2, height: 2)
             )
+        } else {
+            artwork
+        }
     }
 
     private var storedImage: UIImage? {

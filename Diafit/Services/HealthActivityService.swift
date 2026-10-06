@@ -75,18 +75,24 @@ enum HealthActivityError: LocalizedError, Equatable {
 protocol HealthActivityProviding: Sendable {
     var isAvailable: Bool { get }
     var hasRequestedAccess: Bool { get }
+    var hasRequestedWorkoutAccess: Bool { get }
     func requestAccess() async throws
+    func requestWorkoutAccess() async throws
     func summary(for date: Date, calendar: Calendar) async throws -> HealthActivitySummary
+    func strengthWorkoutDates(from start: Date, to end: Date) async throws -> [Date]
 }
 
 protocol HealthConnectionPreferenceStoring: Sendable {
     var hasRequestedAccess: Bool { get }
+    var hasRequestedWorkoutAccess: Bool { get }
     func markAccessRequested()
+    func markWorkoutAccessRequested()
 }
 
 struct UserDefaultsHealthConnectionPreferenceStore: HealthConnectionPreferenceStoring, @unchecked Sendable {
     private let defaults: UserDefaults
     private let key: String
+    private let workoutKey = "diafit.health.requestedWorkoutAccess"
 
     init(
         defaults: UserDefaults = .standard,
@@ -97,9 +103,14 @@ struct UserDefaultsHealthConnectionPreferenceStore: HealthConnectionPreferenceSt
     }
 
     var hasRequestedAccess: Bool { defaults.bool(forKey: key) }
+    var hasRequestedWorkoutAccess: Bool { defaults.bool(forKey: workoutKey) }
 
     func markAccessRequested() {
         defaults.set(true, forKey: key)
+    }
+
+    func markWorkoutAccessRequested() {
+        defaults.set(true, forKey: workoutKey)
     }
 }
 
@@ -117,6 +128,7 @@ final class HealthKitActivityService: HealthActivityProviding, @unchecked Sendab
 
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
     var hasRequestedAccess: Bool { preferenceStore.hasRequestedAccess }
+    var hasRequestedWorkoutAccess: Bool { preferenceStore.hasRequestedWorkoutAccess }
 
     func requestAccess() async throws {
         guard isAvailable else { throw HealthActivityError.unavailable }
@@ -132,6 +144,49 @@ final class HealthKitActivityService: HealthActivityProviding, @unchecked Sendab
                     continuation.resume(throwing: HealthActivityError.unavailable)
                 }
             }
+        }
+    }
+
+    func requestWorkoutAccess() async throws {
+        guard isAvailable else { throw HealthActivityError.unavailable }
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            healthStore.requestAuthorization(toShare: [], read: [HKObjectType.workoutType()]) { [preferenceStore] success, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                } else if success {
+                    preferenceStore.markWorkoutAccessRequested()
+                    continuation.resume()
+                } else {
+                    continuation.resume(throwing: HealthActivityError.unavailable)
+                }
+            }
+        }
+    }
+
+    func strengthWorkoutDates(from start: Date, to end: Date) async throws -> [Date] {
+        guard isAvailable else { throw HealthActivityError.unavailable }
+        guard end > start else { throw HealthActivityError.invalidDayRange }
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: end, options: [.strictStartDate])
+        return try await withCheckedThrowingContinuation { continuation in
+            let query = HKSampleQuery(
+                sampleType: HKObjectType.workoutType(),
+                predicate: predicate,
+                limit: HKObjectQueryNoLimit,
+                sortDescriptors: nil
+            ) { _, samples, error in
+                if let error {
+                    continuation.resume(throwing: error)
+                    return
+                }
+                let dates = (samples ?? []).compactMap { $0 as? HKWorkout }
+                    .filter {
+                        $0.workoutActivityType == .traditionalStrengthTraining
+                            || $0.workoutActivityType == .functionalStrengthTraining
+                    }
+                    .map(\.startDate)
+                continuation.resume(returning: dates)
+            }
+            healthStore.execute(query)
         }
     }
 
@@ -234,7 +289,11 @@ struct FixtureHealthActivityService: HealthActivityProviding, Sendable {
     let hasRequestedAccess: Bool
     let fixture: HealthActivitySummary?
 
+    var hasRequestedWorkoutAccess: Bool { hasRequestedAccess }
+
     func requestAccess() async throws {}
+    func requestWorkoutAccess() async throws {}
+    func strengthWorkoutDates(from start: Date, to end: Date) async throws -> [Date] { [] }
 
     func summary(for date: Date, calendar: Calendar) async throws -> HealthActivitySummary {
         if let fixture {

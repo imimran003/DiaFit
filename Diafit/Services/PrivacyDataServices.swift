@@ -6,13 +6,14 @@ import UniformTypeIdentifiers
 /// binary photos, cache keys, and provider URLs are intentionally omitted.
 /// The user can export this file to review or move the meaningful diary data.
 struct DiafitExportPayload: Codable, Equatable, Sendable {
-    static let currentVersion = "1"
+    static let currentVersion = "2"
 
     let formatVersion: String
     let exportedAt: Date
     let profile: ProfileExport
     let preferences: PreferencesExport
     let days: [DayExport]
+    let manualStrengthDays: [Date]
     let savedFoodMemories: [SavedFoodMemoryExport]
     let packagedFoods: [PackagedFoodExport]
 
@@ -20,6 +21,7 @@ struct DiafitExportPayload: Codable, Equatable, Sendable {
         profile: UserProfile,
         preferences: UserPreferences,
         days: [Day],
+        manualStrengthDays: [Date] = [],
         savedFoodMemories: [UserFoodMemory] = [],
         packagedFoods: [PackagedFoodRecord] = []
     ) {
@@ -30,6 +32,7 @@ struct DiafitExportPayload: Codable, Equatable, Sendable {
         self.days = days
             .sorted { $0.date < $1.date }
             .map(DayExport.init)
+        self.manualStrengthDays = manualStrengthDays.sorted()
         self.savedFoodMemories = savedFoodMemories
             .sorted { $0.lastConfirmedAt < $1.lastConfirmedAt }
             .map { SavedFoodMemoryExport(memory: $0) }
@@ -207,6 +210,7 @@ struct DiafitExportDocument: FileDocument {
         profile: UserProfile,
         preferences: UserPreferences,
         days: [Day],
+        manualStrengthDays: [Date] = [],
         savedFoodMemories: [UserFoodMemory] = [],
         packagedFoods: [PackagedFoodRecord] = []
     ) throws {
@@ -217,6 +221,7 @@ struct DiafitExportDocument: FileDocument {
             profile: profile,
             preferences: preferences,
             days: days,
+            manualStrengthDays: manualStrengthDays,
             savedFoodMemories: savedFoodMemories,
             packagedFoods: packagedFoods
         ))

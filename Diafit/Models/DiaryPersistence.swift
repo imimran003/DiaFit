@@ -6,11 +6,25 @@ struct DiaryArchive: Codable, Hashable {
     let schemaVersion: Int
     let savedAt: Date
     let days: [Day]
+    let manualStrengthDays: [Date]
 
-    init(schemaVersion: Int = currentVersion, savedAt: Date = .now, days: [Day]) {
+    init(schemaVersion: Int = currentVersion, savedAt: Date = .now, days: [Day], manualStrengthDays: [Date] = []) {
         self.schemaVersion = schemaVersion
         self.savedAt = savedAt
         self.days = days
+        self.manualStrengthDays = manualStrengthDays
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, savedAt, days, manualStrengthDays
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        schemaVersion = try container.decode(Int.self, forKey: .schemaVersion)
+        savedAt = try container.decode(Date.self, forKey: .savedAt)
+        days = try container.decode([Day].self, forKey: .days)
+        manualStrengthDays = try container.decodeIfPresent([Date].self, forKey: .manualStrengthDays) ?? []
     }
 }
 
@@ -85,7 +99,12 @@ struct FileDiaryPersistence: DiaryPersisting, DiaryDataDeleting, @unchecked Send
         // Version 1 stored legacy checkpoint thread items. The new glucose
         // case is additive, so decoding the old days preserves every meal and
         // checkpoint while the next save upgrades the archive header.
-        return DiaryArchive(schemaVersion: DiaryArchive.currentVersion, savedAt: archive.savedAt, days: archive.days)
+        return DiaryArchive(
+            schemaVersion: DiaryArchive.currentVersion,
+            savedAt: archive.savedAt,
+            days: archive.days,
+            manualStrengthDays: archive.manualStrengthDays
+        )
     }
 
     func save(_ archive: DiaryArchive) throws {

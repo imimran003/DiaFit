@@ -93,6 +93,7 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.navigationBars["Meal details"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["Tomato basil pasta"].exists)
         XCTAssertTrue(app.staticTexts["SOURCE & ASSUMPTIONS"].exists)
+        XCTAssertTrue(app.staticTexts["fibre"].exists)
         XCTAssertTrue(app.buttons["Done"].exists)
         attachScreenshot(named: "diary-meal-details")
         app.buttons["Done"].tap()
@@ -107,6 +108,22 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(summary.label.contains("below the 100 gram daily protein goal"))
         XCTAssertTrue(summary.label.contains("Add your birth date in Profile"))
         attachScreenshot(named: "diary-fiber-summary")
+    }
+
+    func testInsightsCanLogAndRemoveGymDay() throws {
+        app.buttons["Insights"].tap()
+        let addButton = app.buttons["add-strength-day"]
+        XCTAssertTrue(addButton.waitForExistence(timeout: 3))
+        addButton.tap()
+        XCTAssertTrue(app.navigationBars["Add gym day"].waitForExistence(timeout: 3))
+        app.buttons["Save"].tap()
+        XCTAssertTrue(app.staticTexts["1 day recorded"].waitForExistence(timeout: 3))
+        attachScreenshot(named: "weekly-progress-with-gym-day")
+
+        let removeButton = app.buttons.matching(NSPredicate(format: "label BEGINSWITH 'Remove gym day on'")).firstMatch
+        XCTAssertTrue(removeButton.exists)
+        removeButton.tap()
+        XCTAssertTrue(app.staticTexts["0 days recorded"].waitForExistence(timeout: 3))
     }
 
     func testQuickFoodNoteAddsAnAgentMeal() throws {

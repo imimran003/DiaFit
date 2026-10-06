@@ -1,6 +1,63 @@
 import Foundation
 import UserNotifications
 
+struct WeeklyProgressInsight: Equatable {
+    let strengthDays: Int
+    let loggedProteinDays: Int
+    let proteinGoalDays: Int
+    let energyDays: Int
+    let recordedBalanceKilocalories: Int
+
+    var weightTrend: String {
+        guard energyDays >= 4 else {
+            return "Weight trend: not enough data"
+        }
+        if recordedBalanceKilocalories <= -500 {
+            return "Recorded balance leans toward weight loss"
+        }
+        if recordedBalanceKilocalories >= 500 {
+            return "Recorded balance leans toward weight gain"
+        }
+        return "Recorded balance looks steady"
+    }
+}
+
+struct WeeklyProgressService {
+    func insight(
+        days: [Day],
+        activity: [HealthActivitySummary],
+        manualStrengthDays: [Date],
+        watchStrengthDates: [Date],
+        now: Date = .now,
+        calendar: Calendar = .autoupdatingCurrent
+    ) -> WeeklyProgressInsight {
+        let today = calendar.startOfDay(for: now)
+        let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+        func inWindow(_ date: Date) -> Bool { date >= start && date < now.addingTimeInterval(1) }
+        let strengthDates = Set((manualStrengthDays + watchStrengthDates)
+            .filter(inWindow)
+            .map { calendar.startOfDay(for: $0) })
+        let loggedDays = days.filter { inWindow($0.date) && !$0.meals.isEmpty }
+        let completedDays = loggedDays.filter { $0.date < today }
+        let activityByDay = Dictionary(
+            activity.map { (calendar.startOfDay(for: $0.dayStart), $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let balances = completedDays.compactMap { day -> Int? in
+            let key = calendar.startOfDay(for: day.date)
+            guard let burned = activityByDay[key]?.totalEnergyBurnedKilocalories else { return nil }
+            return day.totalEnergy - Int(burned.rounded())
+        }
+        return WeeklyProgressInsight(
+            strengthDays: strengthDates.count,
+            loggedProteinDays: loggedDays.count,
+            proteinGoalDays: loggedDays.filter { $0.proteinGoalStatus == .met }.count,
+            energyDays: balances.count,
+            recordedBalanceKilocalories: balances.reduce(0, +)
+        )
+    }
+}
+
 struct DailyNutritionReview: Equatable, Sendable {
     struct Observation: Identifiable, Equatable, Sendable {
         let id: String

@@ -3,12 +3,14 @@ import Combine
 
 final class DiaryStore: ObservableObject {
     @Published private(set) var days: [Day]
+    @Published private(set) var manualStrengthDays: [Date]
     @Published private(set) var persistenceIssue: String?
     private let persistence: any DiaryPersisting
     private var canPersist: Bool
 
     init(days: [Day]) {
         self.days = days
+        manualStrengthDays = []
         persistence = TransientDiaryPersistence()
         canPersist = true
     }
@@ -20,10 +22,11 @@ final class DiaryStore: ObservableObject {
             if let archive = try persistence.load() {
                 let preparedDays = DiaryStartupPolicy.prepare(archive.days)
                 days = preparedDays
+                manualStrengthDays = archive.manualStrengthDays
                 persistenceIssue = nil
                 if preparedDays != archive.days {
                     do {
-                        try persistence.save(DiaryArchive(days: preparedDays))
+                        try persistence.save(DiaryArchive(days: preparedDays, manualStrengthDays: manualStrengthDays))
                     } catch {
                         canPersist = false
                         persistenceIssue = Self.userMessage(for: error, operation: "save")
@@ -32,6 +35,7 @@ final class DiaryStore: ObservableObject {
             } else {
                 let preparedDays = DiaryStartupPolicy.prepare(seedDays)
                 days = preparedDays
+                manualStrengthDays = []
                 do {
                     try persistence.save(DiaryArchive(days: preparedDays))
                     persistenceIssue = nil
@@ -45,6 +49,7 @@ final class DiaryStore: ObservableObject {
             // while the visible issue prevents the app claiming changes are
             // durable until storage is repaired.
             days = DiaryStartupPolicy.prepare(seedDays)
+            manualStrengthDays = []
             canPersist = false
             persistenceIssue = Self.userMessage(for: error, operation: "load")
         }
@@ -52,6 +57,19 @@ final class DiaryStore: ObservableObject {
 
     func day(id: Day.ID) -> Day? {
         days.first { $0.id == id }
+    }
+
+    func addManualStrengthDay(_ date: Date, calendar: Calendar = .autoupdatingCurrent) {
+        let day = calendar.startOfDay(for: date)
+        guard day <= calendar.startOfDay(for: .now),
+              !manualStrengthDays.contains(where: { calendar.isDate($0, inSameDayAs: day) }) else { return }
+        persist(days: days, manualStrengthDays: (manualStrengthDays + [day]).sorted())
+    }
+
+    func removeManualStrengthDay(_ date: Date, calendar: Calendar = .autoupdatingCurrent) {
+        let remaining = manualStrengthDays.filter { !calendar.isDate($0, inSameDayAs: date) }
+        guard remaining.count != manualStrengthDays.count else { return }
+        persist(days: days, manualStrengthDays: remaining)
     }
 
     func append(_ item: ThreadItem, to dayID: Day.ID) {
@@ -129,7 +147,7 @@ final class DiaryStore: ObservableObject {
 
     func retryPersistence() {
         do {
-            try persistence.save(DiaryArchive(days: days))
+            try persistence.save(DiaryArchive(days: days, manualStrengthDays: manualStrengthDays))
             canPersist = true
             persistenceIssue = nil
         } catch {
@@ -155,6 +173,7 @@ final class DiaryStore: ObservableObject {
                 try persistence.save(DiaryArchive(days: RuntimeDiaryDefaults.days(now: now)))
             }
             days = RuntimeDiaryDefaults.days(now: now)
+            manualStrengthDays = []
             persistenceIssue = nil
             return .success(())
         } catch {
@@ -168,9 +187,15 @@ final class DiaryStore: ObservableObject {
         var candidate = days
         mutation(&candidate)
         guard candidate != days else { return }
+        persist(days: candidate, manualStrengthDays: manualStrengthDays)
+    }
+
+    private func persist(days candidateDays: [Day], manualStrengthDays candidateStrengthDays: [Date]) {
+        guard canPersist else { return }
         do {
-            try persistence.save(DiaryArchive(days: candidate))
-            days = candidate
+            try persistence.save(DiaryArchive(days: candidateDays, manualStrengthDays: candidateStrengthDays))
+            days = candidateDays
+            manualStrengthDays = candidateStrengthDays
             persistenceIssue = nil
         } catch {
             persistenceIssue = Self.userMessage(for: error, operation: "save")

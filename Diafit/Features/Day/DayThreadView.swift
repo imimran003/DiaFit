@@ -1029,7 +1029,8 @@ private struct EnergyAndMovementSection: View {
             label: balance?.kind.displayName ?? "Balance",
             value: balance.map { "\($0.differenceKilocalories)" } ?? "—",
             unit: balance == nil ? "" : "kcal",
-            identifier: "health-summary-balance"
+            identifier: "health-summary-balance",
+            tint: balanceTint(balance)
         )
     }
 
@@ -1050,8 +1051,17 @@ private struct EnergyAndMovementSection: View {
             value: balance.map { "\($0.differenceKilocalories)" } ?? "—",
             unit: balance == nil ? "" : "kcal",
             identifier: "health-summary-balance",
+            tint: balanceTint(balance),
             horizontal: true
         )
+    }
+
+    private func balanceTint(_ balance: DailyEnergyBalance?) -> Color {
+        switch balance?.kind {
+        case .deficit: .green
+        case .surplus: .coral
+        case .balanced, nil: .ink
+        }
     }
 
     private func statusMessage(_ message: String) -> some View {
@@ -1088,6 +1098,7 @@ private struct HealthMetric: View {
     let value: String
     let unit: String
     let identifier: String
+    var tint: Color = .ink
     var horizontal = false
 
     var body: some View {
@@ -1124,13 +1135,13 @@ private struct HealthMetric: View {
                 .font(DiafitType.metric)
                 .fontWeight(.semibold)
                 .monospacedDigit()
+                .foregroundStyle(tint)
             if !unit.isEmpty {
                 Text(unit)
                     .font(DiafitType.caption)
                     .foregroundStyle(Color.quietInk)
             }
         }
-        .foregroundStyle(Color.ink)
         .lineLimit(1)
         .minimumScaleFactor(0.72)
     }

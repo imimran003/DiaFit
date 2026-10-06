@@ -3487,6 +3487,10 @@ final class FoodAnalysisTests: XCTestCase {
         )
 
         XCTAssertEqual(day.fiberIntake.knownGrams, 12.5)
+        XCTAssertTrue(known.fiberIntake.hasEstimate)
+        XCTAssertTrue(known.fiberIntake.isComplete)
+        XCTAssertFalse(legacy.fiberIntake.hasEstimate)
+        XCTAssertFalse(legacy.fiberIntake.isComplete)
         XCTAssertFalse(day.fiberIntake.isComplete)
         XCTAssertEqual(day.fiberIntake.status(targetGrams: 38), .incomplete)
         XCTAssertEqual(day.fiberIntake.status(targetGrams: nil), .targetUnavailable)
@@ -3530,6 +3534,8 @@ final class FoodAnalysisTests: XCTestCase {
             energyGoal: 2_000, carbohydrateGoal: 180
         )
         XCTAssertTrue(dayWithSavedChai.fiberIntake.isComplete)
+        XCTAssertEqual(savedChai.fiberIntake.knownGrams, 0)
+        XCTAssertTrue(savedChai.fiberIntake.isComplete)
         XCTAssertEqual(dayWithSavedChai.fiberIntake.knownGrams, 12.5)
         XCTAssertEqual(dayWithSavedChai.fiberIntake.status(targetGrams: 38), .below)
 
@@ -3544,6 +3550,89 @@ final class FoodAnalysisTests: XCTestCase {
         let reloaded = DiaryStore(seedDays: [], persistence: persistence)
         XCTAssertEqual(reloaded.day(id: completeDay.id)?.fiberIntake.knownGrams, 12.5)
         XCTAssertEqual(reloaded.day(id: completeDay.id)?.fiberIntake.status(targetGrams: 38), .below)
+    }
+
+    func testManualStrengthDaysPersistWithoutBreakingOlderDiaryArchives() throws {
+        let oldArchive = Data(#"{"schemaVersion":2,"savedAt":0,"days":[]}"#.utf8)
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .millisecondsSince1970
+        XCTAssertEqual(try decoder.decode(DiaryArchive.self, from: oldArchive).manualStrengthDays, [])
+
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("diafit-strength-\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let persistence = FileDiaryPersistence(
+            fileURL: directory.appendingPathComponent("diary.json"),
+            appliesFileProtection: false
+        )
+        let store = DiaryStore(seedDays: [], persistence: persistence)
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: .now)!
+        store.addManualStrengthDay(yesterday)
+        store.addManualStrengthDay(yesterday.addingTimeInterval(3_600))
+        XCTAssertEqual(store.manualStrengthDays.count, 1)
+        XCTAssertEqual(DiaryStore(seedDays: [], persistence: persistence).manualStrengthDays.count, 1)
+        let export = DiafitExportPayload(
+            profile: .empty,
+            preferences: .default,
+            days: store.days,
+            manualStrengthDays: store.manualStrengthDays
+        )
+        XCTAssertEqual(export.manualStrengthDays.count, 1)
+
+        store.removeManualStrengthDay(yesterday)
+        XCTAssertTrue(store.manualStrengthDays.isEmpty)
+        XCTAssertTrue(DiaryStore(seedDays: [], persistence: persistence).manualStrengthDays.isEmpty)
+        store.addManualStrengthDay(yesterday)
+        XCTAssertNoThrow(try store.deleteAllUserData().get())
+        XCTAssertTrue(store.manualStrengthDays.isEmpty)
+    }
+
+    func testWeeklyProgressCountsWatchAndManualStrengthOncePerDay() {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let now = calendar.date(from: DateComponents(year: 2026, month: 10, day: 6, hour: 12))!
+        let today = calendar.startOfDay(for: now)
+        let dates = (1...4).map { calendar.date(byAdding: .day, value: -$0, to: today)! }
+        let days = dates.enumerated().map { index, date in
+            let meal = Meal(
+                id: UUID(), title: "Test meal", subtitle: "", mealType: "Lunch", time: date,
+                energy: index == 3 ? 2_500 : 1_500, carbs: 100,
+                protein: index == 3 ? 70 : 110, fat: 30, artwork: .neutral,
+                confidence: .estimated
+            )
+            return Day(
+                id: UUID(), date: date,
+                messages: [ThreadItem(id: UUID(), kind: .meal(meal))],
+                energyGoal: 2_100, carbohydrateGoal: 180
+            )
+        }
+        let activity = dates.map {
+            HealthActivitySummary(
+                dayStart: $0, steps: 1_000, walkingRunningKilometres: 1,
+                activeEnergyKilocalories: 500, restingEnergyKilocalories: 1_500,
+                fetchedAt: now
+            )
+        }
+        let insight = WeeklyProgressService().insight(
+            days: days,
+            activity: activity,
+            manualStrengthDays: [dates[0]],
+            watchStrengthDates: [dates[0], dates[1]],
+            now: now,
+            calendar: calendar
+        )
+        XCTAssertEqual(insight.strengthDays, 2)
+        XCTAssertEqual(insight.proteinGoalDays, 3)
+        XCTAssertEqual(insight.loggedProteinDays, 4)
+        XCTAssertEqual(insight.energyDays, 4)
+        XCTAssertEqual(insight.recordedBalanceKilocalories, -1_000)
+        XCTAssertTrue(insight.weightTrend.contains("weight loss"))
+
+        let sparse = WeeklyProgressService().insight(
+            days: Array(days.prefix(1)), activity: activity,
+            manualStrengthDays: [], watchStrengthDates: [], now: now, calendar: calendar
+        )
+        XCTAssertFalse(sparse.weightTrend.contains("weight loss"))
     }
 
     func testRuntimeDiaryDefaultsContainNoFixtureContent() {

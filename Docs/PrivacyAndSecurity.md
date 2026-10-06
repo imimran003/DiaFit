@@ -4,15 +4,15 @@ Status: **code-level controls implemented; release approval still pending extern
 
 ## Data map
 
-- Diary meals, glucose readings, profile fields, confirmed food aliases, branded nutrition labels, and retained meal photos are stored in the app's Application Support container.
+- Diary meals, manually logged strength-training days, glucose readings, profile fields, confirmed food aliases, branded nutrition labels, and retained meal photos are stored in the app's Application Support container.
 - Diary, profile, food-memory, packaged-food, and visual files are written atomically and receive iOS file protection (`completeUntilFirstUserAuthentication`). They are not written to analytics.
-- Apple Health remains the source of HealthKit data. Diafit reads the permissions the member grants and does not delete or rewrite HealthKit history.
+- Apple Health remains the source of HealthKit data. Diafit reads the permissions the member grants, including strength-workout dates after a separate request, and does not delete or rewrite HealthKit history.
 - A photo or meal description leaves the device only after the member chooses AI recognition. The iOS client sends it to the configured Diafit backend; provider credentials remain server-side.
 - Development backend credentials are DEBUG-only and stored in Keychain with a device-only accessibility class. Release builds must use an authenticated production configuration.
 
 ## Member controls
 
-- **Export my data** opens the iOS file/share flow and creates a versioned JSON snapshot of profile fields, meals, glucose readings, confirmed food aliases, and packaged nutrition labels.
+- **Export my data** opens the iOS file/share flow and creates a versioned JSON snapshot of profile fields, meals, manually logged strength-training days, glucose readings, confirmed food aliases, and packaged nutrition labels.
 - Export intentionally excludes internal UUIDs, cache keys, provider URLs, and binary photo bytes. It reports whether a profile photo exists without copying the photo.
 - **Delete all local data** removes the diary archive, profile archive, confirmed food memory, packaged-food labels, and retained/generated meal visuals after an explicit destructive confirmation. Apple Health data is not removed because it belongs to Apple Health.
 - **Reset profile** remains a narrower action and leaves diary, glucose, and activity data intact.

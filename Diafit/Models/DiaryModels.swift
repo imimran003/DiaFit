@@ -101,24 +101,10 @@ struct Day: Identifiable, Codable, Hashable {
     var totalProtein: Int { meals.reduce(0) { $0 + $1.protein } }
 
     var fiberIntake: LoggedFiberIntake {
-        let estimates = meals.map { meal -> (value: Double?, isComplete: Bool) in
-            guard let analysis = meal.analysis else { return (nil, false) }
-            let foods = analysis.detectedItems.filter { $0.category != .hydration }
-            let allItemsKnown = foods.allSatisfy { item in
-                item.nutrition.fibreGrams != nil || item.canonicalFoodId == "chai-with-milk"
-            }
-            // Older confirmed chai entries predate the catalog's explicit
-            // zero. Only this ingredient-defined, fiber-free drink gets a
-            // retroactive value; other missing nutrient data stays unknown.
-            let savedChaiOnly = !foods.isEmpty
-                && foods.allSatisfy { $0.canonicalFoodId == "chai-with-milk" }
-            let value = analysis.mealTotals.fibreGrams ?? (savedChaiOnly ? 0 : nil)
-            return (value, value != nil && allItemsKnown)
-        }
-        let known = estimates.compactMap { $0.value }
+        let estimates = meals.map(\.fiberIntake)
         return LoggedFiberIntake(
-            knownGrams: known.reduce(0, +),
-            hasEstimate: !known.isEmpty || meals.isEmpty,
+            knownGrams: estimates.reduce(0) { $0 + $1.knownGrams },
+            hasEstimate: estimates.contains { $0.hasEstimate } || meals.isEmpty,
             isComplete: estimates.allSatisfy { $0.isComplete }
         )
     }
@@ -214,6 +200,26 @@ struct Meal: Identifiable, Codable, Hashable {
     var period: MealPeriod {
         get { MealPeriod(legacyLabel: mealType) }
         set { mealType = newValue.displayName }
+    }
+
+    var fiberIntake: LoggedFiberIntake {
+        guard let analysis else {
+            return LoggedFiberIntake(knownGrams: 0, hasEstimate: false, isComplete: false)
+        }
+        let foods = analysis.detectedItems.filter { $0.category != .hydration }
+        let allItemsKnown = foods.allSatisfy { item in
+            item.nutrition.fibreGrams != nil || item.canonicalFoodId == "chai-with-milk"
+        }
+        // Older confirmed chai entries predate the catalog's explicit zero.
+        // Other missing nutrient data stays unknown.
+        let savedChaiOnly = !foods.isEmpty
+            && foods.allSatisfy { $0.canonicalFoodId == "chai-with-milk" }
+        let value = analysis.mealTotals.fibreGrams ?? (savedChaiOnly ? 0 : nil)
+        return LoggedFiberIntake(
+            knownGrams: value ?? 0,
+            hasEstimate: value != nil,
+            isComplete: value != nil && allItemsKnown
+        )
     }
 
     enum Confidence: String, Codable, Hashable {

@@ -291,7 +291,7 @@ struct SettingsView: View {
                         } label: {
                             SettingsNavigationRow(
                                 title: "Export my data",
-                                detail: "Save meals, readings, and profile details as JSON",
+                                detail: "Save meals, gym days, readings, and profile as JSON",
                                 symbol: "square.and.arrow.up"
                             )
                         }
@@ -300,7 +300,7 @@ struct SettingsView: View {
                         Button(role: .destructive) { confirmsDeleteData = true } label: {
                             SettingsNavigationRow(
                                 title: "Delete all local data",
-                                detail: "Meals, readings, saved foods, profile, and photos",
+                                detail: "Meals, gym days, readings, foods, profile, and photos",
                                 symbol: "trash",
                                 tint: .coral
                             )
@@ -369,7 +369,7 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes your Diafit meals, glucose readings, saved foods, profile, and stored meal photos from this device. Apple Health data stays in Apple Health.")
+            Text("This permanently removes your Diafit meals, gym days, glucose readings, saved foods, profile, and stored meal photos from this device. Apple Health data stays in Apple Health.")
         }
     }
 
@@ -391,6 +391,7 @@ struct SettingsView: View {
                 profile: profileStore.profile,
                 preferences: profileStore.preferences,
                 days: diaryStore.days,
+                manualStrengthDays: diaryStore.manualStrengthDays,
                 savedFoodMemories: savedFoodMemories,
                 packagedFoods: packagedFoods
             )
@@ -414,6 +415,7 @@ struct SettingsView: View {
         #endif
         UserDefaults.standard.removeObject(forKey: "diafit.glucose.preferredUnit")
         UserDefaults.standard.removeObject(forKey: "diafit.health.requestedAccess")
+        UserDefaults.standard.removeObject(forKey: "diafit.health.requestedWorkoutAccess")
 
         Task {
             if let purging = dependencies.userFoodMemory as? any UserFoodMemoryDataPurging {
@@ -914,11 +916,24 @@ private struct DiaryMealDetailSheet: View {
                             .lineSpacing(3)
                     }
 
-                    HStack(spacing: 8) {
-                        DiaryDetailMetric(value: "\(meal.energy)", label: "kcal", tint: .ink)
-                        DiaryDetailMetric(value: "\(meal.carbs)g", label: "carbs", tint: .coral)
-                        DiaryDetailMetric(value: "\(meal.protein)g", label: "protein", tint: .lime)
-                        DiaryDetailMetric(value: "\(meal.fat)g", label: "fat", tint: .saffron)
+                    VStack(spacing: 8) {
+                        HStack(spacing: 8) {
+                            DiaryDetailMetric(value: "\(meal.energy)", label: "kcal", tint: .ink)
+                            DiaryDetailMetric(value: "\(meal.carbs)g", label: "carbs", tint: .coral)
+                            DiaryDetailMetric(value: "\(meal.protein)g", label: "protein", tint: .lime)
+                        }
+                        HStack(spacing: 8) {
+                            DiaryDetailMetric(value: "\(meal.fat)g", label: "fat", tint: .saffron)
+                            DiaryDetailMetric(value: fibreValue, label: "fibre", tint: .green)
+                        }
+                    }
+
+                    if !meal.fiberIntake.isComplete {
+                        Text(meal.fiberIntake.hasEstimate
+                             ? "+ means some ingredients have no fibre estimate."
+                             : "Fibre estimate unavailable for this meal.")
+                            .font(DiafitType.caption)
+                            .foregroundStyle(Color.quietInk)
                     }
 
                     if let analysis = meal.analysis, !analysis.detectedItems.isEmpty {
@@ -988,6 +1003,13 @@ private struct DiaryMealDetailSheet: View {
         return "\(meal.confidence.rawValue) · saved with your diary"
     }
 
+    private var fibreValue: String {
+        let fibre = meal.fiberIntake
+        guard fibre.hasEstimate else { return "—" }
+        let grams = fibre.knownGrams.formatted(.number.precision(.fractionLength(0...2)))
+        return "\(grams)g\(fibre.isComplete ? "" : "+")"
+    }
+
     private func servingDescription(for item: DetectedFoodItem) -> String {
         let quantity = item.quantity.rounded() == item.quantity
             ? String(Int(item.quantity))
@@ -1021,9 +1043,40 @@ private struct DiaryDetailMetric: View {
 
 struct InsightsOverviewView: View {
     @EnvironmentObject private var store: DiaryStore
+    @Environment(\.appDependencies) private var dependencies
+    @State private var activity: [HealthActivitySummary] = []
+    @State private var watchStrengthDates: [Date] = []
+    @State private var showsStrengthEntry = false
+    @State private var isSyncingHealth = false
+    @State private var healthMessage: String?
 
     private var recordedDays: [Day] {
         Array(store.days.filter { !$0.meals.isEmpty }.suffix(7))
+    }
+
+    private var weekly: WeeklyProgressInsight {
+        WeeklyProgressService().insight(
+            days: store.days,
+            activity: activity,
+            manualStrengthDays: store.manualStrengthDays,
+            watchStrengthDates: watchStrengthDates
+        )
+    }
+
+    private var recentManualStrengthDays: [Date] {
+        let calendar = Calendar.autoupdatingCurrent
+        let start = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: .now)) ?? .now
+        return store.manualStrengthDays.filter { $0 >= start }.sorted(by: >)
+    }
+
+    private var energyNote: String {
+        if weekly.energyDays == 0 {
+            return "Log meals and sync Apple Health to see a weekly trend."
+        }
+        if weekly.energyDays < 4 {
+            return "\(weekly.energyDays) completed \(weekly.energyDays == 1 ? "day" : "days") recorded; 4 needed for a trend."
+        }
+        return "Based on \(weekly.energyDays) completed days, if meals were fully logged. Weigh-ins confirm actual change."
     }
 
     var body: some View {
@@ -1036,17 +1089,12 @@ struct InsightsOverviewView: View {
                         detail: "Simple facts from what you have actually logged."
                     )
 
+                    weeklyProgressCard
+
                     if recordedDays.isEmpty {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("No patterns yet")
-                                .font(DiafitType.title)
-                                .foregroundStyle(Color.ink)
-                            Text("Insights will appear after you confirm a few meals.")
-                                .font(DiafitType.body)
-                                .foregroundStyle(Color.quietInk)
-                        }
-                        .padding(20)
-                        .diafitGlass(radius: 28)
+                        Text("Food patterns will appear after you log a few meals.")
+                            .font(DiafitType.caption)
+                            .foregroundStyle(Color.quietInk)
                     } else {
                         HStack(spacing: 10) {
                             InsightMetric(label: "Logged days", value: "\(recordedDays.count)", unit: "")
@@ -1071,6 +1119,132 @@ struct InsightsOverviewView: View {
             .background(Color.paper)
             .navigationBarHidden(true)
         }
+        .sheet(isPresented: $showsStrengthEntry) {
+            LogStrengthDaySheet { date in
+                store.addManualStrengthDay(date)
+                showsStrengthEntry = false
+            }
+            .presentationDetents([.medium])
+            .presentationDragIndicator(.visible)
+        }
+        .task { await refreshHealth(requestAccess: false) }
+    }
+
+    private var weeklyProgressCard: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack {
+                Text("THIS WEEK")
+                    .font(.system(size: 11, weight: .bold, design: .rounded))
+                    .tracking(1.5)
+                    .foregroundStyle(Color.quietInk)
+                Spacer()
+                Button(isSyncingHealth ? "Syncing…" : "Sync Watch") {
+                    Task { await refreshHealth(requestAccess: true) }
+                }
+                .font(DiafitType.caption.weight(.semibold))
+                .frame(minHeight: 44)
+                .disabled(isSyncingHealth)
+                .accessibilityIdentifier("sync-strength-workouts")
+            }
+
+            Text(weekly.weightTrend)
+                .font(DiafitType.title)
+                .foregroundStyle(Color.ink)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(energyNote)
+                .font(DiafitType.caption)
+                .foregroundStyle(Color.quietInk)
+
+            Divider().overlay(Color.rule)
+
+            HStack {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Strength training")
+                        .font(DiafitType.body.weight(.semibold))
+                    Text("\(weekly.strengthDays) \(weekly.strengthDays == 1 ? "day" : "days") recorded")
+                        .font(DiafitType.caption)
+                        .foregroundStyle(Color.quietInk)
+                }
+                Spacer()
+                Button("Add gym day") { showsStrengthEntry = true }
+                    .font(DiafitType.caption.weight(.semibold))
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("add-strength-day")
+            }
+
+            Text("100 g protein goal: \(weekly.proteinGoalDays) of \(weekly.loggedProteinDays) logged days")
+                .font(DiafitType.caption)
+                .foregroundStyle(Color.quietInk)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("These records cannot measure muscle gain or loss.")
+                .font(.footnote)
+                .foregroundStyle(Color.quietInk)
+
+            if !recentManualStrengthDays.isEmpty {
+                VStack(spacing: 4) {
+                    ForEach(recentManualStrengthDays, id: \.self) { date in
+                        HStack {
+                            Text(date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                                .font(DiafitType.caption)
+                            Spacer()
+                            Button("Remove gym day", systemImage: "trash", role: .destructive) {
+                                store.removeManualStrengthDay(date)
+                            }
+                            .labelStyle(.iconOnly)
+                            .frame(minWidth: 44, minHeight: 44)
+                            .accessibilityLabel("Remove gym day on \(date.formatted(date: .abbreviated, time: .omitted))")
+                        }
+                        .frame(minHeight: 34)
+                    }
+                }
+            }
+
+            if let healthMessage {
+                Text(healthMessage)
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+            }
+        }
+        .padding(20)
+        .paperCard()
+    }
+
+    @MainActor
+    private func refreshHealth(requestAccess: Bool) async {
+        guard !isSyncingHealth else { return }
+        let health = dependencies.healthActivity
+        guard health.isAvailable else {
+            healthMessage = "Apple Health isn’t available here; you can still add gym days."
+            return
+        }
+        isSyncingHealth = true
+        defer { isSyncingHealth = false }
+        do {
+            if requestAccess {
+                if !health.hasRequestedAccess { try await health.requestAccess() }
+                try await health.requestWorkoutAccess()
+            }
+            let calendar = Calendar.autoupdatingCurrent
+            let today = calendar.startOfDay(for: .now)
+            let start = calendar.date(byAdding: .day, value: -6, to: today) ?? today
+            let end = calendar.date(byAdding: .day, value: 1, to: today) ?? .now
+            if health.hasRequestedAccess {
+                var summaries: [HealthActivitySummary] = []
+                for offset in 1...6 {
+                    guard let date = calendar.date(byAdding: .day, value: -offset, to: today) else { continue }
+                    summaries.append(try await health.summary(for: date, calendar: calendar))
+                }
+                activity = summaries
+            }
+            if health.hasRequestedWorkoutAccess {
+                watchStrengthDates = try await health.strengthWorkoutDates(from: start, to: end)
+            }
+            healthMessage = requestAccess ? "Apple Health refreshed." : nil
+        } catch {
+            healthMessage = "Apple Health couldn’t be refreshed. Your manual gym days are safe."
+        }
     }
 
     private var averageEnergy: Int {
@@ -1083,6 +1257,33 @@ struct InsightsOverviewView: View {
 
     private var averageProtein: Int {
         recordedDays.isEmpty ? 0 : recordedDays.reduce(0) { $0 + $1.totalProtein } / recordedDays.count
+    }
+}
+
+private struct LogStrengthDaySheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var date = Date.now
+    let onSave: (Date) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                DatePicker("Gym day", selection: $date, in: ...Date.now, displayedComponents: .date)
+                Text("Add a strength session you did. Watch workouts on the same day count only once.")
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.quietInk)
+            }
+            .navigationTitle("Add gym day")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("Cancel") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("Save") { onSave(date) }
+                }
+            }
+        }
     }
 }
 
@@ -1666,7 +1867,7 @@ private struct PrivacyDetailsView: View {
                     )
                     PrivacyPoint(
                         title: "Stored on this device",
-                        detail: "Your profile, meals, glucose readings, saved foods, and retained photos use protected local storage.",
+                        detail: "Your profile, meals, manually logged gym days, glucose readings, saved foods, and retained photos use protected local storage.",
                         symbol: "iphone"
                     )
                     PrivacyPoint(
