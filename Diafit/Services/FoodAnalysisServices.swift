@@ -5,7 +5,12 @@ import Vision
 // MARK: - Provider seams
 
 protocol FoodRecognitionService: Sendable {
+    func prepare() async
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult
+}
+
+extension FoodRecognitionService {
+    func prepare() async {}
 }
 
 struct FoodImageCandidate: Hashable, Sendable {
@@ -135,6 +140,7 @@ struct GeneratedMealImageKey: Hashable, Sendable {
 
 enum FoodAnalysisError: LocalizedError, Equatable {
     case endpointUnavailable
+    case providerUnavailable
     case malformedProviderResponse
     case unsupportedImage
     case imageTooLarge
@@ -146,6 +152,7 @@ enum FoodAnalysisError: LocalizedError, Equatable {
     var errorDescription: String? {
         switch self {
         case .endpointUnavailable: return "Photo analysis is unavailable right now. You can still describe or search for the meal."
+        case .providerUnavailable: return "The AI provider could not complete the analysis. Retry later or name the visible foods."
         case .malformedProviderResponse: return "The analysis response could not be safely read. Nothing was logged."
         case .unsupportedImage: return "Choose a JPEG, HEIC, or PNG photo to continue."
         case .imageTooLarge: return "That photo is too large to process. Try a smaller image."
@@ -166,6 +173,7 @@ enum FoodAnalysisError: LocalizedError, Equatable {
         case 422: return .backendRequestRejected
         case 429: return .backendRateLimited
         case 408, 504: return .photoAnalysisTimedOut
+        case 502: return .providerUnavailable
         default: return .endpointUnavailable
         }
     }
@@ -267,13 +275,17 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
         self.maximumProviderPasses = max(1, maximumProviderPasses)
     }
 
+    func prepare() async {
+        await understanding.prepare()
+    }
+
     func analyse(_ image: PreparedFoodImage, dishHint: String?) async throws -> MealAnalysisResult {
         let trimmedHint = dishHint?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         // A typed hint is evidence, not an inventory. Older builds passed the
         // hint as the entire prompt, which encouraged the provider to return
         // only the named dish and silently omit the rest of the plate.
         let instruction = trimmedHint.isEmpty
-            ? "Inspect the entire meal photo and identify every distinct physical food serving exactly once. Preserve regional Indian names, include breads, rice, dal, sabji, curries and sides when visible, and never list alternative guesses as separate foods."
+            ? "Inspect the entire meal photo and identify every distinct physical food serving exactly once. Preserve regional Indian names, include breads, rice, dal, sabji, curries and sides when visible, and never list alternative guesses as separate foods. If roasted mashed eggplant with tomato and onion is visually supported, identify baingan bharta instead of generic sabji; if the dish cannot be distinguished, keep the name uncertain."
             : "The member described this meal as \(trimmedHint). Use that as a hint, but inspect the entire photo and return every distinct visible serving exactly once."
         let primaryParse = try await understanding.parse(text: instruction, image: image)
         var selectedParse = primaryParse
@@ -1497,6 +1509,12 @@ struct PhotoAnalysisOrchestrator: Sendable {
         self.completeness = completeness
     }
 
+    /// Starts a hosted backend while the member is choosing a photo, so a
+    /// sleeping free-tier service does not add its cold start after selection.
+    func prepare() async {
+        await remote?.prepare()
+    }
+
     func analyse(image: PreparedFoodImage, description: String) async -> MealAnalysisResult {
         let trimmedDescription = description.trimmingCharacters(in: .whitespacesAndNewlines)
         var remoteFailed = false
@@ -1779,6 +1797,7 @@ struct PhotoAnalysisOrchestrator: Sendable {
         if let error = error as? FoodAnalysisError {
             switch error {
             case .endpointUnavailable: return "endpoint-unavailable"
+            case .providerUnavailable: return "provider-unavailable"
             case .malformedProviderResponse: return "malformed-response"
             case .unsupportedImage: return "unsupported-image"
             case .imageTooLarge: return "image-too-large"
@@ -1809,6 +1828,8 @@ struct PhotoAnalysisOrchestrator: Sendable {
             return "Secure AI recognition needs a valid backend connection. Check the app's backend settings, then retry."
         case .backendRateLimited:
             return "Live recognition (AI) is busy right now. Wait a moment, then retry recognition."
+        case .providerUnavailable:
+            return "Live recognition reached the server, but the AI provider could not complete this photo. Retry later or name the visible foods below."
         case .backendRequestRejected, .unsupportedImage, .imageTooLarge:
             return "This photo could not be accepted. Choose a clear JPEG, HEIC, or PNG and retry recognition."
         case .photoAnalysisTimedOut:

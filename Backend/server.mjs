@@ -437,7 +437,7 @@ const nutritionProvider = config.nutritionProviderMode === 'usda'
 
 function parserModelName() {
   if (config.mealParserMode === 'openai') return process.env.OPENAI_MEAL_MODEL ?? 'gpt-4.1-mini';
-  if (config.mealParserMode === 'gemini') return process.env.GEMINI_MEAL_MODEL ?? 'gemini-3.1-flash-lite';
+  if (config.mealParserMode === 'gemini') return process.env.GEMINI_MEAL_MODEL ?? 'gemini-3.5-flash-lite';
   return 'development-mock';
 }
 

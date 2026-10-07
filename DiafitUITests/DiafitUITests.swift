@@ -183,6 +183,21 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Confirm estimate"].waitForExistence(timeout: 2))
     }
 
+    func testReviewFoodNameCanBeCorrectedToBainganBharta() throws {
+        submitFoodNote("black coffee")
+        XCTAssertTrue(app.staticTexts["Black coffee"].waitForExistence(timeout: 4))
+
+        app.buttons["Black coffee"].tap()
+        app.buttons["Search food name…"].tap()
+        let correction = app.alerts["Change food name"]
+        XCTAssertTrue(correction.waitForExistence(timeout: 2))
+        correction.textFields.firstMatch.typeText("bengan ka bharta")
+        correction.buttons["Use food"].tap()
+
+        XCTAssertTrue(app.staticTexts["Baingan bharta"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["Confirm estimate"].exists)
+    }
+
     func testMealPeriodCanBeChosenBeforeSavingAndAppearsOnMealTile() throws {
         submitFoodNote("black coffee")
         XCTAssertTrue(app.staticTexts["Black coffee"].waitForExistence(timeout: 4))

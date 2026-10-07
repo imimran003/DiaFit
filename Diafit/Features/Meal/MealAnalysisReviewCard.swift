@@ -130,6 +130,7 @@ struct MealAnalysisReviewCard: View {
                             quantityChanged: { quantity in changeQuantity(quantity, for: item.id) },
                             unitChanged: { unit in changeUnit(unit, for: item.id) },
                             foodChanged: { id in changeFood(id, for: item.id) },
+                            foodNameSubmitted: { name in changeFood(named: name, for: item.id) },
                             remove: { remove(item.id) }
                         )
                     }
@@ -365,6 +366,14 @@ struct MealAnalysisReviewCard: View {
         recalculate()
     }
 
+    private func changeFood(named name: String, for id: UUID) -> Bool {
+        guard let food = catalog.normalise(name.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return false
+        }
+        changeFood(food.canonicalId, for: id)
+        return true
+    }
+
     private func remove(_ id: UUID) {
         editableDraft.result.detectedItems.removeAll { $0.id == id }
         recalculate()
@@ -461,7 +470,7 @@ struct MealAnalysisReviewCard: View {
             nutritionProvenance: original.nutritionProvenance,
             rawNutrition: original.rawNutrition,
             nutritionValidation: original.nutritionValidation,
-            matchedAlias: original.matchedAlias,
+            matchedAlias: definition.canonicalName,
             confidenceScore: original.confidenceScore,
             modifiers: original.modifiers,
             supplementProfile: original.supplementProfile
@@ -691,9 +700,13 @@ private struct DetectedItemEditor: View {
     let quantityChanged: (Double) -> Void
     let unitChanged: (ServingUnit) -> Void
     let foodChanged: (String) -> Void
+    let foodNameSubmitted: (String) -> Bool
     let remove: () -> Void
 
     @State private var quantityText: String
+    @State private var showsFoodSearch = false
+    @State private var foodSearchName = ""
+    @State private var foodSearchError: String?
 
     init(
         item: DetectedFoodItem,
@@ -701,6 +714,7 @@ private struct DetectedItemEditor: View {
         quantityChanged: @escaping (Double) -> Void,
         unitChanged: @escaping (ServingUnit) -> Void,
         foodChanged: @escaping (String) -> Void,
+        foodNameSubmitted: @escaping (String) -> Bool,
         remove: @escaping () -> Void
     ) {
         self.item = item
@@ -708,6 +722,7 @@ private struct DetectedItemEditor: View {
         self.quantityChanged = quantityChanged
         self.unitChanged = unitChanged
         self.foodChanged = foodChanged
+        self.foodNameSubmitted = foodNameSubmitted
         self.remove = remove
         _quantityText = State(initialValue: item.quantity.formatted(.number.precision(.fractionLength(0...1))))
     }
@@ -718,6 +733,11 @@ private struct DetectedItemEditor: View {
                 Menu {
                     ForEach(alternatives) { alternative in
                         Button(alternative.displayName) { foodChanged(alternative.canonicalFoodId) }
+                    }
+                    Button("Search food name…") {
+                        foodSearchName = ""
+                        foodSearchError = nil
+                        showsFoodSearch = true
                     }
                 } label: {
                     HStack(spacing: 5) {
@@ -767,12 +787,28 @@ private struct DetectedItemEditor: View {
                     .font(DiafitType.caption)
                     .foregroundStyle(Color.coral)
             }
+            if let foodSearchError {
+                Text(foodSearchError)
+                    .font(DiafitType.caption)
+                    .foregroundStyle(Color.coral)
+            }
         }
         .padding(12)
         .background(Color.mist, in: RoundedRectangle(cornerRadius: 17, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 17, style: .continuous)
                 .stroke(Color.rule.opacity(0.7), lineWidth: 0.8)
+        }
+        .alert("Change food name", isPresented: $showsFoodSearch) {
+            TextField("e.g. baingan bharta", text: $foodSearchName)
+            Button("Cancel", role: .cancel) {}
+            Button("Use food") {
+                if !foodNameSubmitted(foodSearchName) {
+                    foodSearchError = "Food not found. Try another spelling or a common name."
+                }
+            }
+        } message: {
+            Text("Enter the dish you recognise. Diafit will recalculate its editable estimate.")
         }
     }
 

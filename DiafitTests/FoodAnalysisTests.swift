@@ -15,6 +15,18 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(catalog.normalise("clarified butter")?.canonicalId, "ghee")
     }
 
+    func testBainganBhartaTypedSpellingsResolveAsThePreparedDish() async {
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            nutrition: HybridNutritionResolutionService(catalog: catalog)
+        )
+        for name in ["bengan ka bharta", "baigan bharta", "baingan ka bharta", "brinjal bharta"] {
+            let result = await router.resolve(text: "I had \(name)")
+            XCTAssertEqual(result.items.first?.canonical?.food.canonicalId, "baingan-bharta", name)
+            XCTAssertTrue(result.unresolvedTerms.isEmpty, name)
+        }
+    }
+
     func testGlucoseUnitConversionAndRoundTripStayStable() {
         let mmol = Decimal(string: "5.7")!
         let mg = GlucoseUnit.millimolesPerLiter.normalizedMgPerDl(from: mmol)
@@ -4904,6 +4916,7 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(FoodAnalysisError.backend(statusCode: 413), .unsupportedImage)
         XCTAssertEqual(FoodAnalysisError.backend(statusCode: 422), .backendRequestRejected)
         XCTAssertEqual(FoodAnalysisError.backend(statusCode: 504), .photoAnalysisTimedOut)
+        XCTAssertEqual(FoodAnalysisError.backend(statusCode: 502), .providerUnavailable)
         XCTAssertEqual(FoodAnalysisError.backend(statusCode: 503), .endpointUnavailable)
     }
 

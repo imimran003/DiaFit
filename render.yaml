@@ -23,7 +23,7 @@ services:
       - key: DIAFIT_MEAL_PARSER_MODE
         value: gemini
       - key: GEMINI_MEAL_MODEL
-        value: gemini-3.1-flash-lite
+        value: gemini-3.5-flash-lite
       - key: GEMINI_API_KEY
         sync: false
       - key: DIAFIT_MEAL_VISUAL_MODE

@@ -167,7 +167,12 @@ struct ParsedFoodItem: Codable, Hashable, Sendable {
 }
 
 protocol FoodUnderstandingService: Sendable {
+    func prepare() async
     func parse(text: String, image: PreparedFoodImage?) async throws -> MealParseResult
+}
+
+extension FoodUnderstandingService {
+    func prepare() async {}
 }
 
 /// Offline development implementation of the same structured boundary. It is
@@ -227,6 +232,10 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         self.wakeCoordinator = wakeCoordinator
     }
 
+    func prepare() async {
+        try? await wakeCoordinator.wake(endpoint: endpoint, session: session)
+    }
+
     func parse(text: String, image: PreparedFoodImage? = nil) async throws -> MealParseResult {
         let token = try await tokenProvider.accessToken()
         // Wake a suspended hosted service with a tiny idempotent request before
@@ -273,12 +282,14 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
         }
         guard (200..<300).contains(http.statusCode) else {
             let status = http.statusCode
+            let backendError = Self.backendError(from: data, statusCode: status)
             FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
                 "status": "http-error",
                 "statusCode": String(status),
+                "reason": backendError == .providerUnavailable ? "provider-unavailable" : "request-failed",
                 "responseBytes": String(data.count)
             ])
-            throw FoodAnalysisError.backend(statusCode: status)
+            throw backendError
         }
         do {
             let result = try Self.decodeResponse(data)
@@ -332,29 +343,11 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
 
         for attempt in 0..<2 {
             do {
-                let result = try await session.data(for: request)
-                let statusCode = (result.1 as? HTTPURLResponse)?.statusCode
-                // A 504 is the backend's explicit provider deadline. Retrying
-                // the same full-resolution photo immediately would start a
-                // second cold-start/provider run and consume the entire
-                // session budget, which surfaced to users as another generic
-                // "AI timed out" state. The backend already retries its
-                // provider call; only retry transport/rate-limit failures and
-                // transient upstream responses that can succeed quickly.
-                let shouldRetryHTTP = statusCode == 408
-                    || statusCode == 429
-                    || statusCode == 500
-                    || statusCode == 502
-                    || statusCode == 503
-                if attempt == 0, shouldRetryHTTP {
-                    FoodLoggingDiagnostics.record("backend.meal-parse", fields: [
-                        "status": "retrying",
-                        "reason": "http-\(statusCode ?? -1)"
-                    ])
-                    try? await Task.sleep(for: .milliseconds(450))
-                    continue
-                }
-                return result
+                // The backend already performs its own bounded provider
+                // retries. Repeating a completed HTTP failure here restarted
+                // the full AI operation and nearly doubled the wait. Only a
+                // lost transport gets one idempotent retry.
+                return try await session.data(for: request)
             } catch let error as URLError {
                 lastError = error
                 let retryable = [
@@ -375,6 +368,14 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
             }
         }
         throw lastError
+    }
+
+    private static func backendError(from data: Data, statusCode: Int) -> FoodAnalysisError {
+        if let response = try? JSONDecoder().decode(BackendErrorResponse.self, from: data),
+           response.error == "provider_error" || response.error == "provider_unavailable" {
+            return .providerUnavailable
+        }
+        return .backend(statusCode: statusCode)
     }
 
     private static func safeDecodingReason(_ error: Error) -> String {
@@ -415,6 +416,10 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
 
     private struct ResponseMetadata: Decodable {
         let imageReference: String?
+    }
+
+    private struct BackendErrorResponse: Decodable {
+        let error: String
     }
 }
 

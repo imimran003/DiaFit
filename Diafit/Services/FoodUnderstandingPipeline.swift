@@ -290,6 +290,8 @@ enum FoodInputNormalizer {
         "paani": "pani",
         "subzi": "sabzi",
         "chhole": "chole",
+        "bengan": "baingan",
+        "baigan": "baingan",
         "khichadi": "khichdi",
         "rotis": "roti",
         "chapatis": "chapati",

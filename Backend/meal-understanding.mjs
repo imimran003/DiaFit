@@ -317,7 +317,7 @@ export class OpenAIMealParser {
 export class GeminiMealParser {
   constructor({
     apiKey = process.env.GEMINI_API_KEY,
-    model = process.env.GEMINI_MEAL_MODEL ?? 'gemini-3.1-flash-lite',
+    model = process.env.GEMINI_MEAL_MODEL ?? 'gemini-3.5-flash-lite',
     fetchImpl = globalThis.fetch,
     endpointBase = 'https://generativelanguage.googleapis.com/v1beta/models',
     maxAttempts = providerAttemptCount(),

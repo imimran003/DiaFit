@@ -151,6 +151,9 @@ struct DayThreadView: View {
         }
         .sheet(isPresented: $showsPhotoInput) {
             PhotoMealInput(onContinue: beginPhotoReview)
+                .task {
+                    await dependencies.photoAnalysis.prepare()
+                }
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
