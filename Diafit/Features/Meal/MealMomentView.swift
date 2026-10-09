@@ -37,7 +37,8 @@ struct MealMomentView: View {
                             Text(meal.title)
                                 .font(DiafitType.title)
                                 .foregroundStyle(Color.ink)
-                            Text(meal.subtitle)
+                            Text(meal.subtitle.components(separatedBy: " · ").first ?? meal.subtitle)
+                                .lineLimit(1)
                                 .font(DiafitType.caption)
                                 .foregroundStyle(Color.quietInk)
                         }
@@ -61,6 +62,10 @@ struct MealMomentView: View {
 
                     if revealsDetails {
                         Divider().overlay(Color.rule.opacity(0.65))
+                        Text(meal.subtitle)
+                            .font(DiafitType.caption)
+                            .foregroundStyle(Color.quietInk)
+                            .fixedSize(horizontal: false, vertical: true)
                         HStack {
                             DetailMetric(label: "Fat", value: "\(meal.fat)g")
                             Spacer()

@@ -242,6 +242,17 @@ struct ThreadItem: Identifiable, Codable, Hashable {
     let id: UUID
     var kind: Kind
 
+    // Filter at presentation time so existing diaries become quieter too,
+    // without deleting history or hiding questions and analysis failures.
+    var isRoutineAcknowledgement: Bool {
+        guard case .agent(let text, let tools) = kind else { return false }
+        if tools.contains("Day totals updated") || tools.contains("Glucose history updated") {
+            return true
+        }
+        return tools.contains("Nutrition review")
+            && text == "I found the components and prepared an editable estimate. Confirm it when the serving looks right."
+    }
+
     /// SwiftUI must receive a new view identity when a review draft is
     /// replaced by its confirmed meal. Keeping only the thread item's UUID
     /// lets a stateful review card survive that enum-case change, leaving the

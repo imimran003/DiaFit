@@ -428,6 +428,7 @@ struct BackendFoodUnderstandingService: FoodUnderstandingService, Sendable {
 /// network round trip before every structured-vision request.
 actor BackendWakeCoordinator {
     private var lastSuccessfulWake: Date?
+    private var inFlight: Task<Void, Error>?
 
     func wake(endpoint: URL, session: URLSession) async throws {
         if let lastSuccessfulWake,
@@ -435,17 +436,26 @@ actor BackendWakeCoordinator {
             return
         }
 
-        var request = URLRequest(url: endpoint.appending(path: "health"))
-        request.httpMethod = "GET"
-        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
-        request.timeoutInterval = 75
-        request.setValue("application/json", forHTTPHeaderField: "Accept")
-
-        let (_, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse,
-              (200..<300).contains(http.statusCode) else {
-            throw FoodAnalysisError.endpointUnavailable
+        if let inFlight {
+            try await inFlight.value
+            return
         }
+        let task = Task<Void, Error> {
+            var request = URLRequest(url: endpoint.appending(path: "health"))
+            request.httpMethod = "GET"
+            request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+            request.timeoutInterval = 75
+            request.setValue("application/json", forHTTPHeaderField: "Accept")
+
+            let (_, response) = try await session.data(for: request)
+            guard let http = response as? HTTPURLResponse,
+                  (200..<300).contains(http.statusCode) else {
+                throw FoodAnalysisError.endpointUnavailable
+            }
+        }
+        inFlight = task
+        defer { inFlight = nil }
+        try await task.value
         lastSuccessfulWake = .now
         FoodLoggingDiagnostics.record("backend.wake", fields: ["status": "ready"])
     }
@@ -1236,30 +1246,32 @@ struct HybridNutritionResolutionService: NutritionResolutionService, Sendable {
             ?? canonical.flatMap { portions.estimatedWeight(quantity: amount, unit: serving, food: $0.food) }
             ?? canonical?.food.standardServing?.grams
 
-        if let verifiedProvider {
-            if let lookup = try? await verifiedProvider.lookup(canonicalSearchName: item.canonicalSearchName, estimatedGrams: providerGrams) {
-                return validatedResolution(values: lookup.values, provenance: lookup.provenance,
-                                           sourceRecordID: lookup.provenance.sourceRecordID ?? lookup.provenance.dataSource,
-                                           servingAmount: amount, servingUnit: unit,
-                                           estimatedGrams: providerGrams,
-                                           assumptions: ["Nutrition matched by verified provider \(verifiedProvider.identifier)."])
+        // A complete, validated catalog record is already available on device.
+        // Use it for both text and photo components instead of serially waiting
+        // for the hosted nutrition endpoint to return the same information.
+        let grams = item.estimatedGrams ?? canonical.flatMap {
+            portions.estimatedWeight(quantity: amount, unit: serving, food: $0.food)
+        }
+        if let canonical {
+            let lookup = CatalogNutritionLookupService().nutrition(for: canonical.food, estimatedWeightGrams: grams)
+            if lookup.values.hasCompleteCoreNutrients {
+                let local = validatedResolution(
+                    values: lookup.values, provenance: lookup.provenance,
+                    sourceRecordID: canonical.food.canonicalId,
+                    servingAmount: amount, servingUnit: serving.rawValue,
+                    estimatedGrams: grams,
+                    assumptions: ["Using the bundled food reference; recipe and portion remain editable."]
+                )
+                if local.verified { return local }
             }
         }
-
-        guard let canonical else {
-            return await modelFallback(item: item, amount: amount, unit: unit,
-                                       estimatedGrams: item.estimatedGrams,
-                                       assumptions: ["No verified canonical food match was available."])
-        }
-        let grams = item.estimatedGrams ?? portions.estimatedWeight(quantity: amount, unit: serving, food: canonical.food)
-        let lookup = CatalogNutritionLookupService().nutrition(for: canonical.food, estimatedWeightGrams: grams)
-        if lookup.values.hasCompleteCoreNutrients {
-            let local = validatedResolution(values: lookup.values, provenance: lookup.provenance,
-                                            sourceRecordID: canonical.food.canonicalId,
-                                            servingAmount: amount, servingUnit: serving.rawValue,
-                                            estimatedGrams: grams,
-                                            assumptions: ["Using the local canonical fallback until a verified provider record is available."])
-            if local.verified { return local }
+        if let verifiedProvider,
+           let lookup = try? await verifiedProvider.lookup(canonicalSearchName: item.canonicalSearchName, estimatedGrams: providerGrams) {
+            return validatedResolution(values: lookup.values, provenance: lookup.provenance,
+                                       sourceRecordID: lookup.provenance.sourceRecordID ?? lookup.provenance.dataSource,
+                                       servingAmount: amount, servingUnit: unit,
+                                       estimatedGrams: providerGrams,
+                                       assumptions: ["Nutrition matched by verified provider \(verifiedProvider.identifier)."])
         }
         return await modelFallback(item: item, amount: amount, unit: serving.rawValue,
                                    estimatedGrams: grams,

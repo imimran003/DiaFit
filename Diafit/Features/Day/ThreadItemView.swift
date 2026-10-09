@@ -16,8 +16,8 @@ struct ThreadItemView: View {
 
     var body: some View {
         switch item.kind {
-        case .agent(let text, let tools):
-            AgentMessage(text: text, tools: tools)
+        case .agent(let text, _):
+            AgentMessage(text: text)
         case .person(let text):
             PersonMessage(text: text) {
                 deleteMessage(item)
@@ -50,48 +50,20 @@ struct ThreadItemView: View {
 
 private struct AgentMessage: View {
     let text: String
-    let tools: [String]
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 11, weight: .bold))
-                    .foregroundStyle(Color.ink)
-                    .frame(width: 22, height: 22)
-                    .background(Color.lime.opacity(0.7), in: Circle())
-                Text("Dia")
-                    .font(DiafitType.caption)
-                    .foregroundStyle(Color.quietInk)
-                Text("just now")
-                    .font(DiafitType.caption)
-                    .foregroundStyle(Color.quietInk.opacity(0.65))
-            }
-
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "sparkle")
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundStyle(Color.quietInk)
+                .padding(.top, 2)
+                .accessibilityHidden(true)
             Text(text)
-                .font(DiafitType.body)
+                .font(DiafitType.caption)
                 .foregroundStyle(Color.ink)
-                .lineSpacing(3)
-
-            if !tools.isEmpty {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 7) {
-                        ForEach(tools, id: \.self) { tool in
-                            TinyLabel(title: tool, symbol: tool == "Used history" ? "clock.arrow.circlepath" : "checkmark")
-                        }
-                    }
-                }
-            }
-        }
-        .padding(.leading, 15)
-        .padding(.vertical, 3)
-        .overlay(alignment: .leading) {
-            Capsule()
-                .fill(Color.lime.opacity(0.9))
-                .frame(width: 3)
-                .padding(.vertical, 3)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .accessibilityElement(children: .combine)
     }
 }
 

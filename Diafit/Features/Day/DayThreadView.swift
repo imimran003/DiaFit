@@ -7,6 +7,7 @@ struct DayThreadView: View {
     let dayID: Day.ID
     @Binding var isAtlasOpen: Bool
     let mealNamespace: Namespace.ID
+    var scrollToTopRequest: Int = 0
 
     @State private var draft = ""
     @State private var isThinking = false
@@ -39,6 +40,8 @@ struct DayThreadView: View {
                         // invalidate its placement cache when a contextual meal
                         // action removes an item while the scroll view is moving.
                         VStack(spacing: 18) {
+                            Color.clear.frame(height: 0).id("top")
+
                             DayHeader(
                                 day: day,
                                 healthActivityState: healthActivityState,
@@ -64,7 +67,7 @@ struct DayThreadView: View {
                                 MealStreamHeader(day: day)
                             }
 
-                            ForEach(day.messages) { item in
+                            ForEach(day.messages.filter { !$0.isRoutineAcknowledgement }) { item in
                                 ThreadItemView(
                                     item: item,
                                     isAtlasOpen: $isAtlasOpen,
@@ -139,6 +142,14 @@ struct DayThreadView: View {
                             submit: submit
                         )
                         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+                    }
+                    .onChange(of: scrollToTopRequest) { _, _ in
+                        composerFocused = false
+                        DispatchQueue.main.async {
+                            withAnimation(.easeOut(duration: 0.3)) {
+                                proxy.scrollTo("top", anchor: .top)
+                            }
+                        }
                     }
                     .onChange(of: day.messages.count) { _, _ in
                         scrollToTail(proxy)
@@ -232,6 +243,9 @@ struct DayThreadView: View {
             Button("Cancel", role: .cancel) { messagePendingDeletion = nil }
         } message: { _ in
             Text("This unrecorded entry will be removed from the conversation. No nutrition totals are affected.")
+        }
+        .task {
+            await dependencies.photoAnalysis.prepare()
         }
         .task(id: dayID) {
             await loadHealthActivity()

@@ -7,6 +7,42 @@ final class FoodAnalysisTests: XCTestCase {
         IndianFoodCatalogService(bundle: Bundle(for: FoodAnalysisTests.self))
     }
 
+    func testBhurjiAndCheeseResolveLocallyWithoutNetwork() async {
+        let counter = ParseCounter()
+        let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: CountingMealUnderstanding(result: unusedParse, counter: counter),
+            nutrition: HybridNutritionResolutionService(catalog: catalog, verifiedProvider: CountingUnavailableNutrition(counter: counter))
+        )
+        for alias in ["egg bhurji", "egg burji", "anda bhurji", "anda burji", "Indian scrambled eggs"] {
+            let result = await router.resolve(text: "1 katori \(alias) and 20 g cheese")
+            XCTAssertEqual(Set(result.items.compactMap { $0.canonical?.food.canonicalId }), ["egg-bhurji", "cheese"], alias)
+            XCTAssertTrue(result.unresolvedTerms.isEmpty, alias)
+            XCTAssertTrue(result.items.allSatisfy { $0.nutrition.lookup.values.hasCompleteCoreNutrients }, alias)
+            XCTAssertEqual(result.items.first { $0.canonical?.food.canonicalId == "cheese" }?.nutrition.estimatedGrams, 20)
+        }
+        let calls = await counter.value
+        XCTAssertEqual(calls, 0, "Known foods should not wait for either remote service")
+        XCTAssertEqual(catalog.normalise("cottage cheese")?.canonicalId, "paneer")
+        XCTAssertEqual(catalog.normalise("scrambled eggs")?.canonicalId, "scrambled-egg")
+    }
+
+    func testPhotoInventoryKeepsBhurjiAndCheeseAsDistinctFoods() async throws {
+        let parse = MealParseResult(detectedItems: [
+            ParsedFoodItem(originalText: "egg bhurji", canonicalSearchName: "egg bhurji", quantity: 1, unit: "katori", estimatedGrams: 155, confidence: 0.9),
+            ParsedFoodItem(originalText: "cheese", canonicalSearchName: "cheese", quantity: 1, unit: "slice", estimatedGrams: 20, confidence: 0.9)
+        ], unresolvedItems: [], mealDescription: "Bhurji with cheese", clarificationQuestions: [], confidence: 0.9)
+        let service = StructuredPhotoRecognitionService(
+            understanding: StubMealUnderstanding(result: parse),
+            coordinator: HybridMealAnalysisCoordinator(router: DefaultFoodResolutionRouter(catalog: catalog)),
+            catalog: catalog
+        )
+        let result = try await service.analyse(fixtureFoodImage(), dishHint: nil)
+        XCTAssertEqual(Set(result.detectedItems.compactMap(\.canonicalFoodId)), ["egg-bhurji", "cheese"])
+        XCTAssertTrue(result.detectedItems.allSatisfy { $0.nutrition.hasCompleteCoreNutrients })
+    }
+
     func testIndianAliasesNormaliseToCanonicalFood() {
         XCTAssertEqual(catalog.normalise("chapati")?.canonicalId, "roti")
         XCTAssertEqual(catalog.normalise("dahi")?.canonicalId, "dahi")
@@ -4361,7 +4397,7 @@ final class FoodAnalysisTests: XCTestCase {
         XCTAssertEqual(lookup.provenance.dataVersion, "2026-08")
     }
 
-    func testVerifiedNutritionProviderPrecedesCuratedFallback() async {
+    func testVerifiedNutritionProviderResolvesMissingCatalogNutrition() async {
         let values = NutritionValues(caloriesKcal: 77.5, proteinGrams: 6.3, carbohydrateGrams: 0.55, fatGrams: 5.3, fibreGrams: 0)
         let provenance = NutritionProvenance(
             kind: .verifiedDatabase,
@@ -4375,16 +4411,16 @@ final class FoodAnalysisTests: XCTestCase {
             verifiedProvider: StubVerifiedNutritionProvider(lookupResult: NutritionLookup(values: values, provenance: provenance))
         )
         let item = ParsedFoodItem(
-            originalText: "boiled egg",
-            canonicalSearchName: "boiled egg",
-            category: .egg,
+            originalText: "paneer",
+            canonicalSearchName: "paneer",
+            category: .dairyOrSide,
             quantity: 1,
-            unit: "wholeEgg",
+            unit: "serving",
             estimatedGrams: 50,
             confidence: 1
         )
-        let canonical = catalog.normalise("boiled egg").map {
-            CanonicalFoodMatch(food: $0, matchedAlias: "boiled egg", confidence: 1, source: "test")
+        let canonical = catalog.normalise("paneer").map {
+            CanonicalFoodMatch(food: $0, matchedAlias: "paneer", confidence: 1, source: "test")
         }
         let result = await service.resolve(item: item, canonical: canonical)
         XCTAssertEqual(result.lookup.provenance.kind, .verifiedDatabase)
@@ -5076,5 +5112,14 @@ private struct TestMealVisualGenerator: MealVisualGenerating {
             mimeType: "image/png",
             data: png
         )
+    }
+}
+
+private struct CountingUnavailableNutrition: VerifiedNutritionProvider {
+    let counter: ParseCounter
+    var identifier: String { "counting-unavailable" }
+    func lookup(canonicalSearchName: String, estimatedGrams: Double?) async throws -> NutritionLookup? {
+        await counter.increment()
+        return nil
     }
 }

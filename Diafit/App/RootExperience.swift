@@ -5,13 +5,14 @@ struct RootExperience: View {
     @State private var selectedSection: AppSection = .today
     @State private var selectedDayID: Day.ID?
     @State private var atlasIsOpen = false
+    @State private var todayScrollRequest = 0
     @Namespace private var mealNamespace
 
     var body: some View {
         ZStack {
             Color.paper.ignoresSafeArea()
 
-            TabView(selection: $selectedSection) {
+            TabView(selection: sectionSelection) {
                 todayExperience
                     .tag(AppSection.today)
                     .tabItem {
@@ -67,15 +68,23 @@ struct RootExperience: View {
         .onAppear {
             selectedDayID = selectedDayID ?? todayDayID ?? store.days.last?.id
         }
-        .onChange(of: selectedSection) { _, section in
-            // Returning to the Today tab is an explicit request to see the
-            // current day, even if the user swiped the page view to an older
-            // entry before leaving the tab.
-            if section == .today {
-                selectedDayID = todayDayID ?? store.days.last?.id
-            }
-        }
         .animation(.spring(response: 0.52, dampingFraction: 0.86), value: atlasIsOpen)
+    }
+
+    // A binding setter receives tab taps even when Today is already selected.
+    // onChange alone only handles switching from another tab.
+    private var sectionSelection: Binding<AppSection> {
+        Binding(
+            get: { selectedSection },
+            set: { section in
+                selectedSection = section
+                if section == .today {
+                    selectedDayID = todayDayID ?? store.days.last?.id
+                    atlasIsOpen = false
+                    todayScrollRequest += 1
+                }
+            }
+        )
     }
 
     private var todayDayID: Day.ID? {
@@ -96,7 +105,8 @@ struct RootExperience: View {
                     DayThreadView(
                         dayID: day.id,
                         isAtlasOpen: $atlasIsOpen,
-                        mealNamespace: mealNamespace
+                        mealNamespace: mealNamespace,
+                        scrollToTopRequest: todayScrollRequest
                     )
                     .tag(Optional(day.id))
                 }

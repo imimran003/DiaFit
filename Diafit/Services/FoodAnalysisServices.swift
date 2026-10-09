@@ -284,9 +284,10 @@ struct StructuredPhotoRecognitionService: FoodRecognitionService, Sendable {
         // A typed hint is evidence, not an inventory. Older builds passed the
         // hint as the entire prompt, which encouraged the provider to return
         // only the named dish and silently omit the rest of the plate.
-        let instruction = trimmedHint.isEmpty
+        let baseInstruction = trimmedHint.isEmpty
             ? "Inspect the entire meal photo and identify every distinct physical food serving exactly once. Preserve regional Indian names, include breads, rice, dal, sabji, curries and sides when visible, and never list alternative guesses as separate foods. If roasted mashed eggplant with tomato and onion is visually supported, identify baingan bharta instead of generic sabji; if the dish cannot be distinguished, keep the name uncertain."
             : "The member described this meal as \(trimmedHint). Use that as a hint, but inspect the entire photo and return every distinct visible serving exactly once."
+        let instruction = baseInstruction + " Distinguish egg bhurji (Indian scrambled eggs with onion and tomato) from paneer bhurji and plain scrambled eggs using visible texture and the member hint. Inspect small sides and toppings for cheese, including slices, cubes and grated or melted cheese. Include a distinct cheese portion when supported; do not invent hidden cheese or double-count ingredients inside a named dish. If egg versus paneer or cheese type is unclear, ask for confirmation rather than omitting the serving or asserting a subtype."
         let primaryParse = try await understanding.parse(text: instruction, image: image)
         var selectedParse = primaryParse
         var providerPassesUsed = 1
