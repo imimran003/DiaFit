@@ -22,6 +22,21 @@ final class DiafitUITests: XCTestCase {
         XCTAssertTrue(app.buttons["Connect Apple Health"].exists)
     }
 
+    func testCompactMealExpandsAndTodayReturnsToHeader() throws {
+        submitFoodNote("Pasta for dinner")
+        let meal = app.buttons["Saved meal Tomato basil pasta"]
+        XCTAssertTrue(meal.waitForExistence(timeout: 4))
+        meal.tap()
+        XCTAssertTrue(app.staticTexts["Fat"].waitForExistence(timeout: 2))
+        attachScreenshot(named: "home-meal-expanded")
+        meal.tap()
+        app.tabBars.buttons["Today"].tap()
+        let heading = app.staticTexts["today-heading"]
+        XCTAssertTrue(heading.waitForExistence(timeout: 3))
+        XCTAssertTrue(heading.isHittable)
+        attachScreenshot(named: "home-meal-compact")
+    }
+
     func testProfileAndSettingsTabsExposeCleanFirstRunExperience() throws {
         let profileTab = app.tabBars.buttons["Profile"]
         XCTAssertTrue(profileTab.waitForExistence(timeout: 3))

@@ -10,7 +10,7 @@ struct RootExperience: View {
 
     var body: some View {
         ZStack {
-            Color.paper.ignoresSafeArea()
+            (selectedSection == .today ? Color.homeCanvas : Color.paper).ignoresSafeArea()
 
             TabView(selection: sectionSelection) {
                 todayExperience

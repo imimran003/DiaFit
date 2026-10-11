@@ -15,7 +15,7 @@ struct FoodArtwork: View {
     /// Keep the live lens treatment in production, while giving deterministic UI
     /// tests a static first frame rather than a permanently ticking timeline.
     private var usesStaticRendering: Bool {
-        reduceMotion || ProcessInfo.processInfo.arguments.contains("UITestMode")
+        treatment == .thread || reduceMotion || ProcessInfo.processInfo.arguments.contains("UITestMode")
     }
 
     var body: some View {

@@ -11,7 +11,9 @@ struct GlucoseSummaryStrip: View {
         VStack(alignment: .leading, spacing: 11) {
             summaryHeader
 
-            if dynamicTypeSize.isAccessibilitySize {
+            if day.latestFastingReading == nil && day.latestPostMealReading == nil {
+                EmptyView()
+            } else if dynamicTypeSize.isAccessibilitySize {
                 VStack(alignment: .leading, spacing: 0) {
                     GlucoseSnapshot(label: "Fasting", reading: day.latestFastingReading, preferredUnit: preferredUnit)
                         .padding(.vertical, 8)
@@ -34,11 +36,11 @@ struct GlucoseSummaryStrip: View {
                 }
             }
         }
-        .padding(14)
-        .background(Color.surface.opacity(0.62), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.surfaceStroke.opacity(0.62), lineWidth: 1)
+        .padding(.horizontal, 4)
+        .padding(.top, 12)
+        .padding(.bottom, 4)
+        .overlay(alignment: .top) {
+            Rectangle().fill(Color.rule.opacity(0.5)).frame(height: 0.5)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Daily blood glucose")
@@ -50,18 +52,18 @@ struct GlucoseSummaryStrip: View {
                 .font(.system(size: 11, weight: .bold))
                 .foregroundStyle(Color.ink)
                 .frame(width: 28, height: 28)
-                .background(Color.lime.opacity(0.44), in: Circle())
+                .background(Color.homeAccentWash, in: Circle())
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 1) {
-                Text("GLUCOSE")
+                Text("Glucose")
                     .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(1.2)
+                    .tracking(0)
                     .foregroundStyle(Color.quietInk)
-                Text("Latest readings")
-                    .font(DiafitType.caption)
-                    .foregroundStyle(Color.quietInk.opacity(0.84))
             }
             Spacer(minLength: 8)
+            if day.latestFastingReading == nil && day.latestPostMealReading == nil {
+                logButton
+            }
             Button("History", action: openHistory)
                 .font(DiafitType.caption.weight(.semibold))
                 .foregroundStyle(Color.quietInk)
@@ -73,7 +75,7 @@ struct GlucoseSummaryStrip: View {
 
     private var logButton: some View {
         Button(action: log) {
-            Label("Log glucose", systemImage: "plus")
+            Label("Log", systemImage: "plus")
                 .font(DiafitType.caption.weight(.semibold))
                 .foregroundStyle(Color.ink)
                 .lineLimit(2)
@@ -83,9 +85,10 @@ struct GlucoseSummaryStrip: View {
                 .frame(maxWidth: dynamicTypeSize.isAccessibilitySize ? .infinity : nil)
                 .frame(width: dynamicTypeSize.isAccessibilitySize ? nil : 96)
                 .frame(minHeight: 44)
-                .background(Color.lime.opacity(0.42), in: Capsule())
+                .background(Color.homeAccentWash, in: Capsule())
         }
         .buttonStyle(PressableStyle(pressedScale: 0.94))
+        .accessibilityLabel("Log glucose")
         .accessibilityIdentifier("Log glucose")
     }
 }
@@ -111,9 +114,6 @@ private struct GlucoseSnapshot: View {
                 Text("—")
                     .font(DiafitType.title.weight(.medium))
                     .foregroundStyle(Color.quietInk.opacity(0.65))
-                Text("Not logged")
-                    .font(DiafitType.caption)
-                    .foregroundStyle(Color.quietInk.opacity(0.76))
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

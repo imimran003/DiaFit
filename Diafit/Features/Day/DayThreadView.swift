@@ -39,9 +39,7 @@ struct DayThreadView: View {
                         // transitions deterministic; LazyVStack can repeatedly
                         // invalidate its placement cache when a contextual meal
                         // action removes an item while the scroll view is moving.
-                        VStack(spacing: 18) {
-                            Color.clear.frame(height: 0).id("top")
-
+                        VStack(spacing: 20) {
                             DayHeader(
                                 day: day,
                                 healthActivityState: healthActivityState,
@@ -51,7 +49,8 @@ struct DayThreadView: View {
                                 logGlucose: { showsGlucoseEntry = true },
                                 openGlucoseHistory: { showsGlucoseHistory = true }
                             )
-                                .padding(.bottom, day.meals.isEmpty ? 0 : 2)
+                                .id("top")
+                                .padding(.bottom, day.meals.isEmpty ? 0 : 4)
                                 // Preserve a large accessibility presentation
                                 // without allowing editorial display type to
                                 // consume the entire viewport at AX5.
@@ -127,11 +126,12 @@ struct DayThreadView: View {
                                     .id("thinking")
                             }
 
-                            Color.clear.frame(height: 112).id("tail")
+                            Color.clear.frame(height: 24).id("tail")
                         }
                         .padding(.horizontal, 20)
                         .padding(.top, 8)
                     }
+                    .background(Color.homeCanvas.ignoresSafeArea())
                     .scrollDismissesKeyboard(.interactively)
                     .safeAreaInset(edge: .bottom, spacing: 0) {
                         Composer(
@@ -598,66 +598,39 @@ private struct DayHeader: View {
         return day.date.formatted(.dateTime.weekday(.wide))
     }
 
-    private var dateEyebrow: String {
-        if Calendar.current.isDateInToday(day.date) { return "YOUR DAY" }
-        if Calendar.current.isDateInYesterday(day.date) { return "RECENTLY" }
-        return day.date.formatted(.dateTime.month(.abbreviated).day()).uppercased()
-    }
-
-    private var dayPulse: String {
-        if day.meals.isEmpty { return "A clear slate" }
-        let mealLabel = day.meals.count == 1 ? "meal" : "meals"
-        return "\(day.meals.count) \(mealLabel) logged"
-    }
-
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .top, spacing: 16) {
-                VStack(alignment: .leading, spacing: 3) {
-                    Text(dateEyebrow)
-                        .font(.system(size: 10, weight: .bold, design: .rounded))
-                        .tracking(1.7)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .center, spacing: 16) {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(day.date.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                        .font(.subheadline)
                         .foregroundStyle(Color.quietInk)
                     Text(dateTitle)
-                        .font(DiafitType.display)
+                        .font(.system(.largeTitle, design: .serif, weight: .regular))
                         .foregroundStyle(Color.ink)
-                    Text(day.date.formatted(.dateTime.month(.wide).day()))
-                        .font(DiafitType.caption)
-                        .foregroundStyle(Color.quietInk)
+                        .accessibilityIdentifier("today-heading")
                 }
-
                 Spacer()
-
                 if !day.meals.isEmpty {
                     Button(action: openAtlas) {
-                        Image(systemName: "square.grid.2x2.fill")
-                            .font(.system(size: 16, weight: .semibold))
-                            .foregroundStyle(Color.ink)
-                            .frame(width: 44, height: 44)
-                            .background(Color.mist.opacity(0.72), in: Circle())
+                        Image(systemName: "square.grid.2x2")
+                            .font(.system(.body, weight: .medium))
+                            .foregroundStyle(Color.homeAccent)
+                            .frame(width: 48, height: 48)
+                            .background(Color.homeAccentWash, in: Circle())
                     }
-                    .buttonStyle(PressableStyle(pressedScale: 0.9))
+                    .buttonStyle(PressableStyle(pressedScale: 0.94))
                     .accessibilityLabel("Open meal atlas")
+                } else {
+                    Image(systemName: "leaf")
+                        .font(.title2.weight(.light))
+                        .foregroundStyle(Color.homeAccent)
+                        .frame(width: 48, height: 48)
+                        .background(Color.homeAccentWash, in: Circle())
+                        .accessibilityHidden(true)
                 }
             }
-
-            HStack(spacing: 8) {
-                Circle()
-                    .fill(Color.lime)
-                    .frame(width: 7, height: 7)
-                    .accessibilityHidden(true)
-                Text(dayPulse)
-                    .font(DiafitType.caption.weight(.semibold))
-                    .foregroundStyle(Color.ink)
-                Spacer(minLength: 8)
-                Text(day.meals.isEmpty ? "Ready when you are" : "\(day.totalEnergy) kcal so far")
-                    .font(DiafitType.caption)
-                    .foregroundStyle(Color.quietInk)
-                    .lineLimit(1)
-                    .minimumScaleFactor(0.8)
-            }
-            .accessibilityElement(children: .combine)
-            .accessibilityLabel(day.meals.isEmpty ? "No meals logged yet" : "\(day.meals.count) meals logged, \(day.totalEnergy) kilocalories so far")
+            .padding(.bottom, 4)
 
             DailyRhythm(day: day)
             EnergyAndMovementSection(
@@ -681,19 +654,13 @@ private struct MealStreamHeader: View {
     let day: Day
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 10) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text("MEALS")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(1.8)
-                    .foregroundStyle(Color.quietInk)
-                Text("Your day in plates")
-                    .font(DiafitType.title)
-                    .foregroundStyle(Color.ink)
-            }
-            Spacer(minLength: 8)
-            Text(day.meals.count == 1 ? "1 entry" : "\(day.meals.count) entries")
-                .font(DiafitType.caption.weight(.semibold))
+        HStack(alignment: .firstTextBaseline) {
+            Text("Your meals")
+                .font(.system(.title3, design: .serif, weight: .medium))
+                .foregroundStyle(Color.ink)
+            Spacer()
+            Text("\(day.meals.count) logged")
+                .font(.caption)
                 .foregroundStyle(Color.quietInk)
         }
         .padding(.top, 4)
@@ -750,12 +717,12 @@ private struct EveningReviewPending: View {
                     .font(.system(size: 15, weight: .semibold))
                     .foregroundStyle(Color.ink)
                     .frame(width: 38, height: 38)
-                    .background(Color.lime.opacity(0.42), in: Circle())
+                    .background(Color.homeAccentWash, in: Circle())
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Daily review · 10 PM")
                         .font(DiafitType.body.weight(.semibold))
                         .foregroundStyle(Color.ink)
-                    Text("A brief review appears here after your day is logged.")
+                    Text("Your evening summary")
                         .font(DiafitType.caption)
                         .foregroundStyle(Color.quietInk)
                 }
@@ -794,7 +761,7 @@ private struct EveningReviewPending: View {
 
 private struct DailyNutritionReviewCard: View {
     let review: DailyNutritionReview
-    @State private var expanded = true
+    @State private var expanded = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -874,26 +841,25 @@ private struct EnergyAndMovementSection: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 13) {
+            if state != .disconnected {
             HStack(spacing: 9) {
                 Image(systemName: "figure.walk")
                     .font(.system(size: 13, weight: .bold))
                     .foregroundStyle(Color.ink)
                     .frame(width: 28, height: 28)
-                    .background(Color.lime.opacity(0.46), in: Circle())
+                    .background(Color.homeAccentWash, in: Circle())
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("ENERGY & MOVEMENT")
+                    Text("Activity")
                         .font(DiafitType.caption.weight(.bold))
-                        .tracking(1.6)
+                        .tracking(0)
                         .foregroundStyle(Color.quietInk)
-                    Text("A quiet read on today’s balance")
-                        .font(DiafitType.caption)
-                        .foregroundStyle(Color.quietInk.opacity(0.84))
                 }
                 Spacer()
                 trailingAction
             }
 
+            }
             switch state {
             case .disconnected:
                 connectionPrompt
@@ -907,12 +873,8 @@ private struct EnergyAndMovementSection: View {
                 failure(message)
             }
         }
-        .padding(15)
-        .background(Color.mist.opacity(0.34), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 24, style: .continuous)
-                .stroke(Color.rule.opacity(0.52), lineWidth: 1)
-        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 4)
     }
 
     @ViewBuilder
@@ -945,12 +907,12 @@ private struct EnergyAndMovementSection: View {
                     .font(.system(size: 17, weight: .semibold))
                     .foregroundStyle(Color.ink)
                     .frame(width: 40, height: 40)
-                    .background(Color.lime.opacity(0.58), in: Circle())
+                    .background(Color.homeAccentWash, in: Circle())
                 VStack(alignment: .leading, spacing: 3) {
-                    Text("Add activity from Apple Health")
+                    Text("Connect Apple Health")
                         .font(DiafitType.body.weight(.semibold))
                         .foregroundStyle(Color.ink)
-                    Text("Steps, distance, calories burned, and your daily balance.")
+                    Text("Movement & energy, in one place.")
                         .font(DiafitType.caption)
                         .foregroundStyle(Color.quietInk)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1022,11 +984,6 @@ private struct EnergyAndMovementSection: View {
                     .font(DiafitType.caption)
                     .foregroundStyle(Color.quietInk)
                     .fixedSize(horizontal: false, vertical: true)
-            } else {
-                Text("Burned combines active and resting energy. Balance is intake minus burned.")
-                    .font(DiafitType.caption)
-                    .foregroundStyle(Color.quietInk)
-                    .fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -1075,7 +1032,7 @@ private struct EnergyAndMovementSection: View {
 
     private func balanceTint(_ balance: DailyEnergyBalance?) -> Color {
         switch balance?.kind {
-        case .deficit: .green
+        case .deficit: .homeAccent
         case .surplus: .coral
         case .balanced, nil: .ink
         }
@@ -1178,164 +1135,88 @@ private struct MovementLabel: View {
 
 private struct DailyRhythm: View {
     let day: Day
-
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    @ScaledMetric(relativeTo: .largeTitle) private var numberSize = 48
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 15) {
-            HStack(alignment: .firstTextBaseline, spacing: 8) {
-                Text("TODAY'S INTAKE")
-                    .font(.system(size: 10, weight: .bold, design: .rounded))
-                    .tracking(1.7)
-                    .foregroundStyle(Color.quietInk)
-                Spacer(minLength: 8)
-                if !day.meals.isEmpty {
-                    Text(day.proteinTotalIsComplete ? "Known totals" : "Partial totals")
-                        .font(DiafitType.caption.weight(.semibold))
-                        .foregroundStyle(day.proteinTotalIsComplete ? Color.quietInk : Color.saffron)
+        VStack(alignment: .leading, spacing: 16) {
+            HStack(alignment: .firstTextBaseline) {
+                Text("DAILY INTAKE")
+                    .font(.caption2.weight(.semibold))
+                    .tracking(1.8)
+                Spacer()
+                if !day.proteinTotalIsComplete {
+                    Text("Partial totals")
+                        .font(.caption)
                 }
             }
+            .foregroundStyle(Color.homeHeroSecondary)
 
-            Group {
-                if dynamicTypeSize.isAccessibilitySize {
-                    VStack(spacing: 0) {
-                        metricRows
+            ViewThatFits(in: .horizontal) {
+                HStack(alignment: .center, spacing: 24) {
+                    carbohydrate
+                    Spacer(minLength: 8)
+                    Rectangle().fill(Color.homeHeroSecondary.opacity(0.22)).frame(width: 1, height: 72)
+                    VStack(alignment: .leading, spacing: 16) {
+                        calories
+                        protein
                     }
-                } else {
-                    HStack(alignment: .top, spacing: 0) {
-                        metricColumns
-                    }
+                }
+                VStack(alignment: .leading, spacing: 16) {
+                    carbohydrate
+                    calories
+                    protein
                 }
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 17)
-        .background(Color.surface.opacity(0.82), in: RoundedRectangle(cornerRadius: 25, style: .continuous))
-        .overlay {
-            RoundedRectangle(cornerRadius: 25, style: .continuous)
-                .stroke(Color.surfaceStroke.opacity(0.75), lineWidth: 1)
-        }
-        .overlay(alignment: .leading) {
-            Capsule()
-                .fill(Color.lime)
-                .frame(width: 3, height: 33)
-                .padding(.leading, 1)
-        }
+        .foregroundStyle(Color.homeHeroText)
+        .padding(22)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.homeHero, in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Today’s nutrition intake")
     }
 
-    @ViewBuilder
-    private var metricColumns: some View {
-        NutritionMetric(
-            label: "Calories", value: day.totalEnergy, unit: "kcal",
-            spokenUnit: "kilocalories", identifier: "daily-summary-calories"
-        )
-        SummaryDivider()
-        NutritionMetric(
-            label: "Carbohydrates", value: day.totalCarbs, unit: "g",
-            spokenUnit: "grams", identifier: "daily-summary-carbohydrates"
-        )
-        SummaryDivider()
-        NutritionMetric(
-            label: "Protein", value: day.totalProtein, unit: "g",
-            spokenUnit: "grams", identifier: "daily-summary-protein",
-            isComplete: day.proteinTotalIsComplete,
-            goalStatus: day.proteinGoalStatus
-        )
-    }
-
-    @ViewBuilder
-    private var metricRows: some View {
-        NutritionMetric(
-            label: "Calories", value: day.totalEnergy, unit: "kcal",
-            spokenUnit: "kilocalories", identifier: "daily-summary-calories", horizontal: true
-        )
-        Divider().overlay(Color.rule.opacity(0.65))
-        NutritionMetric(
-            label: "Carbohydrates", value: day.totalCarbs, unit: "g",
-            spokenUnit: "grams", identifier: "daily-summary-carbohydrates", horizontal: true
-        )
-        Divider().overlay(Color.rule.opacity(0.65))
-        NutritionMetric(
-            label: "Protein", value: day.totalProtein, unit: "g",
-            spokenUnit: "grams", identifier: "daily-summary-protein",
-            isComplete: day.proteinTotalIsComplete,
-            goalStatus: day.proteinGoalStatus, horizontal: true
-        )
-    }
-}
-
-private struct NutritionMetric: View {
-    let label: String
-    let value: Int
-    let unit: String
-    let spokenUnit: String
-    let identifier: String
-    var isComplete = true
-    var goalStatus: ProteinGoalStatus? = nil
-    var horizontal = false
-
-    var body: some View {
-        Group {
-            if horizontal {
-                HStack(alignment: .firstTextBaseline, spacing: 10) {
-                    Text(label)
-                        .font(DiafitType.caption)
-                        .foregroundStyle(Color.quietInk)
-                    Spacer(minLength: 12)
-                    valueAndGoal
-                }
-                .padding(.vertical, 11)
-            } else {
-                VStack(alignment: .leading, spacing: 5) {
-                    Text(label)
-                        .font(DiafitType.caption)
-                        .foregroundStyle(Color.quietInk)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.74)
-                    valueAndGoal
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+    private var carbohydrate: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .firstTextBaseline, spacing: 5) {
+                Text(day.totalCarbs.formatted())
+                    .font(.system(size: numberSize, weight: .light, design: .rounded))
+                    .monospacedDigit()
+                Text("g").font(.title3).foregroundStyle(Color.homeHeroSecondary)
             }
+            Text("Carbohydrates").font(.caption).foregroundStyle(Color.homeHeroSecondary)
         }
+        .fixedSize(horizontal: true, vertical: false)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(label), \(value) \(spokenUnit)\(isComplete ? "" : ", known amount; some meal data is unavailable")\(goalStatus.map { ", \($0.accessibilityDescription)" } ?? "")")
-        .accessibilityIdentifier(identifier)
+        .accessibilityLabel("Carbohydrates, \(day.totalCarbs) grams")
+        .accessibilityIdentifier("daily-summary-carbohydrates")
     }
 
-    private var valueAndGoal: some View {
-        VStack(alignment: horizontal ? .trailing : .leading, spacing: 2) {
-            valueLabel
-            if goalStatus != nil {
-                Text("of \(DailyProteinTarget.grams)g")
-                    .font(.system(size: 10, weight: .medium, design: .rounded))
-                    .foregroundStyle(Color.quietInk)
-            }
-        }
-    }
-
-    private var valueTint: Color {
-        switch goalStatus {
-        case .met: .green
-        case .below: .coral
-        case .incomplete, .none: .ink
-        }
-    }
-
-    private var valueLabel: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 4) {
-            Text("\(value)")
-                .font(DiafitType.metric)
-                .fontWeight(.semibold)
+    private var calories: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(day.totalEnergy.formatted()) kcal")
+                .font(.system(.headline, design: .rounded, weight: .medium))
                 .monospacedDigit()
-                .foregroundStyle(valueTint)
-            Text(unit)
-                .font(DiafitType.caption)
-                .foregroundStyle(Color.quietInk)
+            Text("Calories").font(.caption).foregroundStyle(Color.homeHeroSecondary)
         }
-        .lineLimit(1)
-        .minimumScaleFactor(0.72)
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Calories, \(day.totalEnergy) kilocalories")
+        .accessibilityIdentifier("daily-summary-calories")
+    }
+
+    private var protein: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text("\(day.totalProtein) / \(DailyProteinTarget.grams) g")
+                .font(.system(.headline, design: .rounded, weight: .medium))
+                .monospacedDigit()
+            Text(day.proteinTotalIsComplete ? "Protein" : "Protein · partial")
+                .font(.caption).foregroundStyle(Color.homeHeroSecondary)
+        }
+        .fixedSize(horizontal: true, vertical: false)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Protein, \(day.totalProtein) grams, \(day.proteinGoalStatus.accessibilityDescription)")
+        .accessibilityIdentifier("daily-summary-protein")
     }
 }
 
@@ -1360,13 +1241,13 @@ private struct EmptyMealState: View {
                     .font(.system(size: 16, weight: .semibold))
                     .foregroundStyle(Color.ink)
                     .frame(width: 36, height: 36)
-                    .background(Color.lime.opacity(0.58), in: Circle())
+                    .background(Color.homeAccentWash, in: Circle())
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("No meals logged yet")
                         .font(DiafitType.title)
                         .foregroundStyle(Color.ink)
-                    Text("Start your day with one simple note or a photo.")
+                    Text("A note or a photo is all it takes.")
                         .font(DiafitType.body)
                         .foregroundStyle(Color.quietInk)
                         .fixedSize(horizontal: false, vertical: true)
@@ -1397,7 +1278,7 @@ private struct EmptyMealState: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(17)
-        .background(Color.mist.opacity(0.3), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
+        .background(Color.surface.opacity(0.5), in: RoundedRectangle(cornerRadius: 24, style: .continuous))
         .overlay {
             RoundedRectangle(cornerRadius: 24, style: .continuous)
                 .stroke(Color.rule.opacity(0.5), lineWidth: 1)
@@ -1461,8 +1342,8 @@ private struct Composer: View {
                     Image(systemName: "camera")
                         .font(.system(size: 15, weight: .semibold))
                         .foregroundStyle(Color.ink)
-                        .frame(width: 36, height: 36)
-                        .background(Color.mist.opacity(0.72), in: Circle())
+                        .frame(width: 44, height: 44)
+                        .background(Color.homeAccentWash, in: Circle())
                 }
                 .buttonStyle(PressableStyle(pressedScale: 0.88))
                 .accessibilityLabel("Add meal photo")
@@ -1473,7 +1354,7 @@ private struct Composer: View {
                 ) {
                     EmptyView()
                 }
-                    .font(DiafitType.body)
+                    .font(.callout)
                     .foregroundStyle(Color.ink)
                     .focused(isFocused)
                     .lineLimit(1)
@@ -1484,22 +1365,22 @@ private struct Composer: View {
                     Image(systemName: isThinking ? "ellipsis" : "arrow.up")
                         .font(.system(size: 15, weight: .bold))
                         .foregroundStyle(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.quietInk : Color.paper)
-                        .frame(width: 36, height: 36)
-                        .background(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.mist : Color.ink, in: Circle())
+                        .frame(width: 44, height: 44)
+                        .background(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? Color.homeAccentWash : Color.homeAccent, in: Circle())
                 }
                 .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isThinking)
                 .buttonStyle(PressableStyle(pressedScale: 0.86))
                 .accessibilityLabel("Send food note")
         }
-        .padding(.leading, 18)
+        .padding(.leading, 7)
         .padding(.trailing, 7)
         .padding(.vertical, 7)
-        .background(Color.mist.opacity(0.92), in: Capsule())
+        .background(Color.surface, in: Capsule())
         .overlay(Capsule().stroke(Color.rule.opacity(0.58), lineWidth: 0.8))
         .padding(.horizontal, 20)
         .padding(.top, 9)
         .padding(.bottom, 10)
-        .background(Color.paper)
+        .background(Color.homeCanvas)
     }
 }
 

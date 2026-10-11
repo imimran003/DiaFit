@@ -18,6 +18,13 @@ extension Color {
     static let surface = adaptive(light: (1.0, 0.995, 0.98), dark: (0.17, 0.18, 0.16))
     static let surfaceStroke = adaptive(light: (0.84, 0.83, 0.78), dark: (0.34, 0.35, 0.31))
 
+    static let homeCanvas = adaptive(light: (0.97, 0.97, 0.95), dark: (0.075, 0.085, 0.08))
+    static let homeAccent = adaptive(light: (0.22, 0.34, 0.28), dark: (0.68, 0.79, 0.70))
+    static let homeAccentWash = adaptive(light: (0.89, 0.92, 0.88), dark: (0.15, 0.21, 0.17))
+    static let homeHero = Color(red: 0.15, green: 0.23, blue: 0.19)
+    static let homeHeroText = Color(red: 0.96, green: 0.97, blue: 0.92)
+    static let homeHeroSecondary = Color(red: 0.74, green: 0.81, blue: 0.74)
+
     private static func adaptive(
         light: (red: CGFloat, green: CGFloat, blue: CGFloat),
         dark: (red: CGFloat, green: CGFloat, blue: CGFloat)

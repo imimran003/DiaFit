@@ -72,18 +72,18 @@ private struct PersonMessage: View {
     let delete: () -> Void
 
     var body: some View {
-        Text(text)
-            .font(DiafitType.body)
-            .foregroundStyle(Color.ink)
-            .padding(.horizontal, 17)
-            .padding(.vertical, 13)
-            .background(Color.ink.opacity(0.055), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 20, style: .continuous)
-                    .stroke(Color.rule.opacity(0.68), lineWidth: 0.8)
-            }
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            Text(text)
+                .font(.subheadline)
+                .multilineTextAlignment(.trailing)
+            Image(systemName: "arrow.up.left")
+                .font(.caption2)
+                .accessibilityHidden(true)
+        }
+        .foregroundStyle(Color.quietInk)
+        .padding(.vertical, 4)
         .frame(maxWidth: .infinity, alignment: .trailing)
-        .padding(.leading, 58)
+        .padding(.leading, 44)
         .contextMenu {
             Button("Delete entry", systemImage: "trash", role: .destructive, action: delete)
         }
