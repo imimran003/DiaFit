@@ -7,6 +7,39 @@ final class FoodAnalysisTests: XCTestCase {
         IndianFoodCatalogService(bundle: Bundle(for: FoodAnalysisTests.self))
     }
 
+    func testFriedFishAliasesResolveToCompleteEditableEstimate() async throws {
+        let counter = ParseCounter()
+        let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: CountingMealUnderstanding(result: unusedParse, counter: counter),
+            nutrition: HybridNutritionResolutionService(catalog: catalog, verifiedProvider: CountingUnavailableNutrition(counter: counter))
+        )
+        for name in ["fried fish", "fish fry", "pan-fried fish", "masala fish fry"] {
+            let result = await router.resolve(text: "1 piece \(name)")
+            XCTAssertEqual(result.items.first?.canonical?.food.canonicalId, "fish-fry", name)
+            XCTAssertTrue(result.items.first?.nutrition.lookup.values.hasCompleteCoreNutrients == true, name)
+            XCTAssertTrue(result.unresolvedTerms.isEmpty, name)
+        }
+        let calls = await counter.value
+        XCTAssertEqual(calls, 0)
+        XCTAssertNil(catalog.normalise("fried chicken"))
+    }
+
+    func testPhotoFishFryResultKeepsFishIdentityAndNutrition() async throws {
+        let parse = MealParseResult(detectedItems: [
+            ParsedFoodItem(originalText: "fried fish", canonicalSearchName: "fried fish", quantity: 1, unit: "piece", estimatedGrams: 150, confidence: 0.9)
+        ], unresolvedItems: [], mealDescription: "One piece of fried fish", clarificationQuestions: [], confidence: 0.9)
+        let service = StructuredPhotoRecognitionService(
+            understanding: StubMealUnderstanding(result: parse),
+            coordinator: HybridMealAnalysisCoordinator(router: DefaultFoodResolutionRouter(catalog: catalog)),
+            catalog: catalog
+        )
+        let result = try await service.analyse(fixtureFoodImage(), dishHint: nil)
+        XCTAssertEqual(result.detectedItems.first?.canonicalFoodId, "fish-fry")
+        XCTAssertTrue(result.detectedItems.first?.nutrition.hasCompleteCoreNutrients == true)
+    }
+
     func testBhurjiAndCheeseResolveLocallyWithoutNetwork() async {
         let counter = ParseCounter()
         let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
