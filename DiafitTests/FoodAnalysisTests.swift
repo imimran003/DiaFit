@@ -7,6 +7,42 @@ final class FoodAnalysisTests: XCTestCase {
         IndianFoodCatalogService(bundle: Bundle(for: FoodAnalysisTests.self))
     }
 
+    func testAlooBroccoliSabjiAndBroccoliResolveLocally() async {
+        let counter = ParseCounter()
+        let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: CountingMealUnderstanding(result: unusedParse, counter: counter),
+            nutrition: HybridNutritionResolutionService(catalog: catalog, verifiedProvider: CountingUnavailableNutrition(counter: counter))
+        )
+        for name in ["aloo broccoli sabji", "aalo brocollo sbji", "aloo broccoli sabzi", "potato broccoli curry"] {
+            let result = await router.resolve(text: "1 katori \(name)")
+            XCTAssertEqual(result.items.compactMap { $0.canonical?.food.canonicalId }, ["aloo-broccoli-sabji"], name)
+            XCTAssertTrue(result.items.first?.nutrition.lookup.values.hasCompleteCoreNutrients == true, name)
+            XCTAssertTrue(result.unresolvedTerms.isEmpty, name)
+        }
+        let broccoli = await router.resolve(text: "100 g broccoli florets")
+        XCTAssertEqual(broccoli.items.first?.canonical?.food.canonicalId, "broccoli")
+        XCTAssertTrue(broccoli.items.first?.nutrition.lookup.values.hasCompleteCoreNutrients == true)
+        let calls = await counter.value
+        XCTAssertEqual(calls, 0)
+        XCTAssertEqual(catalog.normalise("aloo gobi")?.canonicalId, "aloo-gobi")
+    }
+
+    func testPhotoAlooBroccoliSabjiKeepsPreparedDishIdentity() async throws {
+        let parse = MealParseResult(detectedItems: [
+            ParsedFoodItem(originalText: "aloo broccoli sabji", canonicalSearchName: "aloo broccoli sabji", category: .vegetarianCurry, quantity: 1, unit: "katori", estimatedGrams: 180, confidence: 0.9)
+        ], unresolvedItems: [], mealDescription: "Potato and broccoli sabji", clarificationQuestions: [], confidence: 0.9)
+        let service = StructuredPhotoRecognitionService(
+            understanding: StubMealUnderstanding(result: parse),
+            coordinator: HybridMealAnalysisCoordinator(router: DefaultFoodResolutionRouter(catalog: catalog)),
+            catalog: catalog
+        )
+        let result = try await service.analyse(fixtureFoodImage(), dishHint: nil)
+        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["aloo-broccoli-sabji"])
+        XCTAssertTrue(result.detectedItems.first?.nutrition.hasCompleteCoreNutrients == true)
+    }
+
     func testFriedFishAliasesResolveToCompleteEditableEstimate() async throws {
         let counter = ParseCounter()
         let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
