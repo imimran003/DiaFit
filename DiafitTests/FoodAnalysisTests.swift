@@ -7,6 +7,27 @@ final class FoodAnalysisTests: XCTestCase {
         IndianFoodCatalogService(bundle: Bundle(for: FoodAnalysisTests.self))
     }
 
+    func testMangoTextResolvesLocallyWithoutNetwork() async {
+        let counter = ParseCounter()
+        let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
+        let router = DefaultFoodResolutionRouter(
+            catalog: catalog,
+            understanding: CountingMealUnderstanding(result: unusedParse, counter: counter),
+            nutrition: HybridNutritionResolutionService(catalog: catalog, verifiedProvider: CountingUnavailableNutrition(counter: counter))
+        )
+        for name in ["mango", "mangoes", "mangos", "fresh mango", "aam"] {
+            let result = await router.resolve(text: name)
+            XCTAssertEqual(result.items.compactMap { $0.canonical?.food.canonicalId }, ["mango"], name)
+            XCTAssertTrue(result.items.first?.nutrition.lookup.values.hasCompleteCoreNutrients == true, name)
+            XCTAssertTrue(result.unresolvedTerms.isEmpty, name)
+        }
+        let combined = await router.resolve(text: "mango and apple")
+        XCTAssertEqual(Set(combined.items.compactMap { $0.canonical?.food.canonicalId }), ["mango", "apple"])
+        XCTAssertTrue(combined.unresolvedTerms.isEmpty)
+        let calls = await counter.value
+        XCTAssertEqual(calls, 0, "Known fruit should resolve without remote services")
+    }
+
     func testAlooBroccoliSabjiAndBroccoliResolveLocally() async {
         let counter = ParseCounter()
         let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
