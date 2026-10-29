@@ -1613,9 +1613,16 @@ struct PhotoAnalysisOrchestrator: Sendable {
             }
         }
 
-        if var remoteIncomplete, !remoteIncomplete.detectedItems.isEmpty, !remoteNeedsInventoryRecovery {
+        // Keep a substantive multi-food inventory editable even when provider
+        // coverage disagrees with the canonical deduplicated list. The review
+        // still requires explicit inventory confirmation; discarding these
+        // foods turned a successful eggs/sprouts/nuts scan into a blank card.
+        if var remoteIncomplete, !remoteIncomplete.detectedItems.isEmpty,
+           !remoteNeedsInventoryRecovery || remoteIncomplete.detectedItems.count >= 3 {
             remoteIncomplete.warnings.insert(
-                "The image was interpreted, but nutrition still needs confirmation before it can be saved.",
+                remoteNeedsInventoryRecovery
+                    ? "Check every food below: AI could not confirm the whole plate inventory. Correct the list or retry before saving."
+                    : "The image was interpreted, but nutrition still needs confirmation before it can be saved.",
                 at: 0
             )
             FoodLoggingDiagnostics.record("photo.classification", fields: [

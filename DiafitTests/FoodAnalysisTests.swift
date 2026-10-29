@@ -3,6 +3,19 @@ import UIKit
 @testable import Diafit
 
 final class FoodAnalysisTests: XCTestCase {
+    func testMultiFoodPhotoWithUncertainCoverageKeepsEditableInventory() async {
+        let image = fixtureFoodImage()
+        var proposed = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(
+            description: "boiled eggs with mixed sprouts and walnuts", imageReference: image.imageReference,
+            imageType: .originalPhoto)
+        proposed.visualCoverage = MealVisualCoverage(scannedRegions: ["plate"], visibleServingCount: 7,
+            distinctServingCount: 7, occludedRegions: ["under spoon"], inventoryComplete: false, coverageConfidence: 0.95)
+        let result = await PhotoAnalysisOrchestrator(remote: FixedFoodRecognitionService(result: proposed),
+            onDevice: nil, local: LocalMealAnalysisEngine(catalog: catalog)).analyse(image: image, description: "")
+        XCTAssertEqual(result.detectedItems.map(\.id), proposed.detectedItems.map(\.id))
+        XCTAssertFalse(result.detectedItems.isEmpty)
+        XCTAssertTrue(PhotoAnalysisCompletenessEvaluator().requiresInventoryRecovery(result))
+    }
     func testGymBeamShortcutUsesJustWheyWhiteChocolateCoconutLabel() async throws {
         let router = DefaultFoodResolutionRouter(catalog: catalog)
         for text in ["gymbeam", "1 scoop gymbeam with water", "gymbeam just whey"] {
