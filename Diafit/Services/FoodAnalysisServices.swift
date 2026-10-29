@@ -1361,7 +1361,7 @@ enum PhotoMealInventoryEditor {
             // A mixed sprout serving already includes its visible legumes.
             // Keep its portion instead of adding the same chickpeas/moong
             // again as independent foods.
-            if hasMixedSprouts, ["chickpea-sprouts", "moong-sprouts"].contains($0.canonicalFoodId) { return false }
+            if hasMixedSprouts, ["chickpea-sprouts", "moong-sprouts", "interpreted.kala-chana"].contains($0.canonicalFoodId) { return false }
             return seen.insert($0.canonicalFoodId).inserted
         }
     }

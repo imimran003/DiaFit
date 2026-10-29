@@ -8,7 +8,7 @@ final class FoodAnalysisTests: XCTestCase {
     }
 
     func testPhotoCanonicalDuplicatesCountOnceBeforeNutritionTotals() async {
-        let names = ["mixed sprouts", "sprouts", "chickpea sprouts", "sprouted chickpeas"]
+        let names = ["mixed sprouts", "sprouts", "chickpea sprouts", "sprouted chickpeas", "kala chana"]
         let parse = MealParseResult(
             detectedItems: names.map { name in
                 ParsedFoodItem(originalText: name, canonicalSearchName: name,
