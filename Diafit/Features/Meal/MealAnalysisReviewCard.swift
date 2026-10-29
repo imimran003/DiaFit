@@ -18,6 +18,7 @@ struct MealAnalysisReviewCard: View {
     @State private var componentQuery = ""
     @State private var componentError: String?
     @State private var isRetryingAnalysis = false
+    @State private var showsInventoryConfirmation = false
 
     private let catalog = IndianFoodCatalogService()
     private let itemRecalculator = MealItemNutritionRecalculator()
@@ -168,17 +169,30 @@ struct MealAnalysisReviewCard: View {
             HStack(spacing: 10) {
                 Button("Discard whole review", role: .destructive, action: onDiscard)
                     .buttonStyle(OutlineCapsuleStyle())
-                Button(action: { onConfirm(editableDraft) }) {
+                    .contentShape(Rectangle())
+                Button(action: {
+                    if photoNeedsInventoryRecovery { showsInventoryConfirmation = true }
+                    else { onConfirm(editableDraft) }
+                }) {
                     HStack(spacing: 7) {
                         Image(systemName: "checkmark")
-                    Text(highImpactQuestionsAnswered && nutritionIsSafeToConfirm ? confirmationTitle : "Answer to confirm")
+                    Text(!highImpactQuestionsAnswered ? "Answer to confirm" : (photoNeedsInventoryRecovery ? "Review & confirm" : confirmationTitle))
                     }
                     .frame(maxWidth: .infinity)
                 }
                 .buttonStyle(ConfirmMealStyle())
-                .disabled(result.detectedItems.isEmpty || !highImpactQuestionsAnswered || !nutritionIsSafeToConfirm)
-                .opacity(result.detectedItems.isEmpty || !highImpactQuestionsAnswered || !nutritionIsSafeToConfirm ? 0.46 : 1)
+                .disabled(result.detectedItems.isEmpty || !highImpactQuestionsAnswered || result.nutritionValidation?.isApproved != true)
+                .opacity(result.detectedItems.isEmpty || !highImpactQuestionsAnswered || result.nutritionValidation?.isApproved != true ? 0.46 : 1)
             }
+        }
+        .confirmationDialog("Are these all the foods you ate?", isPresented: $showsInventoryConfirmation, titleVisibility: .visible) {
+            Button("Save listed foods") {
+                reviewInventory()
+                onConfirm(editableDraft)
+            }
+            Button("Keep editing", role: .cancel) { }
+        } message: {
+            Text(result.detectedItems.map { "\($0.displayName): \($0.quantity.formatted()) \($0.servingUnit.rawValue)" }.joined(separator: "\n"))
         }
         .padding(16)
         .background(Color.paper, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
@@ -1068,7 +1082,7 @@ private struct OutlineCapsuleStyle: ButtonStyle {
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(.system(size: 13, weight: .semibold, design: .rounded))
-            .foregroundStyle(Color.quietInk)
+            .foregroundStyle(Color.ink)
             .padding(.horizontal, 15)
             .padding(.vertical, 12)
             .background(Color.mist.opacity(configuration.isPressed ? 0.68 : 0.45), in: Capsule())
