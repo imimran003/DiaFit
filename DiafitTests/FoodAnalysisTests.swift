@@ -20,7 +20,7 @@ final class FoodAnalysisTests: XCTestCase {
         let result = await HybridMealAnalysisCoordinator(router: DefaultFoodResolutionRouter(catalog: catalog))
             .analyse(parse: parse, originalInput: "", imageReference: .transient(), imageType: .originalPhoto)
 
-        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["mixed-sprouts", "chickpea-sprouts"])
+        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["mixed-sprouts"])
         XCTAssertEqual(result.mealTotals.caloriesKcal ?? 0,
                        NutritionValues.total(of: result.detectedItems.map(\.nutrition)).caloriesKcal ?? -1,
                        accuracy: 0.01)

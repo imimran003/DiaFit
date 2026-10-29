@@ -1356,7 +1356,14 @@ enum PhotoMealInventoryEditor {
     /// counting alternate labels from later scans as extra servings.
     static func uniqueItems(_ items: [DetectedFoodItem]) -> [DetectedFoodItem] {
         var seen = Set<String>()
-        return items.filter { seen.insert($0.canonicalFoodId).inserted }
+        let hasMixedSprouts = items.contains { $0.canonicalFoodId == "mixed-sprouts" }
+        return items.filter {
+            // A mixed sprout serving already includes its visible legumes.
+            // Keep its portion instead of adding the same chickpeas/moong
+            // again as independent foods.
+            if hasMixedSprouts, ["chickpea-sprouts", "moong-sprouts"].contains($0.canonicalFoodId) { return false }
+            return seen.insert($0.canonicalFoodId).inserted
+        }
     }
 
     static func remove(_ id: UUID, from result: inout MealAnalysisResult) {
