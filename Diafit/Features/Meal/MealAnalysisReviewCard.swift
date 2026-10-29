@@ -308,10 +308,10 @@ struct MealAnalysisReviewCard: View {
 
     private var summary: some View {
         HStack(spacing: 7) {
-            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.energy(result.mealTotals.caloriesKcal), label: "kcal", tint: .ink)
-            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.grams(result.mealTotals.carbohydrateGrams), label: "carbs", tint: .coral)
-            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.grams(result.mealTotals.fibreGrams), label: "fibre", tint: .lime)
-            SummaryMetric(value: photoNeedsInventoryRecovery ? "—" : NutritionFormatter.grams(result.mealTotals.proteinGrams), label: "protein", tint: .saffron)
+            SummaryMetric(value: NutritionFormatter.energy(result.mealTotals.caloriesKcal), label: "kcal", tint: .ink)
+            SummaryMetric(value: NutritionFormatter.grams(result.mealTotals.carbohydrateGrams), label: "carbs", tint: .coral)
+            SummaryMetric(value: NutritionFormatter.grams(result.mealTotals.fibreGrams), label: "fibre", tint: .lime)
+            SummaryMetric(value: NutritionFormatter.grams(result.mealTotals.proteinGrams), label: "protein", tint: .saffron)
         }
     }
 
@@ -934,12 +934,12 @@ private struct PhotoInventoryRecoveryNotice: View {
                     .foregroundStyle(Color.ink)
                     .frame(width: 28, height: 28)
                     .background(Color.lime.opacity(0.55), in: Circle())
-                Text(itemCount == 1 ? "I found one visible item, but the plate may contain more." : "The photo inventory still needs a wider check.")
+                Text(itemCount == 1 ? "Check that this is the only food in the photo." : "Check the foods identified in your photo.")
                     .font(.system(.caption, design: .rounded, weight: .semibold))
                     .foregroundStyle(Color.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("Check the foods below. Retry recognition if any are missing, or confirm the list yourself.")
+            Text("Nutrition below is an estimate for the listed foods. Check for missing foods and confirm the list, or scan again if needed.")
                 .font(DiafitType.caption)
                 .foregroundStyle(Color.quietInk)
                 .lineSpacing(2)
@@ -947,7 +947,7 @@ private struct PhotoInventoryRecoveryNotice: View {
                 HStack(spacing: 7) {
                     if isRetrying { ProgressView().tint(Color.paper) }
                     else { Image(systemName: "arrow.clockwise") }
-                    Text(isRetrying ? "Scanning the full plate…" : "Retry AI recognition")
+                    Text(isRetrying ? "Scanning the full plate…" : "Scan photo again")
                 }
                 .font(.system(.caption, design: .rounded, weight: .semibold))
                 .foregroundStyle(Color.paper)
@@ -956,7 +956,7 @@ private struct PhotoInventoryRecoveryNotice: View {
             }
             .buttonStyle(.plain)
             .disabled(isRetrying)
-            .accessibilityLabel(isRetrying ? "Scanning the full plate" : "Retry AI recognition")
+            .accessibilityLabel(isRetrying ? "Scanning the full plate" : "Scan photo again")
             Button("I checked all the foods", action: markReviewed)
                 .font(.system(.caption, design: .rounded, weight: .semibold))
                 .foregroundStyle(Color.ink)
