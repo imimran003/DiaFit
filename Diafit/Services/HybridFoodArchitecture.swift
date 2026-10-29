@@ -647,7 +647,10 @@ struct HybridFoodNormalisationService: FoodNormalisationService, Sendable {
             let candidates = [food.canonicalName, food.englishName] + food.aliases + food.regionalNames + food.transliterations
             let score = candidates.map { similarity(queryTokens, Set(tokens($0))) }.max() ?? 0
             return (food, score)
-        }.filter { $0.1 >= 0.62 }.max { $0.1 < $1.1 }?.0
+        // Two shared words out of a three-word dish are not enough evidence
+        // to add its missing ingredient (e.g. “aloo sabji” must not become
+        // “aloo broccoli sabji”). Exact aliases still match above.
+        }.filter { $0.1 >= 0.75 }.max { $0.1 < $1.1 }?.0
     }
 
     /// Confirmed member aliases outrank fuzzy catalog matches while retaining
@@ -2289,7 +2292,10 @@ struct HybridMealAnalysisCoordinator: Sendable {
         // Never erase a provider-recognised component because canonical or
         // nutrition resolution is incomplete. The review must show the item
         // explicitly so the member can correct it.
-        let items = resolution.items.map(makeDetectedItem)
+        let resolvedItems = resolution.items.map(makeDetectedItem)
+        let items = imageType == .originalPhoto
+            ? PhotoMealInventoryEditor.uniqueItems(resolvedItems)
+            : resolvedItems
         let totals = NutritionValues.total(of: items.map(\.nutrition))
         let validation = DefaultNutritionValidationService().validate(rawValues: totals)
         // The provider-independent router intentionally transports question

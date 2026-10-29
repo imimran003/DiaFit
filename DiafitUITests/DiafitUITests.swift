@@ -520,6 +520,25 @@ final class DiafitUITests: XCTestCase {
         attachScreenshot(named: "complete-photo-review")
     }
 
+    func testRemovingOnePhotoFoodKeepsTheOtherFoodsInReview() throws {
+        app.terminate()
+        app.launchArguments.append("UITestUseFixturePhoto")
+        app.launch()
+
+        app.buttons["Add meal photo"].firstMatch.tap()
+        app.buttons["Use review fixture"].tap()
+        XCTAssertTrue(app.staticTexts["Review this meal"].waitForExistence(timeout: 4))
+        XCTAssertTrue(app.staticTexts["Dosa"].exists)
+        XCTAssertTrue(app.staticTexts["Sambar"].exists)
+
+        app.buttons["Remove Dosa"].tap()
+
+        XCTAssertTrue(app.staticTexts["Review this meal"].exists)
+        XCTAssertFalse(app.staticTexts["Dosa"].exists)
+        XCTAssertTrue(app.staticTexts["Sambar"].exists)
+        XCTAssertTrue(app.buttons["Remove Sambar"].exists)
+    }
+
     func testPhotoCorrectionButtonResolvesCompoundFoodsAndEnablesConfirmation() throws {
         app.terminate()
         app.launchArguments.append("UITestUseFixturePhoto")

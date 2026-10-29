@@ -43,6 +43,9 @@ struct MealAnalysisReviewCard: View {
         normalizedDraft.result.clarificationQuestions = SemanticQuestionDeduplicator.uniqueQuestions(
             draft.result.clarificationQuestions
         )
+        if draft.result.imageType == .originalPhoto {
+            normalizedDraft.result.detectedItems = PhotoMealInventoryEditor.uniqueItems(draft.result.detectedItems)
+        }
         _editableDraft = State(initialValue: normalizedDraft)
     }
 
@@ -97,6 +100,7 @@ struct MealAnalysisReviewCard: View {
                 PhotoInventoryRecoveryNotice(
                     itemCount: result.detectedItems.count,
                     retry: retryAnalysis,
+                    markReviewed: reviewInventory,
                     isRetrying: isRetryingAnalysis
                 )
             }
@@ -121,7 +125,7 @@ struct MealAnalysisReviewCard: View {
                     retryAnalysis: retryAnalysis,
                     addComponent: addComponent
                 )
-            } else if !photoNeedsInventoryRecovery {
+            } else {
                 VStack(spacing: 8) {
                     ForEach(result.detectedItems) { item in
                         DetectedItemEditor(
@@ -135,16 +139,6 @@ struct MealAnalysisReviewCard: View {
                         )
                     }
                 }
-            } else {
-                // Keep stale drafts safe as well as newly analysed photos. A
-                // partial image inventory must never show a plausible-looking
-                // item (for example “Peanut”) next to totals; the recovery
-                // notice above is the single source of truth until AI scans
-                // the whole plate or the member names the foods manually.
-                Text("Partial labels are hidden until the full plate is identified.")
-                    .font(DiafitType.caption)
-                    .foregroundStyle(Color.quietInk)
-                    .padding(.horizontal, 3)
             }
 
             summary
@@ -172,7 +166,7 @@ struct MealAnalysisReviewCard: View {
             }
 
             HStack(spacing: 10) {
-                Button("Discard", role: .destructive, action: onDiscard)
+                Button("Discard whole review", role: .destructive, action: onDiscard)
                     .buttonStyle(OutlineCapsuleStyle())
                 Button(action: { onConfirm(editableDraft) }) {
                     HStack(spacing: 7) {
@@ -203,6 +197,13 @@ struct MealAnalysisReviewCard: View {
             // still change, and must release the local “Scanning…” state.
             acceptUpdatedDraft()
         }
+        .onAppear {
+            // Older saved drafts may already contain repeated canonical foods.
+            // Persist their corrected totals as soon as this review is opened.
+            if editableDraft.result.detectedItems.count != draft.result.detectedItems.count {
+                recalculate()
+            }
+        }
         .accessibilityElement(children: .contain)
     }
 
@@ -211,6 +212,9 @@ struct MealAnalysisReviewCard: View {
         normalizedDraft.result.clarificationQuestions = SemanticQuestionDeduplicator.uniqueQuestions(
             draft.result.clarificationQuestions
         )
+        if draft.result.imageType == .originalPhoto {
+            normalizedDraft.result.detectedItems = PhotoMealInventoryEditor.uniqueItems(draft.result.detectedItems)
+        }
         editableDraft = normalizedDraft
         isRetryingAnalysis = false
         componentError = nil
@@ -375,7 +379,12 @@ struct MealAnalysisReviewCard: View {
     }
 
     private func remove(_ id: UUID) {
-        editableDraft.result.detectedItems.removeAll { $0.id == id }
+        PhotoMealInventoryEditor.remove(id, from: &editableDraft.result)
+        recalculate()
+    }
+
+    private func reviewInventory() {
+        PhotoMealInventoryEditor.markReviewed(&editableDraft.result)
         recalculate()
     }
 
@@ -399,6 +408,8 @@ struct MealAnalysisReviewCard: View {
         editableDraft.result.detectedItems.append(
             contentsOf: corrected.detectedItems.filter { !existingIDs.contains($0.canonicalFoodId) }
         )
+        editableDraft.result.detectedItems = PhotoMealInventoryEditor.uniqueItems(editableDraft.result.detectedItems)
+        PhotoMealInventoryEditor.markReviewed(&editableDraft.result)
         editableDraft.result.clarificationQuestions.removeAll {
             $0.answerType == .freeText && $0.relatedFoodItemId == nil
         }
@@ -912,6 +923,7 @@ private struct EmptyAnalysisState: View {
 private struct PhotoInventoryRecoveryNotice: View {
     let itemCount: Int
     let retry: () -> Void
+    let markReviewed: () -> Void
     let isRetrying: Bool
 
     var body: some View {
@@ -927,7 +939,7 @@ private struct PhotoInventoryRecoveryNotice: View {
                     .foregroundStyle(Color.ink)
                     .fixedSize(horizontal: false, vertical: true)
             }
-            Text("I won’t save a partial plate as if it were the whole meal. Retry recognition to scan every bowl and pile.")
+            Text("Check the foods below. Retry recognition if any are missing, or confirm the list yourself.")
                 .font(DiafitType.caption)
                 .foregroundStyle(Color.quietInk)
                 .lineSpacing(2)
@@ -945,6 +957,12 @@ private struct PhotoInventoryRecoveryNotice: View {
             .buttonStyle(.plain)
             .disabled(isRetrying)
             .accessibilityLabel(isRetrying ? "Scanning the full plate" : "Retry AI recognition")
+            Button("I checked all the foods", action: markReviewed)
+                .font(.system(.caption, design: .rounded, weight: .semibold))
+                .foregroundStyle(Color.ink)
+                .frame(maxWidth: .infinity, minHeight: 42)
+                .background(Color.paper, in: Capsule())
+                .disabled(itemCount == 0 || isRetrying)
         }
         .padding(12)
         .background(Color.mist, in: RoundedRectangle(cornerRadius: 17, style: .continuous))

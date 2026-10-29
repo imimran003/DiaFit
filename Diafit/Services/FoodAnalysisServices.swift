@@ -1350,6 +1350,27 @@ struct PhotoAnalysisCompletenessReport: Equatable, Sendable {
     let missingRequirements: [String]
 }
 
+enum PhotoMealInventoryEditor {
+    /// One canonical food is one editable row; its quantity represents any
+    /// repeated pieces. Keep the first provider observation rather than
+    /// counting alternate labels from later scans as extra servings.
+    static func uniqueItems(_ items: [DetectedFoodItem]) -> [DetectedFoodItem] {
+        var seen = Set<String>()
+        return items.filter { seen.insert($0.canonicalFoodId).inserted }
+    }
+
+    static func remove(_ id: UUID, from result: inout MealAnalysisResult) {
+        guard result.detectedItems.contains(where: { $0.id == id }) else { return }
+        result.detectedItems.removeAll { $0.id == id }
+        result.clarificationQuestions.removeAll { $0.relatedFoodItemId == id }
+        result.inventoryReviewedByMember = true
+    }
+
+    static func markReviewed(_ result: inout MealAnalysisResult) {
+        result.inventoryReviewedByMember = true
+    }
+}
+
 /// A photo result is only successful when it can actually support the review
 /// UI. A classifier label without serving conversion, nutrition provenance, or
 /// validated core nutrients must escalate to the structured backend.
@@ -1362,7 +1383,7 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
         if result.overallConfidence == .low || result.overallConfidence == .unknown {
             missing.append("recognition confidence")
         }
-        if let coverage = result.visualCoverage,
+        if result.inventoryReviewedByMember != true, let coverage = result.visualCoverage,
            (!coverage.inventoryComplete
             || coverage.coverageConfidence < 0.82
             || !coverage.occludedRegions.isEmpty
@@ -1396,6 +1417,7 @@ struct PhotoAnalysisCompletenessEvaluator: Sendable {
     /// inspected. Keep the rule deliberately conservative and semantic so it
     /// applies to any salient garnish/ingredient, not just one named meal.
     func requiresInventoryRecovery(_ result: MealAnalysisResult) -> Bool {
+        if result.inventoryReviewedByMember == true { return false }
         guard result.imageType == .originalPhoto,
               !result.detectedItems.isEmpty,
               result.detectedItems.count <= 4 else { return false }

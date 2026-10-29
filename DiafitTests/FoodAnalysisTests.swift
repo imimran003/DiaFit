@@ -7,6 +7,50 @@ final class FoodAnalysisTests: XCTestCase {
         IndianFoodCatalogService(bundle: Bundle(for: FoodAnalysisTests.self))
     }
 
+    func testPhotoCanonicalDuplicatesCountOnceBeforeNutritionTotals() async {
+        let names = ["mixed sprouts", "sprouts", "chickpea sprouts", "sprouted chickpeas"]
+        let parse = MealParseResult(
+            detectedItems: names.map { name in
+                ParsedFoodItem(originalText: name, canonicalSearchName: name,
+                               category: .sprouts, quantity: 1, unit: "bowl",
+                               estimatedGrams: 100, confidence: 0.9)
+            },
+            unresolvedItems: [], mealDescription: "Sprouts", clarificationQuestions: [], confidence: 0.9
+        )
+        let result = await HybridMealAnalysisCoordinator(router: DefaultFoodResolutionRouter(catalog: catalog))
+            .analyse(parse: parse, originalInput: "", imageReference: .transient(), imageType: .originalPhoto)
+
+        XCTAssertEqual(result.detectedItems.map(\.canonicalFoodId), ["mixed-sprouts", "chickpea-sprouts"])
+        XCTAssertEqual(result.mealTotals.caloriesKcal ?? 0,
+                       NutritionValues.total(of: result.detectedItems.map(\.nutrition)).caloriesKcal ?? -1,
+                       accuracy: 0.01)
+    }
+
+    func testRemovingOnePhotoFoodKeepsOtherRowsAndReleasesInventoryGate() {
+        var result = LocalMealAnalysisEngine(catalog: catalog)
+            .makeAnalysis(description: "boiled egg with mixed sprouts and walnuts", imageType: .originalPhoto)
+        XCTAssertGreaterThanOrEqual(result.detectedItems.count, 2)
+        let removed = result.detectedItems[0]
+        let remainingIDs = result.detectedItems.dropFirst().map(\.id)
+        result.visualCoverage = MealVisualCoverage(
+            scannedRegions: ["plate"], visibleServingCount: result.detectedItems.count,
+            distinctServingCount: result.detectedItems.count, occludedRegions: ["spoon"],
+            inventoryComplete: false, coverageConfidence: 0.6
+        )
+        result.clarificationQuestions.append(ClarificationQuestion(
+            id: UUID(), relatedFoodItemId: removed.id, question: "How many?",
+            answerType: .quantity, options: ["1", "2"], impactLevel: .high, answer: nil
+        ))
+        XCTAssertTrue(PhotoAnalysisCompletenessEvaluator().requiresInventoryRecovery(result))
+
+        PhotoMealInventoryEditor.remove(removed.id, from: &result)
+
+        XCTAssertEqual(result.detectedItems.map(\.id), remainingIDs)
+        XCTAssertFalse(result.clarificationQuestions.contains { $0.relatedFoodItemId == removed.id })
+        XCTAssertEqual(result.inventoryReviewedByMember, true)
+        XCTAssertFalse(PhotoAnalysisCompletenessEvaluator().requiresInventoryRecovery(result))
+    }
+
     func testMangoTextResolvesLocallyWithoutNetwork() async {
         let counter = ParseCounter()
         let unusedParse = MealParseResult(detectedItems: [], unresolvedItems: [], mealDescription: "", clarificationQuestions: [], confidence: 0)
@@ -1498,7 +1542,7 @@ final class FoodAnalysisTests: XCTestCase {
         let callCount = await understanding.callCount
 
         XCTAssertEqual(callCount, 4)
-        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["paneer", "scrambled-egg", "masoor-dal"]))
+        XCTAssertEqual(Set(result.detectedItems.map(\.canonicalFoodId)), Set(["paneer", "scrambled-egg", "dal"]))
         XCTAssertFalse(result.detectedItems.contains { $0.displayName.localizedCaseInsensitiveContains("tomato") })
         XCTAssertFalse(result.detectedItems.contains { $0.displayName.localizedCaseInsensitiveContains("soup") })
         XCTAssertTrue(result.detectedItems.allSatisfy { !$0.nutrition.isEmpty })

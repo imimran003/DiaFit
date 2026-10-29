@@ -19,6 +19,9 @@ struct MealAnalysisResult: Identifiable, Codable, Hashable, Sendable {
     /// Evidence from structured image understanding that the full frame was
     /// inventoried. Text and legacy local analyses leave this nil.
     var visualCoverage: MealVisualCoverage? = nil
+    /// The member explicitly checked or corrected the photo's food inventory.
+    /// Provider coverage no longer describes the edited list in that case.
+    var inventoryReviewedByMember: Bool? = nil
     var nutritionDatabaseVersion: String?
     var glycaemicDatabaseVersion: String?
     var nutritionProvenance: NutritionProvenance
