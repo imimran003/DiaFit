@@ -524,10 +524,10 @@ private enum SupplementProfileResolver {
         let base: SupplementBase = modifiers.contains("milk") ? .milk : (modifiers.contains("water") ? .water : .unspecified)
         let flavour = ["chocolate", "vanilla", "unflavoured", "unflavored"].first(where: modifiers.contains)
         return SupplementProductProfile(
-            brand: nil,
+            brand: food.canonicalId == "gymbeam-just-whey-white-chocolate-coconut" ? "GymBeam" : nil,
             productName: food.canonicalName,
             barcode: nil,
-            flavour: flavour,
+            flavour: food.canonicalId == "gymbeam-just-whey-white-chocolate-coconut" ? "White Chocolate Coconut" : flavour,
             servingSizeGrams: (food.standardServing?.grams ?? 30) * quantity,
             servingUnit: unit,
             gramsPerScoop: food.standardServing?.unit == .scoop ? food.standardServing?.grams : nil,

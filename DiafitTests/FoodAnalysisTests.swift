@@ -3,6 +3,18 @@ import UIKit
 @testable import Diafit
 
 final class FoodAnalysisTests: XCTestCase {
+    func testGymBeamShortcutUsesJustWheyWhiteChocolateCoconutLabel() async throws {
+        let router = DefaultFoodResolutionRouter(catalog: catalog)
+        for text in ["gymbeam", "1 scoop gymbeam with water", "gymbeam just whey"] {
+            let result = await router.resolve(text: text)
+            let item = try XCTUnwrap(result.items.first)
+            XCTAssertEqual(item.canonical?.food.canonicalId, "gymbeam-just-whey-white-chocolate-coconut")
+            XCTAssertEqual(item.nutrition.estimatedGrams ?? 0, 30, accuracy: 0.01)
+            XCTAssertEqual(item.nutrition.lookup.values.proteinGrams ?? 0, 22.47, accuracy: 0.01)
+            XCTAssertEqual(item.nutrition.lookup.values.caloriesKcal ?? 0, 113.1, accuracy: 0.01)
+        }
+        XCTAssertEqual(catalog.normalise("whey protein")?.canonicalId, "generic-whey-protein")
+    }
     private var catalog: IndianFoodCatalogService {
         IndianFoodCatalogService(bundle: Bundle(for: FoodAnalysisTests.self))
     }
