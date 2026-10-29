@@ -3,6 +3,15 @@ import UIKit
 @testable import Diafit
 
 final class FoodAnalysisTests: XCTestCase {
+    func testBlackCoffeeAndDarkChocolateKeepSeparatePortions() async {
+        for text in ["black coffee with 1 peace of dark choclate", "black coffee with 1 piece of dark chocolate (70% - 85%)", "black coffee with 10 g dark chocolate"] {
+            let result = await DefaultFoodResolutionRouter(catalog: catalog).resolve(text: text)
+            XCTAssertEqual(Set(result.items.compactMap { $0.canonical?.food.canonicalId }), ["black-coffee", "dark-chocolate-70-85"])
+            let chocolate = result.items.first { $0.canonical?.food.canonicalId == "dark-chocolate-70-85" }
+            XCTAssertEqual(chocolate?.nutrition.estimatedGrams ?? 0, 10, accuracy: 0.01)
+            XCTAssertTrue(result.unresolvedTerms.isEmpty, text)
+        }
+    }
     func testBeanStuffedParathasKeepFillingAndTwoPieceQuantity() async {
         for filling in ["chickpea", "chole", "rajma"] {
             let result = await DefaultFoodResolutionRouter(catalog: catalog)

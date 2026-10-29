@@ -284,6 +284,8 @@ enum FoodInputNormalizer {
     /// language. This is deliberately linguistic—not a list of meal phrases.
     private static let canonicalTokens: [String: String] = [
         "daal": "dal",
+        "choclate": "chocolate",
+        "peace": "piece",
         "daals": "dal",
         "dals": "dal",
         "chaawal": "chawal",
