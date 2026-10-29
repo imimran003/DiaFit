@@ -3,6 +3,16 @@ import UIKit
 @testable import Diafit
 
 final class FoodAnalysisTests: XCTestCase {
+    func testBeanStuffedParathasKeepFillingAndTwoPieceQuantity() async {
+        for filling in ["chickpea", "chole", "rajma"] {
+            let result = await DefaultFoodResolutionRouter(catalog: catalog)
+                .resolve(text: "2 small \(filling) stuffed parathas plus milk tea")
+            let expected = filling == "rajma" ? "rajma-stuffed-paratha" : "chickpea-stuffed-paratha"
+            XCTAssertEqual(Set(result.items.compactMap { $0.canonical?.food.canonicalId }), [expected, "chai-with-milk"])
+            XCTAssertEqual(result.items.first { $0.canonical?.food.canonicalId == expected }?.parsedItem.quantity, 2)
+            XCTAssertTrue(result.unresolvedTerms.isEmpty)
+        }
+    }
     func testMultiFoodPhotoWithUncertainCoverageKeepsEditableInventory() async {
         let image = fixtureFoodImage()
         var proposed = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(
