@@ -1,4 +1,5 @@
 import SwiftUI
+import HealthKit
 import PhotosUI
 import UIKit
 
@@ -369,7 +370,7 @@ struct SettingsView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This permanently removes your Diafit meals, gym days, glucose readings, saved foods, profile, and stored meal photos from this device. Apple Health data stays in Apple Health.")
+            Text("This permanently removes your Diafit meals, gym days, glucose readings, saved foods, usual meals, weigh-ins, profile, and stored meal photos from this device. Apple Health data stays in Apple Health.")
         }
     }
 
@@ -393,7 +394,9 @@ struct SettingsView: View {
                 days: diaryStore.days,
                 manualStrengthDays: diaryStore.manualStrengthDays,
                 savedFoodMemories: savedFoodMemories,
-                packagedFoods: packagedFoods
+                packagedFoods: packagedFoods,
+                usualMeals: diaryStore.usualMeals,
+                weighIns: diaryStore.weighIns
             )
             showsExporter = true
         } catch {
@@ -416,6 +419,7 @@ struct SettingsView: View {
         UserDefaults.standard.removeObject(forKey: "diafit.glucose.preferredUnit")
         UserDefaults.standard.removeObject(forKey: "diafit.health.requestedAccess")
         UserDefaults.standard.removeObject(forKey: "diafit.health.requestedWorkoutAccess")
+        UserDefaults.standard.removeObject(forKey: "diafit.weightHealthEnabled")
 
         Task {
             if let purging = dependencies.userFoodMemory as? any UserFoodMemoryDataPurging {
@@ -887,6 +891,10 @@ private struct DiaryReadingsSection: View {
 }
 
 private struct DiaryMealDetailSheet: View {
+    @EnvironmentObject private var store: DiaryStore
+    @State private var namingUsual = false
+    @State private var usualName = ""
+    @State private var usualMessage: String?
     let meal: Meal
     let day: Day?
     @Environment(\.dismiss) private var dismiss
@@ -977,6 +985,16 @@ private struct DiaryMealDetailSheet: View {
                         }
                     }
 
+                    if meal.analysis?.nutritionValidation?.isApproved == true {
+                        Button("Save as a usual meal", systemImage: "bookmark") {
+                            usualName = meal.title
+                            namingUsual = true
+                        }
+                        if let usualMessage {
+                            Text(usualMessage).font(.footnote)
+                        }
+                    }
+
                     if !associatedReadings.isEmpty {
                         DiaryReadingsSection(readings: associatedReadings)
                     }
@@ -986,6 +1004,17 @@ private struct DiaryMealDetailSheet: View {
                 .padding(.bottom, 28)
             }
             .background(Color.paper)
+            .alert("Name your usual meal", isPresented: $namingUsual) {
+                TextField("Meal name", text: $usualName)
+                Button("Save") {
+                    usualMessage = store.saveUsualMeal(name: usualName, meal: meal)
+                        ? "Saved to My usual meals."
+                        : (store.persistenceIssue ?? "Enter a name to save this meal.")
+                }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Saving with an existing name replaces that shortcut.")
+            }
             .navigationTitle("Meal details")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
@@ -1076,7 +1105,8 @@ struct InsightsOverviewView: View {
         if weekly.energyDays < 4 {
             return "\(weekly.energyDays) completed \(weekly.energyDays == 1 ? "day" : "days") recorded; 4 needed for a trend."
         }
-        return "Based on \(weekly.energyDays) completed days, if meals were fully logged. Weigh-ins confirm actual change."
+        let amount = weekly.recordedBalanceKilocalories.formatted(.number.sign(strategy: .always()))
+        return "\(amount) kcal across \(weekly.energyDays) past days with recorded intake and burn. Partial meal logs affect this total."
     }
 
     var body: some View {
@@ -1090,6 +1120,8 @@ struct InsightsOverviewView: View {
                     )
 
                     weeklyProgressCard
+                    WeightInsightsCard()
+                    HeartRateInsightsCard()
 
                     if recordedDays.isEmpty {
                         Text("Food patterns will appear after you log a few meals.")
@@ -1147,7 +1179,7 @@ struct InsightsOverviewView: View {
                 .accessibilityIdentifier("sync-strength-workouts")
             }
 
-            Text(weekly.weightTrend)
+            Text("Recorded energy balance")
                 .font(DiafitType.title)
                 .foregroundStyle(Color.ink)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1370,6 +1402,7 @@ private struct EditProfileView: View {
                         EditTextField(label: "Gender identity (optional)", text: $draft.genderIdentity, keyboard: .default)
                         EditTextField(label: "Height in centimetres", text: $draft.height, keyboard: .decimalPad)
                         EditTextField(label: "Weight in kilograms", text: $draft.weight, keyboard: .decimalPad)
+                        EditTextField(label: "Weight goal in kilograms (optional)", text: $draft.weightGoal, keyboard: .decimalPad)
                     }
 
                     EditSection(title: "Health & food") {
@@ -1463,6 +1496,7 @@ private struct ProfileEditDraft {
     var genderIdentity: String
     var height: String
     var weight: String
+    var weightGoal: String
     var diabetesContext: DiabetesContext
     var activityLevel: ProfileActivityLevel
     var dietaryPattern: DietaryPattern
@@ -1485,6 +1519,7 @@ private struct ProfileEditDraft {
         genderIdentity = profile.genderIdentity ?? ""
         height = Self.decimalString(profile.heightCentimeters)
         weight = Self.decimalString(profile.weightKilograms)
+        weightGoal = Self.decimalString(profile.weightGoalKilograms)
         diabetesContext = profile.diabetesContext
         activityLevel = profile.activityLevel
         dietaryPattern = profile.dietaryPattern
@@ -1510,6 +1545,7 @@ private struct ProfileEditDraft {
     func makeProfile() -> UserProfile? {
         guard let heightValue = Self.optionalDouble(height),
               let weightValue = Self.optionalDouble(weight),
+              let weightGoalValue = Self.optionalDouble(weightGoal),
               let calorieValue = Self.optionalInt(calorieGoal),
               let carbohydrateValue = Self.optionalInt(carbohydrateGoal),
               let proteinValue = Self.optionalInt(proteinGoal),
@@ -1522,6 +1558,7 @@ private struct ProfileEditDraft {
         value.genderIdentity = genderIdentity
         value.heightCentimeters = heightValue
         value.weightKilograms = weightValue
+        value.weightGoalKilograms = weightGoalValue
         value.diabetesContext = diabetesContext
         value.activityLevel = activityLevel
         value.dietaryPattern = dietaryPattern
@@ -1940,6 +1977,81 @@ private extension View {
                     RoundedRectangle(cornerRadius: radius, style: .continuous)
                         .stroke(.white.opacity(0.62), lineWidth: 0.8)
                 }
+        }
+    }
+}
+
+private struct HeartRateInsightsCard: View {
+    @AppStorage("heartRateInsightsEnabled") private var enabled = false
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var resting: HeartRateTrend?
+    @State private var walking: HeartRateTrend?
+    @State private var busy = false
+    @State private var message: String?
+    private let service = HeartRateInsightsService()
+
+    var body: some View {
+        ProfileSection(title: "Heart rate") {
+            if let resting, let latest = resting.latest {
+                ProfileValueRow(label: "Latest resting · \(latest.date.formatted(.dateTime.month().day()))", value: bpm(latest.bpm))
+                ProfileValueRow(label: "Resting · 7 days", value: bpm(resting.week))
+                ProfileValueRow(label: "Resting · 30 days", value: bpm(resting.month))
+            }
+            if let walking, let latest = walking.latest {
+                ProfileValueRow(label: "Latest walking · \(latest.date.formatted(.dateTime.month().day()))", value: bpm(latest.bpm))
+                ProfileValueRow(label: "Walking · 7 days", value: bpm(walking.week))
+                ProfileValueRow(label: "Walking · previous 7 days", value: bpm(walking.previousWeek))
+            }
+            if let message {
+                Text(message).font(DiafitType.caption).foregroundStyle(Color.quietInk)
+            } else if resting?.latest != nil || walking?.latest != nil {
+                Text("Averages use days with readings. Source: Apple Health.")
+                    .font(DiafitType.caption).foregroundStyle(Color.quietInk)
+            }
+            if HeartRateInsightsService.isAvailable {
+                Button(busy ? "Loading…" : enabled ? "Refresh heart rate" : "Connect heart rate") {
+                    Task { await refresh(requestAccess: !enabled) }
+                }
+                .disabled(busy)
+            } else {
+                Text("Apple Health is unavailable on this device.")
+                    .font(DiafitType.caption).foregroundStyle(Color.quietInk)
+            }
+        }
+        .task(id: scenePhase) {
+            if enabled && scenePhase == .active { await refresh() }
+        }
+    }
+
+    private func bpm(_ value: Double?) -> String {
+        guard let value else { return "No readings" }
+        return "\(value.formatted(.number.precision(.fractionLength(0)))) bpm"
+    }
+
+    @MainActor
+    private func refresh(requestAccess: Bool = false) async {
+        guard !busy, HeartRateInsightsService.isAvailable else { return }
+        busy = true
+        defer { busy = false }
+        do {
+            if requestAccess {
+                try await service.requestAccess()
+                enabled = true
+            }
+            let now = Date.now
+            async let restingTrend = service.trend(.restingHeartRate, now: now)
+            async let walkingTrend = service.trend(.walkingHeartRateAverage, now: now)
+            let (newResting, newWalking) = try await (restingTrend, walkingTrend)
+            resting = newResting
+            walking = newWalking
+            message = newResting.latest == nil && newWalking.latest == nil
+                ? "No recent readings available. Check Diafit’s heart-rate access in Apple Health." : nil
+        } catch {
+            if !Task.isCancelled {
+                resting = nil
+                walking = nil
+                message = "Couldn’t load heart-rate readings. Try refreshing."
+            }
         }
     }
 }

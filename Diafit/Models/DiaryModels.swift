@@ -284,3 +284,45 @@ struct GlucoseCheckpoint: Identifiable, Codable, Hashable {
     let label: String
     let note: String
 }
+
+struct UsualMeal: Identifiable, Codable, Hashable, Sendable {
+    let id: UUID
+    let name: String
+    private let analysis: MealAnalysisResult
+
+    init?(name: String, meal: Meal) {
+        guard var analysis = meal.analysis,
+              analysis.nutritionValidation?.isApproved == true,
+              !analysis.detectedItems.isEmpty else { return nil }
+        analysis.imageReference = .transient()
+        analysis.imageType = .noImage
+        analysis.originalPhotoAsset = nil
+        analysis.generatedVisualAsset = nil
+        analysis.visualRequest = nil
+        analysis.visualCoverage = nil
+        analysis.inventoryReviewedByMember = nil
+        self.id = UUID()
+        self.name = name
+        self.analysis = analysis
+    }
+
+    func makeDraft(now: Date = .now) -> MealAnalysisDraft {
+        let result = MealAnalysisResult(
+            analysisId: UUID(), imageReference: .transient(), imageType: .noImage,
+            detectedItems: analysis.detectedItems, mealTotals: analysis.mealTotals,
+            overallConfidence: analysis.overallConfidence, assumptions: analysis.assumptions,
+            clarificationQuestions: [], warnings: analysis.warnings, createdAt: now,
+            nutritionDatabaseVersion: analysis.nutritionDatabaseVersion,
+            glycaemicDatabaseVersion: analysis.glycaemicDatabaseVersion,
+            nutritionProvenance: analysis.nutritionProvenance,
+            nutritionValidation: analysis.nutritionValidation
+        )
+        return MealAnalysisDraft(result: result)
+    }
+}
+
+struct WeightReading: Identifiable, Codable, Hashable, Sendable {
+    var id = UUID()
+    let date: Date
+    let kilograms: Double
+}

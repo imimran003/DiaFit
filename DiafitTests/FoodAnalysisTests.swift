@@ -3,6 +3,28 @@ import UIKit
 @testable import Diafit
 
 final class FoodAnalysisTests: XCTestCase {
+    func testHeartRateTrendWeightsRecordedDaysEquallyAndSeparatesWeeks() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try XCTUnwrap(TimeZone(secondsFromGMT: 0))
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let today = calendar.startOfDay(for: now)
+        func day(_ offset: Int) throws -> Date {
+            try XCTUnwrap(calendar.date(byAdding: .day, value: offset, to: today))
+        }
+        let trend = HeartRateTrend(readings: [
+            .init(date: try day(0), bpm: 60),
+            .init(date: try day(0), bpm: 64),
+            .init(date: try day(-6), bpm: 70),
+            .init(date: try day(-7), bpm: 80),
+            .init(date: try day(-29), bpm: 68),
+            .init(date: try day(-30), bpm: 120),
+            .init(date: try day(1), bpm: 200)
+        ], now: now, calendar: calendar)
+        XCTAssertEqual(trend.week, 66)
+        XCTAssertEqual(trend.previousWeek, 80)
+        XCTAssertEqual(trend.month, 70)
+        XCTAssertEqual(trend.latest?.date, today)
+    }
     func testBlackCoffeeAndDarkChocolateKeepSeparatePortions() async {
         for text in ["black coffee with 1 peace of dark choclate", "black coffee with 1 piece of dark chocolate (70% - 85%)", "black coffee with 10 g dark chocolate"] {
             let result = await DefaultFoodResolutionRouter(catalog: catalog).resolve(text: text)
@@ -3776,6 +3798,43 @@ final class FoodAnalysisTests: XCTestCase {
         let reloaded = DiaryStore(seedDays: [], persistence: persistence)
         XCTAssertEqual(reloaded.day(id: completeDay.id)?.fiberIntake.knownGrams, 12.5)
         XCTAssertEqual(reloaded.day(id: completeDay.id)?.fiberIntake.status(targetGrams: 38), .below)
+    }
+
+    @MainActor
+    func testUpgradedDiaryKeepsUsualMealIndependentOfOriginalPhotoAndWeighIns() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("diary.json")
+        try Data(#"{"schemaVersion":2,"savedAt":0,"days":[]}"#.utf8).write(to: url)
+        let persistence = FileDiaryPersistence(fileURL: url, appliesFileProtection: false)
+        let store = DiaryStore(seedDays: [], persistence: persistence)
+        let day = try XCTUnwrap(store.days.first)
+        var result = LocalMealAnalysisEngine(catalog: catalog).makeAnalysis(description: "Black coffee")
+        result.imageType = .originalPhoto
+        result.originalPhotoAsset = MealVisualAsset(
+            requestID: UUID(), cacheKey: "original", fileName: "meal.jpg", mimeType: "image/jpeg"
+        )
+        let draft = MealAnalysisDraft(result: result)
+        let threadID = UUID()
+        store.append(ThreadItem(id: threadID, kind: .mealAnalysis(draft)), to: day.id)
+        let meal = DiaryMealLoggingService().confirm(draft, replacing: threadID, in: store, dayID: day.id)
+        XCTAssertTrue(store.saveUsualMeal(name: "Morning coffee", meal: meal))
+        let reading = WeightReading(date: Calendar.current.startOfDay(for: .now), kilograms: 78)
+        XCTAssertTrue(store.saveWeighIn(reading))
+        store.removeMeal(id: meal.id, from: day.id)
+
+        let reloaded = DiaryStore(seedDays: [], persistence: persistence)
+        XCTAssertEqual(reloaded.weighIns.map(\.kilograms), [78])
+        XCTAssertTrue(reloaded.days.allSatisfy { $0.meals.isEmpty })
+        let usual = try XCTUnwrap(reloaded.usualMeals.first)
+        let repeated = usual.makeDraft()
+        XCTAssertEqual(repeated.result.mealTotals, result.mealTotals)
+        XCTAssertEqual(repeated.result.detectedItems, result.detectedItems)
+        XCTAssertNil(repeated.result.originalPhotoAsset)
+        XCTAssertNil(repeated.result.visualRequest)
+        XCTAssertNotEqual(repeated.id, meal.id)
+        XCTAssertNotEqual(repeated.id, usual.makeDraft().id)
     }
 
     func testManualStrengthDaysPersistWithoutBreakingOlderDiaryArchives() throws {

@@ -16,6 +16,8 @@ struct DiafitExportPayload: Codable, Equatable, Sendable {
     let manualStrengthDays: [Date]
     let savedFoodMemories: [SavedFoodMemoryExport]
     let packagedFoods: [PackagedFoodExport]
+    let usualMeals: [UsualMealExport]?
+    let weighIns: [WeightExport]?
 
     init(
         profile: UserProfile,
@@ -23,7 +25,9 @@ struct DiafitExportPayload: Codable, Equatable, Sendable {
         days: [Day],
         manualStrengthDays: [Date] = [],
         savedFoodMemories: [UserFoodMemory] = [],
-        packagedFoods: [PackagedFoodRecord] = []
+        packagedFoods: [PackagedFoodRecord] = [],
+        usualMeals: [UsualMeal] = [],
+        weighIns: [WeightReading] = []
     ) {
         formatVersion = Self.currentVersion
         exportedAt = .now
@@ -33,12 +37,40 @@ struct DiafitExportPayload: Codable, Equatable, Sendable {
             .sorted { $0.date < $1.date }
             .map(DayExport.init)
         self.manualStrengthDays = manualStrengthDays.sorted()
+        self.usualMeals = usualMeals.map(UsualMealExport.init)
+        self.weighIns = weighIns.sorted { $0.date < $1.date }.map {
+            WeightExport(date: $0.date, kilograms: $0.kilograms)
+        }
         self.savedFoodMemories = savedFoodMemories
             .sorted { $0.lastConfirmedAt < $1.lastConfirmedAt }
             .map { SavedFoodMemoryExport(memory: $0) }
         self.packagedFoods = packagedFoods
             .sorted { $0.productName.localizedCaseInsensitiveCompare($1.productName) == .orderedAscending }
             .map { PackagedFoodExport(record: $0) }
+    }
+
+    struct WeightExport: Codable, Equatable, Sendable {
+        let date: Date
+        let kilograms: Double
+    }
+
+    struct UsualMealExport: Codable, Equatable, Sendable {
+        struct Component: Codable, Equatable, Sendable {
+            let name: String
+            let quantity: Double
+            let unit: ServingUnit
+            let nutrition: NutritionValues
+        }
+
+        let name: String
+        let components: [Component]
+
+        init(_ meal: UsualMeal) {
+            name = meal.name
+            components = meal.makeDraft().result.detectedItems.map { item in
+                Component(name: item.displayName, quantity: item.quantity, unit: item.servingUnit, nutrition: item.nutrition)
+            }
+        }
     }
 
     struct ProfileExport: Codable, Equatable, Sendable {
@@ -48,6 +80,7 @@ struct DiafitExportPayload: Codable, Equatable, Sendable {
         let genderIdentity: String?
         let heightCentimeters: Double?
         let weightKilograms: Double?
+        let weightGoalKilograms: Double?
         let diabetesContext: DiabetesContext
         let activityLevel: ProfileActivityLevel
         let dietaryPattern: DietaryPattern
@@ -65,6 +98,7 @@ struct DiafitExportPayload: Codable, Equatable, Sendable {
             genderIdentity = profile.genderIdentity
             heightCentimeters = profile.heightCentimeters
             weightKilograms = profile.weightKilograms
+            weightGoalKilograms = profile.weightGoalKilograms
             diabetesContext = profile.diabetesContext
             activityLevel = profile.activityLevel
             dietaryPattern = profile.dietaryPattern
@@ -212,7 +246,9 @@ struct DiafitExportDocument: FileDocument {
         days: [Day],
         manualStrengthDays: [Date] = [],
         savedFoodMemories: [UserFoodMemory] = [],
-        packagedFoods: [PackagedFoodRecord] = []
+        packagedFoods: [PackagedFoodRecord] = [],
+        usualMeals: [UsualMeal] = [],
+        weighIns: [WeightReading] = []
     ) throws {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
@@ -223,7 +259,9 @@ struct DiafitExportDocument: FileDocument {
             days: days,
             manualStrengthDays: manualStrengthDays,
             savedFoodMemories: savedFoodMemories,
-            packagedFoods: packagedFoods
+            packagedFoods: packagedFoods,
+            usualMeals: usualMeals,
+            weighIns: weighIns
         ))
     }
 

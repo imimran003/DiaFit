@@ -4,6 +4,8 @@ import Combine
 final class DiaryStore: ObservableObject {
     @Published private(set) var days: [Day]
     @Published private(set) var manualStrengthDays: [Date]
+    @Published private(set) var usualMeals: [UsualMeal] = []
+    @Published private(set) var weighIns: [WeightReading] = []
     @Published private(set) var persistenceIssue: String?
     private let persistence: any DiaryPersisting
     private var canPersist: Bool
@@ -23,10 +25,12 @@ final class DiaryStore: ObservableObject {
                 let preparedDays = DiaryStartupPolicy.prepare(archive.days)
                 days = preparedDays
                 manualStrengthDays = archive.manualStrengthDays
+                usualMeals = archive.usualMeals
+                weighIns = archive.weighIns
                 persistenceIssue = nil
                 if preparedDays != archive.days {
                     do {
-                        try persistence.save(DiaryArchive(days: preparedDays, manualStrengthDays: manualStrengthDays))
+                        try persistence.save(DiaryArchive(days: preparedDays, manualStrengthDays: manualStrengthDays, usualMeals: usualMeals, weighIns: weighIns))
                     } catch {
                         canPersist = false
                         persistenceIssue = Self.userMessage(for: error, operation: "save")
@@ -147,7 +151,7 @@ final class DiaryStore: ObservableObject {
 
     func retryPersistence() {
         do {
-            try persistence.save(DiaryArchive(days: days, manualStrengthDays: manualStrengthDays))
+            try persistence.save(DiaryArchive(days: days, manualStrengthDays: manualStrengthDays, usualMeals: usualMeals, weighIns: weighIns))
             canPersist = true
             persistenceIssue = nil
         } catch {
@@ -174,6 +178,8 @@ final class DiaryStore: ObservableObject {
             }
             days = RuntimeDiaryDefaults.days(now: now)
             manualStrengthDays = []
+            usualMeals = []
+            weighIns = []
             persistenceIssue = nil
             return .success(())
         } catch {
@@ -190,16 +196,46 @@ final class DiaryStore: ObservableObject {
         persist(days: candidate, manualStrengthDays: manualStrengthDays)
     }
 
-    private func persist(days candidateDays: [Day], manualStrengthDays candidateStrengthDays: [Date]) {
-        guard canPersist else { return }
+    func saveUsualMeal(name: String, meal: Meal) -> Bool {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, let usual = UsualMeal(name: name, meal: meal) else { return false }
+        let remaining = usualMeals.filter { $0.name.localizedCaseInsensitiveCompare(name) != .orderedSame }
+        return persist(days: days, manualStrengthDays: manualStrengthDays, usualMeals: remaining + [usual])
+    }
+
+    func removeUsualMeal(_ id: UUID) {
+        persist(days: days, manualStrengthDays: manualStrengthDays, usualMeals: usualMeals.filter { $0.id != id })
+    }
+
+    func saveWeighIn(_ reading: WeightReading, calendar: Calendar = .autoupdatingCurrent) -> Bool {
+        guard (20...500).contains(reading.kilograms), reading.date <= .now else { return false }
+        let remaining = weighIns.filter { !calendar.isDate($0.date, inSameDayAs: reading.date) }
+        return persist(days: days, manualStrengthDays: manualStrengthDays, weighIns: remaining + [reading])
+    }
+
+    func removeWeighIn(_ id: UUID) {
+        persist(days: days, manualStrengthDays: manualStrengthDays, weighIns: weighIns.filter { $0.id != id })
+    }
+
+    @discardableResult
+    private func persist(days candidateDays: [Day], manualStrengthDays candidateStrengthDays: [Date],
+                         usualMeals candidateUsualMeals: [UsualMeal]? = nil,
+                         weighIns candidateWeighIns: [WeightReading]? = nil) -> Bool {
+        guard canPersist else { return false }
+        let savedUsualMeals = candidateUsualMeals ?? usualMeals
+        let savedWeighIns = candidateWeighIns ?? weighIns
         do {
-            try persistence.save(DiaryArchive(days: candidateDays, manualStrengthDays: candidateStrengthDays))
+            try persistence.save(DiaryArchive(days: candidateDays, manualStrengthDays: candidateStrengthDays, usualMeals: savedUsualMeals, weighIns: savedWeighIns))
             days = candidateDays
             manualStrengthDays = candidateStrengthDays
+            if candidateUsualMeals != nil { usualMeals = savedUsualMeals }
+            if candidateWeighIns != nil { weighIns = savedWeighIns }
             persistenceIssue = nil
+            return true
         } catch {
             persistenceIssue = Self.userMessage(for: error, operation: "save")
         }
+        return false
     }
 
     private static func userMessage(for error: Error, operation: String) -> String {

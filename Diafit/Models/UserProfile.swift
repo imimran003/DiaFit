@@ -94,6 +94,7 @@ struct UserProfile: Codable, Equatable, Sendable {
     var genderIdentity: String?
     var heightCentimeters: Double?
     var weightKilograms: Double?
+    var weightGoalKilograms: Double? = nil
     var diabetesContext: DiabetesContext
     var activityLevel: ProfileActivityLevel
     var dietaryPattern: DietaryPattern
@@ -190,6 +191,7 @@ enum UserProfileValidationError: LocalizedError, Equatable {
     case futureDateOfBirth
     case invalidHeight
     case invalidWeight
+    case invalidWeightGoal
     case invalidGoal
 
     var errorDescription: String? {
@@ -198,6 +200,7 @@ enum UserProfileValidationError: LocalizedError, Equatable {
         case .futureDateOfBirth: return "Check the date of birth."
         case .invalidHeight: return "Check the height."
         case .invalidWeight: return "Check the weight."
+        case .invalidWeightGoal: return "Enter a weight goal between 20 and 500 kg."
         case .invalidGoal: return "Goals must be positive numbers."
         }
     }
@@ -218,6 +221,9 @@ struct UserProfileValidator: Sendable {
         if let weight = profile.weightKilograms,
            !weight.isFinite || !(20...500).contains(weight) {
             return .failure(.invalidWeight)
+        }
+        if let goal = profile.weightGoalKilograms, !(20...500).contains(goal) {
+            return .failure(.invalidWeightGoal)
         }
         let goals = [
             profile.calorieGoal,

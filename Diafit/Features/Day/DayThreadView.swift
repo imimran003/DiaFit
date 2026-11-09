@@ -13,6 +13,8 @@ struct DayThreadView: View {
     @State private var isThinking = false
     @State private var thinkingLabel = "Looking that up"
     @State private var showsPhotoInput = false
+    @State private var showsUsualMeals = false
+    @State private var showsProductScanner = false
     @State private var mealBeingEdited: Meal?
     @State private var mealPendingDeletion: Meal?
     @State private var messagePendingDeletion: ThreadItem?
@@ -139,6 +141,8 @@ struct DayThreadView: View {
                             isThinking: isThinking,
                             isFocused: $composerFocused,
                             openPhoto: { showsPhotoInput = true },
+                            openUsualMeals: { showsUsualMeals = true },
+                            openProductScanner: { showsProductScanner = true },
                             submit: submit
                         )
                         .dynamicTypeSize(...DynamicTypeSize.accessibility2)
@@ -159,6 +163,14 @@ struct DayThreadView: View {
                     }
                 }
             }
+        }
+        .sheet(isPresented: $showsUsualMeals) {
+            UsualMealsSheet { usual in
+                addQuickMeal(usual.makeDraft())
+            }
+        }
+        .sheet(isPresented: $showsProductScanner) {
+            PackagedFoodSheet(repository: dependencies.packagedFoods, onReview: addQuickMeal)
         }
         .sheet(isPresented: $showsPhotoInput) {
             PhotoMealInput(onContinue: beginPhotoReview)
@@ -528,6 +540,10 @@ struct DayThreadView: View {
         isThinking = false
         activePhotoRequestID = nil
         photoAnalysisTask = nil
+    }
+
+    private func addQuickMeal(_ draft: MealAnalysisDraft) {
+        store.append(ThreadItem(id: UUID(), kind: .mealAnalysis(draft)), to: dayID)
     }
 
     private func confirm(_ draft: MealAnalysisDraft, replacing itemID: ThreadItem.ID) {
@@ -1334,10 +1350,12 @@ private struct Composer: View {
     let isThinking: Bool
     var isFocused: FocusState<Bool>.Binding
     let openPhoto: () -> Void
+    let openUsualMeals: () -> Void
+    let openProductScanner: () -> Void
     let submit: () -> Void
 
     var body: some View {
-        HStack(spacing: 11) {
+        HStack(spacing: 5) {
                 Button(action: openPhoto) {
                     Image(systemName: "camera")
                         .font(.system(size: 15, weight: .semibold))
@@ -1347,6 +1365,17 @@ private struct Composer: View {
                 }
                 .buttonStyle(PressableStyle(pressedScale: 0.88))
                 .accessibilityLabel("Add meal photo")
+
+                Menu {
+                    Button("My usual meals", systemImage: "bookmark", action: openUsualMeals)
+                    Button("Scan packaged food", systemImage: "barcode.viewfinder", action: openProductScanner)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundStyle(Color.ink)
+                        .frame(width: 44, height: 44)
+                }
+                .accessibilityLabel("More food logging options")
 
                 TextField(
                     text: $text,
@@ -1397,6 +1426,47 @@ struct DayThreadView_Previews: PreviewProvider {
                 mealNamespace: namespace
             )
             .environmentObject(DiaryStore.preview)
+        }
+    }
+}
+
+private struct UsualMealsSheet: View {
+    @EnvironmentObject private var store: DiaryStore
+    @Environment(\.dismiss) private var dismiss
+    let onSelect: (UsualMeal) -> Void
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if store.usualMeals.isEmpty {
+                    ContentUnavailableView(
+                        "No usual meals yet", systemImage: "bookmark",
+                        description: Text("Open a confirmed meal in Diary and tap Save as a usual meal.")
+                    )
+                } else {
+                    List {
+                        ForEach(store.usualMeals.sorted { $0.name.localizedStandardCompare($1.name) == .orderedAscending }) { meal in
+                            Button {
+                                onSelect(meal)
+                                dismiss()
+                            } label: {
+                                Label(meal.name, systemImage: "plus.circle")
+                            }
+                            .swipeActions {
+                                Button("Remove shortcut", role: .destructive) { store.removeUsualMeal(meal.id) }
+                            }
+                        }
+                        if let issue = store.persistenceIssue {
+                            Text(issue).font(.footnote)
+                        }
+                    }
+                }
+            }
+            .navigationTitle("My usual meals")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("Done") { dismiss() } }
+            }
         }
     }
 }

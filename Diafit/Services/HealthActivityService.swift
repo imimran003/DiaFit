@@ -329,3 +329,58 @@ struct FixtureHealthActivityService: HealthActivityProviding, Sendable {
     )
 }
 #endif
+
+struct HeartRateReading: Sendable {
+    let date: Date
+    let bpm: Double
+}
+
+struct HeartRateTrend: Sendable {
+    let latest: HeartRateReading?
+    let week: Double?
+    let previousWeek: Double?
+    let month: Double?
+
+    init(readings: [HeartRateReading], now: Date, calendar: Calendar = .autoupdatingCurrent) {
+        let valid = readings.filter { $0.date <= now && $0.bpm.isFinite && $0.bpm > 0 }
+        latest = valid.max { $0.date < $1.date }
+        let days = Dictionary(grouping: valid) { calendar.startOfDay(for: $0.date) }
+        let today = calendar.startOfDay(for: now)
+        func average(_ first: Int, _ last: Int) -> Double? {
+            guard let start = calendar.date(byAdding: .day, value: first, to: today),
+                  let end = calendar.date(byAdding: .day, value: last, to: today) else { return nil }
+            let values = days.filter { $0.key >= start && $0.key < end }.values.map { samples in
+                samples.reduce(0) { $0 + $1.bpm } / Double(samples.count)
+            }
+            return values.isEmpty ? nil : values.reduce(0, +) / Double(values.count)
+        }
+        week = average(-6, 1)
+        previousWeek = average(-13, -6)
+        month = average(-29, 1)
+    }
+}
+
+struct HeartRateInsightsService {
+    private let store = HKHealthStore()
+    static var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
+
+    func requestAccess() async throws {
+        let types: Set<HKObjectType> = [HKQuantityType(.restingHeartRate), HKQuantityType(.walkingHeartRateAverage)]
+        try await store.requestAuthorization(toShare: [], read: types)
+    }
+
+    func trend(_ identifier: HKQuantityTypeIdentifier, now: Date = .now) async throws -> HeartRateTrend {
+        let calendar = Calendar.autoupdatingCurrent
+        let start = calendar.date(byAdding: .day, value: -29, to: calendar.startOfDay(for: now)) ?? now
+        let predicate = HKQuery.predicateForSamples(withStart: start, end: now, options: .strictStartDate)
+        let query = HKSampleQueryDescriptor(
+            predicates: [.quantitySample(type: HKQuantityType(identifier), predicate: predicate)],
+            sortDescriptors: []
+        )
+        let samples = try await query.result(for: store)
+        let unit = HKUnit.count().unitDivided(by: .minute())
+        return HeartRateTrend(readings: samples.map {
+            HeartRateReading(date: $0.startDate, bpm: $0.quantity.doubleValue(for: unit))
+        }, now: now, calendar: calendar)
+    }
+}

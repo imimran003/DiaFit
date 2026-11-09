@@ -1,22 +1,28 @@
 import Foundation
 
 struct DiaryArchive: Codable, Hashable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
     let schemaVersion: Int
     let savedAt: Date
     let days: [Day]
     let manualStrengthDays: [Date]
 
-    init(schemaVersion: Int = currentVersion, savedAt: Date = .now, days: [Day], manualStrengthDays: [Date] = []) {
+    let usualMeals: [UsualMeal]
+    let weighIns: [WeightReading]
+
+    init(schemaVersion: Int = currentVersion, savedAt: Date = .now, days: [Day],
+         manualStrengthDays: [Date] = [], usualMeals: [UsualMeal] = [], weighIns: [WeightReading] = []) {
         self.schemaVersion = schemaVersion
         self.savedAt = savedAt
         self.days = days
         self.manualStrengthDays = manualStrengthDays
+        self.usualMeals = usualMeals
+        self.weighIns = weighIns
     }
 
     private enum CodingKeys: String, CodingKey {
-        case schemaVersion, savedAt, days, manualStrengthDays
+        case schemaVersion, savedAt, days, manualStrengthDays, usualMeals, weighIns
     }
 
     init(from decoder: Decoder) throws {
@@ -25,6 +31,8 @@ struct DiaryArchive: Codable, Hashable {
         savedAt = try container.decode(Date.self, forKey: .savedAt)
         days = try container.decode([Day].self, forKey: .days)
         manualStrengthDays = try container.decodeIfPresent([Date].self, forKey: .manualStrengthDays) ?? []
+        usualMeals = try container.decodeIfPresent([UsualMeal].self, forKey: .usualMeals) ?? []
+        weighIns = try container.decodeIfPresent([WeightReading].self, forKey: .weighIns) ?? []
     }
 }
 
@@ -96,14 +104,15 @@ struct FileDiaryPersistence: DiaryPersisting, DiaryDataDeleting, @unchecked Send
             throw DiaryPersistenceError.invalidArchive
         }
         if header.schemaVersion == DiaryArchive.currentVersion { return archive }
-        // Version 1 stored legacy checkpoint thread items. The new glucose
-        // case is additive, so decoding the old days preserves every meal and
-        // checkpoint while the next save upgrades the archive header.
+        // New fields are additive. Decoding keeps existing meals and legacy
+        // checkpoints, and the next save upgrades the archive header.
         return DiaryArchive(
             schemaVersion: DiaryArchive.currentVersion,
             savedAt: archive.savedAt,
             days: archive.days,
-            manualStrengthDays: archive.manualStrengthDays
+            manualStrengthDays: archive.manualStrengthDays,
+            usualMeals: archive.usualMeals,
+            weighIns: archive.weighIns
         )
     }
 

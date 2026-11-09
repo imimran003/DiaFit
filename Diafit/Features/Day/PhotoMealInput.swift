@@ -275,7 +275,7 @@ private struct QuietActionStyle: ButtonStyle {
     }
 }
 
-private struct CameraCapture: UIViewControllerRepresentable {
+struct CameraCapture: UIViewControllerRepresentable {
     let completion: (UIImage?) -> Void
     @Environment(\.dismiss) private var dismiss
 
